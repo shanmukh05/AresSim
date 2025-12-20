@@ -5,7 +5,7 @@
 <h1 align="center">AresSim</h1>
 
 <p align="center">
-  <img src="./assets/overview.png" alt="AresSim Overview" width="400"/>
+  <img src="./assets/overview.png" alt="AresSim Overview" width="800"/>
 </p>
 
 <p align="center">
