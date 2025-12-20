@@ -1,8 +1,12 @@
 <p align="center">
-  <img src="./assets/logo.png" alt="AresSim Logo" width="300"/>
+  <img src="./assets/logo.png" alt="AresSim Logo" width="200"/>
 </p>
 
 <h1 align="center">AresSim</h1>
+
+<p align="center">
+  <img src="./assets/overview.png" alt="AresSim Overview" width="400"/>
+</p>
 
 <p align="center">
   <strong>Mars Survival RL Environment</strong><br>
