@@ -56,3 +56,50 @@ export interface LogEntry {
   type: 'info' | 'warning' | 'danger' | 'success';
   reward?: number;
 }
+
+// Integer mapping for terrain types (matches Python enum)
+export const TERRAIN_INT_MAP: TerrainType[] = [
+  TerrainType.FLAT,   // 0
+  TerrainType.SANDY,  // 1
+  TerrainType.ROCKY,  // 2
+  TerrainType.CRATER, // 3
+  TerrainType.ICE,    // 4
+  TerrainType.BASE,   // 5
+];
+
+// WebSocket API Types
+export interface RemoteAgentState {
+  position: { x: number; y: number };
+  health: number;
+  energy: number;
+  oxygen: number;
+  bodyTemp: number;
+  inventory: {
+    ice: number;
+    samples: number;
+    oxygenTanks: number;
+    rechargePacks: number;
+  };
+}
+
+export interface RemoteEnvironmentState {
+  sol: number;
+  timeOfDay: number;
+  temperature: number;
+  radiationLevel: number;
+  dustStormIntensity: number;
+  grid: number[][];
+  solarPanels: Coordinates[];
+}
+
+export interface RemoteStateMessage {
+  type: 'state';
+  agent: RemoteAgentState;
+  environment: RemoteEnvironmentState;
+  step: number;
+  totalReward: number;
+  mode: 'manual' | 'agent';
+  paused?: boolean;
+  lastAction?: number;
+  lastReward?: number;
+}

@@ -177,6 +177,7 @@ The agent is motivated by a scalar reward signal:
 ### Prerequisites
 
 - **Node.js** 18+ 
+- **Python** 3.9+ (for RL training)
 - **npm** or **yarn**
 
 ### Setup
@@ -186,8 +187,11 @@ The agent is motivated by a scalar reward signal:
 git clone https://github.com/yourusername/AresSim.git
 cd AresSim
 
-# Install dependencies
+# Install React UI dependencies
 npm install
+
+# Install Python environment (for RL training)
+pip install -e ".[train]"
 
 # Start the development server
 npm run dev
@@ -199,7 +203,7 @@ The visualization dashboard will be available at `http://localhost:5173`
 
 ## 🎮 Usage
 
-### Running the Visualizer
+### Running the Visualizer (Local Mode)
 
 ```bash
 npm run dev
@@ -224,6 +228,63 @@ This launches the real-time dashboard where you can:
 
 ---
 
+## 🤖 RL Training
+
+### Quick Start
+
+```bash
+# Train a PPO agent (headless, fast)
+python scripts/train.py --total-timesteps 100000
+
+# Monitor training with TensorBoard
+tensorboard --logdir logs/
+```
+
+### Visualize Trained Agent
+
+```bash
+# Start the Python environment server
+python scripts/run_with_viz.py models/mars_ppo_*/final_model.zip
+
+# In another terminal, start the React UI
+npm run dev
+```
+
+Then switch to **Remote** mode in the UI header to connect.
+
+### Using as a Gymnasium Environment
+
+```python
+import gymnasium as gym
+import gym_mars  # Auto-registers the environment
+
+env = gym.make("gym_mars/MarsSurvival-v0")
+obs, info = env.reset()
+
+for _ in range(1000):
+    action = env.action_space.sample()  # Replace with your policy
+    obs, reward, terminated, truncated, info = env.step(action)
+    
+    if terminated or truncated:
+        obs, info = env.reset()
+
+env.close()
+```
+
+### Action Space
+
+| Action ID | Name |
+|-----------|------|
+| 0 | Move North |
+| 1 | Move South |
+| 2 | Move East |
+| 3 | Move West |
+| 4 | Mine Ice |
+| 5 | Use Oxygen Tank |
+| 6 | Charge Battery |
+
+---
+
 ## 🛠️ Tech Stack
 
 | Technology | Purpose |
@@ -233,6 +294,9 @@ This launches the real-time dashboard where you can:
 | **Vite** | Build tool & dev server |
 | **Recharts** | Data visualization |
 | **Lucide React** | Icon library |
+| **Gymnasium** | RL environment API |
+| **Stable Baselines3** | RL training algorithms |
+| **WebSocket** | Real-time Python ↔ UI bridge |
 
 ---
 
@@ -240,8 +304,11 @@ This launches the real-time dashboard where you can:
 
 - [x] Core simulation mechanics
 - [x] Real-time visualization dashboard
-- [ ] **Gymnasium/Gym API integration**
-- [ ] **Python bindings via WebSocket**
+- [x] **Gymnasium/Gym API integration**
+- [x] **Python bindings via WebSocket**
+- [ ] Curriculum learning presets
+- [ ] Multi-agent support
+- [ ] Model zoo with pretrained agents
 
 ---
 
