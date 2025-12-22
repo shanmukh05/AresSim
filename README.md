@@ -4,9 +4,9 @@
 
 <h1 align="center">AresSim</h1>
 
-<p align="center">
-  <img src="./assets/overview.png" alt="AresSim Overview" width="800"/>
-</p>
+<video controls>
+  <source src="./assets/demo.mp4" type="video/mp4">
+</video>
 
 <p align="center">
   <strong>Mars Survival RL Environment</strong><br>
