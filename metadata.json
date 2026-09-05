@@ -1,5 +1,0 @@
-{
-  "name": "Mars Survival RL Visualizer",
-  "description": "A dashboard UI for a Mars Survival Reinforcement Learning environment, featuring a grid-world simulation, agent status monitoring, and real-time environment telemetry.",
-  "requestFramePermissions": []
-}

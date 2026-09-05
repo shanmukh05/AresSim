@@ -1,0 +1,26 @@
+schema_version: aresim.experiment.v1
+experiment_id: rllib_masked_ppo_dev
+trial_id: seed_7
+algorithm: masked_ppo
+model: local_cnn_actor_critic
+learner_seed: 7
+algorithm_config:
+  total_environment_steps: 102400
+  rollout_batch_size: 4096
+  minibatch_size: 256
+  update_epochs: 10
+evaluation:
+  seed_manifest: notebooks/phase1_open_exploration_split_v1.yaml
+  interval_environment_steps: 20480
+  split: validation
+  record_trajectories: true
+checkpoint:
+  interval_environment_steps: 20480
+  keep: 5
+tracking:
+  mode: online
+  project: aresim
+  tags: [dev]
+artifacts:
+  root: results
+  reject_existing: true

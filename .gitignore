@@ -1,55 +1,61 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
 # Python
+.venv/
 __pycache__/
 *.py[cod]
-*$py.class
 *.so
-.Python
-build/
-develop-eggs/
 *.egg-info/
-.eggs/
-*.egg
-.venv/
-venv/
-ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+build/
+dist/
 
-# RL Training artifacts
-models/
-checkpoints/
-runs/
-*.zip
-*.pkl
+# Node / Vite
+node_modules/
+*.tsbuildinfo
+web/.vitest-api-port
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
 
-# Gymnasium
-gym_mars.egg-info/
+# Training / notebooks (generated)
+datasets/
+results/
+wandb/
+.wandb/
+ray_results/
+mlruns/
+lightning_logs/
+.ipynb_checkpoints/
 
-# Aris Env
-aris_env/
+# Local / OS / editors
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+logs/
+.idea/
+*.swp
+*~
 
-# RL models
-models/
+# Secrets
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# Historical notes (not the canonical docs/)
+design_docs/
+papers/
+noteboos/

@@ -1,0 +1,53 @@
+schema_version: aresim.experiment.v1
+experiment_id: rllib_masked_ppo_smoke
+trial_id: seed_7
+algorithm: masked_ppo
+model: local_cnn_actor_critic
+learner_seed: 7
+environment:
+  scenario_id: phase1_default_v1
+  observation: local
+  action: discrete
+  reward: shaped_train
+  task: open_exploration
+  max_episode_steps: 1200
+algorithm_config:
+  total_environment_steps: 102400
+  rollout_batch_size: 4096
+  minibatch_size: 256
+  update_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_param: 0.2
+  value_loss_coefficient: 0.5
+  entropy_coefficient: 0.01
+  learning_rate: 0.0003
+  max_gradient_norm: 0.5
+  target_kl: 0.01
+model_config:
+  terrain_embedding: 4
+  objective_embedding: 4
+  conv_channels: [32, 64]
+  telemetry_layers: [128, 128]
+  fused_width: 256
+resources:
+  num_env_runners: 0
+  num_envs_per_env_runner: 1
+  num_learners: 0
+  cpus_per_env_runner: 1
+  gpus_per_learner: 0.0
+evaluation:
+  seed_manifest: notebooks/phase1_smoke_eval_v1.yaml
+  interval_environment_steps: 20480
+  split: validation
+  record_trajectories: false
+checkpoint:
+  interval_environment_steps: 4096
+  keep: 1
+tracking:
+  mode: disabled
+  project: aresim
+  tags: [smoke]
+artifacts:
+  root: results
+  reject_existing: true
