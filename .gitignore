@@ -35,6 +35,10 @@ ray_results/
 mlruns/
 lightning_logs/
 .ipynb_checkpoints/
+notebooks/
+
+# Local editor / agent config
+.cursor/
 
 # Local / OS / editors
 .env
@@ -58,4 +62,3 @@ secrets.json
 # Historical notes (not the canonical docs/)
 design_docs/
 papers/
-noteboos/
