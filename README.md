@@ -12,6 +12,14 @@ AresSim is a Phase 1 Mars civilization-building environment: one unmanned rover,
 
 Same seed + same commands → same checksums.
 
+Walkthrough of the environment: [AresSim on TensorWrites](https://www.tensorwrites.com/posts/aressim-env).
+
+<p align="center">
+  <a href="https://youtu.be/bGrpud_uAj8">
+    <img src="https://img.youtube.com/vi/bGrpud_uAj8/maxresdefault.jpg" alt="AresSim demo" width="720" />
+  </a>
+</p>
+
 ## Capabilities
 
 One simulator supports human play, scripted baselines, and learned policies:
