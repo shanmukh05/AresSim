@@ -1,0 +1,57 @@
+schema_version: aresim.experiment.v1
+experiment_id: rllib_masked_dqn_smoke
+trial_id: seed_7
+algorithm: masked_dqn
+model: local_cnn_q
+learner_seed: 7
+environment:
+  scenario_id: phase1_default_v1
+  observation: local
+  action: discrete
+  reward: shaped_train
+  task: open_exploration
+  max_episode_steps: 1200
+algorithm_config:
+  total_environment_steps: 4096
+  rollout_batch_size: 256
+  train_batch_size: 32
+  replay_capacity: 8192
+  learning_starts: 512
+  n_step: 1
+  double_q: true
+  dueling: true
+  gamma: 0.995
+  learning_rate: 0.0001
+  max_gradient_norm: 40.0
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_timesteps: 2000
+  target_network_update_freq: 250
+  tau: 1.0
+model_config:
+  terrain_embedding: 4
+  objective_embedding: 4
+  conv_channels: [32, 64]
+  telemetry_layers: [128, 128]
+  fused_width: 256
+resources:
+  num_env_runners: 0
+  num_envs_per_env_runner: 1
+  num_learners: 0
+  cpus_per_env_runner: 1
+  gpus_per_learner: 0.0
+evaluation:
+  seed_manifest: notebooks/phase1_smoke_eval_v1.yaml
+  interval_environment_steps: 2048
+  split: validation
+  record_trajectories: false
+checkpoint:
+  interval_environment_steps: 256
+  keep: 1
+tracking:
+  mode: disabled
+  project: aresim
+  tags: [smoke, dqn]
+artifacts:
+  root: results
+  reject_existing: true

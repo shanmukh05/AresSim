@@ -1,10 +1,12 @@
-"""Checkpoint sidecar I/O and frozen-policy inference for masked PPO.
+"""Checkpoint sidecar I/O and frozen-policy inference for masked PPO and DQN.
 
 Owns the deploy/eval path: writing auditable JSON beside native RLlib checkpoints,
-validating provenance and file inventory, and adapting a frozen RLModule to the
-framework-neutral :class:`~aresim.algorithms.base.Agent` contract.
+validating provenance and file inventory, and adapting frozen actor-critic weights
+to the framework-neutral :class:`~aresim.algorithms.base.Agent` contract. Inference
+loads ``module_state.pkl`` into ``LocalMaskedActorCritic`` so Ray's deprecated
+``RLModuleConfig`` is not constructed.
 
-**Last updated:** September 1, 2026
+**Last updated:** September 12, 2026
 
 **Contains:** ``CHECKPOINT_SCHEMA``, :func:`write_checkpoint_sidecar`,
 :class:`RLlibCheckpointAgent`, :class:`BuiltinCheckpointLoader`,
@@ -25,6 +27,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import pickle
 from pathlib import Path
 from typing import Any
 
@@ -96,18 +100,34 @@ def _module_checkpoint(native: Path) -> Path:
     return module_candidates[0]
 
 
-class RLlibCheckpointAgent(Agent[dict[str, object], int]):
-    """Run frozen RLModule inference through the framework-neutral ``Agent`` contract.
+class _FrozenActorCritic:
+    """``forward_inference`` adapter over :class:`LocalMaskedActorCritic`.
 
-    Wraps a loaded :class:`ray.rllib.core.rl_module.rl_module.RLModule` and applies
-    the same action mask at inference as during training. Supports deterministic
-    argmax or stochastic sampling from masked logits.
+    Avoids constructing Ray's ``RLModule``, which still instantiates deprecated
+    ``RLModuleConfig`` and warns once per process.
+    """
+
+    def __init__(self, core: torch.nn.Module) -> None:
+        self.core = core.eval()
+
+    def forward_inference(self, batch: dict[str, Any]) -> dict[str, Any]:
+        policy_input = batch[Columns.OBS]
+        logits, _ = self.core(policy_input["observation"], policy_input["action_mask"])
+        return {Columns.ACTION_DIST_INPUTS: logits}
+
+
+class RLlibCheckpointAgent(Agent[dict[str, object], int]):
+    """Run frozen policy inference through the framework-neutral ``Agent`` contract.
+
+    Wraps a restored actor-critic (or RLModule fallback) and applies the same
+    action mask at inference as during training. Supports deterministic argmax
+    or stochastic sampling from masked logits.
     """
 
     observation_schema = "aresim.obs.local.v1"
     action_schema = "aresim.action.rover.v1"
 
-    def __init__(self, module: RLModule, policy_id: str, deterministic: bool = True) -> None:
+    def __init__(self, module: Any, policy_id: str, deterministic: bool = True) -> None:
         """Bind a restored module; ``policy_id`` comes from the checkpoint sidecar."""
         self.module = module
         self.policy_id = policy_id
@@ -126,11 +146,16 @@ class RLlibCheckpointAgent(Agent[dict[str, object], int]):
         return torch.as_tensor(array).unsqueeze(0)
 
     def act(self, observation: dict[str, object], action_mask: np.ndarray) -> int:
-        """Return one action index from masked policy logits."""
+        """Return one action index from masked policy logits or Q-values."""
         batch = {Columns.OBS: {"observation": self._tensor(observation), "action_mask": self._tensor(action_mask)}}
         with torch.no_grad():
             output = self.module.forward_inference(batch)
-            logits = output[Columns.ACTION_DIST_INPUTS][0].cpu()
+        if Columns.ACTIONS in output:
+            return int(output[Columns.ACTIONS][0].cpu().item())
+        scores = output.get(Columns.ACTION_DIST_INPUTS, output.get("qf_preds"))
+        if scores is None:
+            raise ValueError("RLModule inference did not return actions, logits, or Q-values")
+        logits = scores[0].cpu()
         if self.deterministic:
             return int(torch.argmax(logits).item())
         return int(torch.multinomial(torch.softmax(logits, dim=-1), 1, generator=self.generator).item())
@@ -140,7 +165,7 @@ class BuiltinCheckpointLoader:
     """Load masked-PPO RLlib checkpoints registered as ``rllib_masked_ppo``.
 
     Validates sidecar schema, provenance fields, config hash, and native file
-    inventory before restoring the default-policy RLModule.
+    inventory before restoring frozen actor-critic weights for inference.
     """
 
     loader_id = "rllib_masked_ppo"
@@ -152,8 +177,56 @@ class BuiltinCheckpointLoader:
         _validate_sidecar(payload, self.loader_id)
         native = _native_path(sidecar, payload)
         _validate_inventory(native, payload.get("native_inventory"))
-        module = RLModule.from_checkpoint(_module_checkpoint(native))
+        module = _load_inference_module(native, payload)
         return RLlibCheckpointAgent(module, str(payload["policy_id"]), deterministic=deterministic)
+
+
+def _actor_state_dict(state: dict[str, object]) -> dict[str, object]:
+    """Map ``core.*`` RLModule keys onto :class:`LocalMaskedActorCritic`."""
+    stripped = {str(key).removeprefix("core."): value for key, value in state.items()}
+    if any(key.startswith("encoder.") for key in stripped):
+        return stripped
+    return {
+        key if key.startswith(("policy.", "value.")) else f"encoder.{key}": value
+        for key, value in stripped.items()
+    }
+
+
+def _from_checkpoint(path: Path) -> RLModule:
+    """Load an RLModule while hiding Ray's internal ``RLModuleConfig`` warning."""
+    logger = logging.getLogger("ray._common.deprecation")
+
+    class _DropConfigWarning(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return "RLModule(config=" not in record.getMessage()
+
+    filt = _DropConfigWarning()
+    logger.addFilter(filt)
+    try:
+        return RLModule.from_checkpoint(path)
+    finally:
+        logger.removeFilter(filt)
+
+
+def _load_inference_module(native: Path, payload: dict[str, object]) -> Any:
+    """Restore frozen inference without constructing Ray's deprecated module config."""
+    module_dir = _module_checkpoint(native)
+    state_path = module_dir / "module_state.pkl"
+    if not state_path.is_file():
+        return _from_checkpoint(module_dir)
+    state = pickle.loads(state_path.read_bytes())
+    if not isinstance(state, dict) or not state or not all(str(key).startswith("core.") for key in state):
+        return _from_checkpoint(module_dir)
+    from ...training.experiments import parse_experiment
+    from .train import LocalMaskedActorCritic
+
+    spec = parse_experiment(payload["experiment"])
+    core = LocalMaskedActorCritic(spec.model_config)
+    try:
+        core.load_state_dict({key: torch.as_tensor(value) for key, value in _actor_state_dict(state).items()})
+    except RuntimeError:
+        return _from_checkpoint(module_dir)
+    return _FrozenActorCritic(core)
 
 
 def _validate_sidecar(payload: dict[str, object], loader_id: str) -> None:

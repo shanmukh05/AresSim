@@ -3,7 +3,7 @@
 Learning-facing rewards only; engine/UI history retains authoritative engine
 reward terms. Values derive from state deltas and task outcomes, not re-simulated rules.
 
-**Last updated:** September 1, 2026
+**Last updated:** September 12, 2026
 
 **Contains:** ``RewardBreakdown``, ``RewardTerm``, ``ShapedTrainReward``,
 ``SparseEvalReward``.
@@ -49,7 +49,13 @@ class RewardBreakdown:
         return asdict(self)
 
 
-def _raw_values(before: WorldState, transition: EngineTransition, outcome: TaskOutcome) -> dict[str, float]:
+def _raw_values(
+    before: WorldState,
+    transition: EngineTransition,
+    outcome: TaskOutcome,
+    *,
+    episode_end: bool = False,
+) -> dict[str, float]:
     after = transition.state
     before_stats = before.objective_stats
     after_stats = after.objective_stats
@@ -58,11 +64,15 @@ def _raw_values(before: WorldState, transition: EngineTransition, outcome: TaskO
     after_health = sum(structure.health for structure in after.structures) / max(1, len(after.structures))
     health_recovery = max(0, after_health - before_health) / 100
     dust_recovery = max(0, before.dust_intensity - after.dust_intensity)
+    rover = after.rovers[0]
+    undelivered = max(0, rover.cargo_ice + rover.cargo_samples) / capacity
+    at_end = episode_end or outcome.terminated
     return {
         "mission_success": float(outcome.success),
         "terminal_failure": float(outcome.terminated and not outcome.success),
         "objective_progress": 0,
         "new_scan": float(after_stats.terrain_scanned > before_stats.terrain_scanned),
+        "ice_collected": float(after_stats.ice_collected > before_stats.ice_collected),
         "ice_delivered": max(0, after_stats.ice_delivered - before_stats.ice_delivered) / capacity,
         "samples_delivered": max(0, after_stats.samples_delivered - before_stats.samples_delivered) / capacity,
         "build_progress": max(0, after_stats.habitat_build_progress - before_stats.habitat_build_progress) / 100,
@@ -71,6 +81,7 @@ def _raw_values(before: WorldState, transition: EngineTransition, outcome: TaskO
             if transition.effective_action == ActionType.SERVICE
             else 0
         ),
+        "undelivered_cargo": undelivered if at_end and undelivered > 0 else 0,
         "hazard_damage": max(0, before.rovers[0].health - after.rovers[0].health) / 100,
         "energy_used": max(0, before.resources.battery - after.resources.battery) / 100,
         "invalid_action": float(transition.effective_action == ActionType.INVALID),
@@ -81,10 +92,12 @@ def _raw_values(before: WorldState, transition: EngineTransition, outcome: TaskO
 _SPARSE_ZERO_TERMS = frozenset({
     "objective_progress",
     "new_scan",
+    "ice_collected",
     "ice_delivered",
     "samples_delivered",
     "build_progress",
     "service_recovery",
+    "undelivered_cargo",
     "hazard_damage",
     "energy_used",
     "time_cost",
@@ -106,9 +119,16 @@ class _RewardProfile:
             return 0
         return float(getattr(self.config, name))
 
-    def calculate(self, before: WorldState, transition: EngineTransition, outcome: TaskOutcome) -> RewardBreakdown:
+    def calculate(
+        self,
+        before: WorldState,
+        transition: EngineTransition,
+        outcome: TaskOutcome,
+        *,
+        episode_end: bool = False,
+    ) -> RewardBreakdown:
         """Calculate a pure reward projection from one immutable transition."""
-        raw_values = _raw_values(before, transition, outcome)
+        raw_values = _raw_values(before, transition, outcome, episode_end=episode_end)
         terms = {}
         for name, raw in raw_values.items():
             weight = self._term_weight(name)

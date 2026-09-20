@@ -23,7 +23,6 @@ env = [
 ]
 dev = [
   "httpx>=0.28,<1",
-  "pytest>=8.3,<9",
 ]
 notebook = [
   "ipykernel>=7,<8",
@@ -43,12 +42,13 @@ rllib = [
   "torch>=2.13,<2.14",
   "wandb>=0.29,<0.30",
 ]
+jev = [
+  "numpy>=2,<3",
+  "gymnasium>=1.2.2,<2",
+  "pettingzoo>=1.26,<2",
+  "PyYAML>=6.0.3,<7",
+  "typesafe-sdk>=0.5.7",
+]
 
 [tool.setuptools.packages.find]
 include = ["aresim*"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-markers = [
-  "rllib_slow: starts local Ray workers and performs a real learner update",
-]

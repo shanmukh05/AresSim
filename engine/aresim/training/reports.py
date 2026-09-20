@@ -3,7 +3,7 @@
 Pulls canonical training history from W&B and writes matplotlib figures plus exported
 metric tables under ``<run>/reports/``. Does not start Ray or the simulator.
 
-**Last updated:** September 5, 2026
+**Last updated:** September 12, 2026
 
 **Contains:** :func:`generate_report`, :func:`wandb_run_path`.
 
@@ -34,6 +34,10 @@ TRAINING_METRICS = (
     "learner/learning_rate",
     "learner/gradient_norm",
     "learner/explained_variance",
+    "learner/td_error",
+    "learner/q_mean",
+    "learner/q_max",
+    "learner/q_min",
 )
 
 PLOT_GROUPS: dict[str, tuple[tuple[str, ...], str]] = {
@@ -43,6 +47,7 @@ PLOT_GROUPS: dict[str, tuple[tuple[str, ...], str]] = {
         ("learner/entropy", "learner/explained_variance", "learner/approx_kl"),
         "Learner diagnostics",
     ),
+    "learner_q": (("learner/td_error", "learner/q_mean"), "DQN Q-values"),
 }
 
 

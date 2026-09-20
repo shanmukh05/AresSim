@@ -11,7 +11,9 @@ For the broader RL guide (baselines, seeds, scaling, literature), see [RL Algori
 | `config.py` | `MaskedPPOConfig`, `ModelConfig`, YAML decode |
 | `train.py` | `LocalMaskedActorCritic`, `AresMaskedPPORLModule`, metrics, `run_experiment` |
 | `checkpoint.py` | Sidecar JSON, `RLlibCheckpointAgent`, frozen inference |
-| `../registry.py` | Registers `masked_ppo`, `local_cnn_actor_critic`, `rllib_masked_ppo` |
+| `../common/encoder.py` | Shared local CNN encoder used by PPO and DQN |
+| `../common/resume.py` | Run-directory / sidecar resume resolution |
+| `../registry.py` | Registers `masked_ppo`, `masked_dqn`, `local_cnn_actor_critic`, `local_cnn_q`, `rllib_masked_ppo`, `rllib_masked_dqn` |
 
 ---
 
@@ -111,7 +113,7 @@ Legality is computed by the environment from `aresim.core.rules.validate_action`
 
 ## Model: `LocalMaskedActorCritic`
 
-Class: `train.py` → `LocalMaskedActorCritic`  
+Class: `train.py` → `LocalMaskedActorCritic` (CNN trunk in `algorithms/common/encoder.py`)  
 RLlib wrapper: `AresMaskedPPORLModule` (implements `ValueFunctionAPI`)
 
 ### Processing pipeline
@@ -202,15 +204,15 @@ PPO hyperparameters map from `MaskedPPOConfig` → `PPOConfig.training(...)` in 
 | `total_environment_steps` | 4096 | Tune stop: `iterations = total // rollout_batch_size` |
 | `rollout_batch_size` | 4096 | `train_batch_size_per_learner` |
 | `minibatch_size` | 256 | `minibatch_size` (must divide rollout batch) |
-| `update_epochs` | 10 | `num_epochs` |
-| `gamma` | 0.99 | `gamma` |
+| `update_epochs` | 2 | `num_epochs` |
+| `gamma` | 0.995 | `gamma` |
 | `gae_lambda` | 0.95 | `lambda_` |
 | `clip_param` | 0.2 | `clip_param` |
 | `value_loss_coefficient` | 0.5 | `vf_loss_coeff` |
-| `entropy_coefficient` | 0.01 | `entropy_coeff` |
-| `learning_rate` | 3e-4 | `lr` |
+| `entropy_coefficient` | 0.04 | `entropy_coeff` |
+| `learning_rate` | 1e-4 | `lr` |
 | `max_gradient_norm` | 0.5 | `grad_clip` |
-| `target_kl` | 0.01 | `kl_target` |
+| `target_kl` | 0.02 | `kl_target` |
 
 Schedules in the parent `ExperimentSpec` (`evaluation.interval_environment_steps`, `checkpoint.interval_environment_steps`) must also be divisible by `rollout_batch_size`.
 
@@ -404,13 +406,13 @@ L_total = -L^CLIP + c_v · L^VF - c_e · H(π_θ) + KL_penalty
 |---|---|---:|---|---|
 | `L^CLIP` | `clip_param` | 0.2 | `learner/policy_loss` | Clipped surrogate (policy improvement) |
 | `L^VF` | `value_loss_coefficient` | 0.5 | `learner/value_loss` | Critic fit to GAE returns / value targets |
-| `H(π_θ)` | `entropy_coefficient` | 0.01 | `learner/entropy` | Encourages spread among **legal** actions |
-| `KL_penalty` | `target_kl` | 0.01 | `learner/approx_kl` | Adaptive KL control when update is too large |
+| `H(π_θ)` | `entropy_coefficient` | 0.04 | `learner/entropy` | Encourages spread among **legal** actions |
+| `KL_penalty` | `target_kl` | 0.02 | `learner/approx_kl` | Adaptive KL control when update is too large |
 | — | — | — | `learner/total_loss` | Scalar RLlib reports after combining terms |
 | — | `max_gradient_norm` | 0.5 | `learner/gradient_norm` | Global norm clip before optimizer step |
 | — | — | — | `learner/clip_fraction` | Fraction of ratios clipped this iteration |
 | — | — | — | `learner/explained_variance` | How well `V(s)` explains returns |
-| — | `learning_rate` | 3e-4 | `learner/learning_rate` | Adam step size |
+| — | `learning_rate` | 1e-4 | `learner/learning_rate` | Adam step size |
 
 **Value loss** trains the shared trunk’s value head to predict returns consistent with the GAE targets computed from shaped rewards. **Entropy** is computed on the masked categorical distribution — only legal actions receive probability mass, so entropy measures exploration *within* the current mask.
 
@@ -440,15 +442,17 @@ Each step, `_raw_values` measures deltas from the transition; terms are multipli
 | `mission_success` | +10 | Task success (inactive in open exploration) |
 | `terminal_failure` | −5 | Authoritative episode failure |
 | `objective_progress` | +2 | Task objective delta (inactive in open exploration) |
-| `new_scan` | +0.10 | `terrain_scanned` increases |
-| `ice_delivered` | +0.50 | Ice delivered / payload capacity |
-| `samples_delivered` | +0.20 | Samples delivered / capacity |
-| `build_progress` | +0.50 | Habitat build progress increases |
-| `service_recovery` | +0.25 | SERVICE action improves health or reduces dust |
+| `new_scan` | +0.20 | `terrain_scanned` increases |
+| `ice_collected` | +0.10 | `ice_collected` increases (Extract) |
+| `ice_delivered` | +1.00 | Ice delivered / payload capacity |
+| `samples_delivered` | +0.60 | Samples delivered / capacity |
+| `build_progress` | +0.15 | Habitat build progress increases |
+| `service_recovery` | +0.10 | SERVICE action improves health or reduces dust |
+| `undelivered_cargo` | −0.50 | Remaining ice+sample cargo at episode end / capacity |
 | `hazard_damage` | −1.00 | Rover health decreases |
 | `energy_used` | −0.05 | Colony battery decreases |
 | `invalid_action` | −0.10 | Effective action is INVALID |
-| `time_cost` | −0.001 | Every non-terminal step |
+| `time_cost` | −0.002 | Every non-terminal step |
 
 Non-terminal totals are clipped to **`[-2, 2]`** before being returned as the Gymnasium reward. Terminal success/failure terms are not clipped. Sparse evaluation (`sparse_eval`) zeros most shaping terms and is used for frozen checkpoint comparison, not online PPO training.
 
@@ -523,8 +527,8 @@ Both use sidecar schema `aresim.checkpoint.rllib.v1` with provenance (`config_ha
 ```mermaid
 flowchart LR
     JSON[checkpoint.json] --> Loader[BuiltinCheckpointLoader]
-    Loader --> RLMod[RLModule.from_checkpoint]
-    RLMod --> Agent[RLlibCheckpointAgent]
+    Loader --> Core[LocalMaskedActorCritic from module_state]
+    Core --> Agent[RLlibCheckpointAgent]
     Agent --> Act[act obs + mask → action index]
 ```
 
@@ -549,4 +553,4 @@ Public loader: `make_checkpoint_agent(path)` via `TrainingRegistry`.
 | Trajectory recording (`aresim.trajectory.v1`) | `aresim.training.trajectories` |
 | UI policy bridge | `aresim.integrations.policy` |
 
-Keep new learned algorithms parallel to this layout: typed config, RLModule, factory, checkpoint loader, and registry entries under new semantic names.
+Keep new learned algorithms parallel to this layout: typed config, RLModule, factory, checkpoint loader, and registry entries under new semantic names. Mask-aware DQN lives in `algorithms/dqn/` and reuses the encoder plus Tune driver.

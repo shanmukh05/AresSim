@@ -24,4 +24,4 @@ AresSim is designed as a **local** simulator and training stack:
 
 - The FastAPI server binds to `127.0.0.1` by default and is not a hardened multi-user service.
 - Do not deploy the API or UI to the public internet without authentication, TLS, and a threat model.
-- Never commit secrets (`.env`, API tokens, W&B keys, credentials). Training extras talk to W&B only when you configure them.
+- Never commit secrets (`.env`, API tokens, W&B keys, Jev keys, credentials). Training extras talk to W&B only when you configure them. The Jev extra talks to TypeSafe only when `JEV_API_KEY` is set.

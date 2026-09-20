@@ -4,13 +4,15 @@ Connects registered baseline agents and checkpoint loaders to one session
 ``AresEngine`` without a second environment instance. Checkpoint agents are
 cached in-process for efficient UI autoplay.
 
-**Last updated:** September 2, 2026
+**Last updated:** September 20, 2026
 
 **Contains:** ``PolicyBridge``, ``PolicyStepResult``, policy catalog helpers,
 checkpoint path validation, and a small LRU checkpoint cache.
 
 **See also:** :mod:`aresim.service` (attach/agent-step use cases),
-:mod:`aresim.algorithms.ppo.checkpoint` (masked PPO loader).
+:mod:`aresim.algorithms.ppo.checkpoint` (masked PPO loader),
+:mod:`aresim.algorithms.dqn.checkpoint` (masked DQN loader),
+:mod:`aresim.algorithms.jev.agent` (Jev rover agent).
 """
 
 from __future__ import annotations
@@ -33,6 +35,8 @@ from ..registry import ComponentBuildContext, ComponentRegistry, create_default_
 from ..types import ActionCommand, Actor, EngineTransition
 
 BASELINE_ALGORITHMS = frozenset({"random", "random_valid", "wait", "scripted"})
+CHECKPOINT_ALGORITHMS = frozenset({"masked_ppo", "masked_dqn"})
+LLM_ALGORITHMS = frozenset({"jev"})
 CHECKPOINT_ALGORITHM = "masked_ppo"
 
 POLICY_CATALOG: list[dict[str, object]] = [
@@ -40,7 +44,9 @@ POLICY_CATALOG: list[dict[str, object]] = [
     {"id": "random_valid", "label": "Random (valid)", "kind": "baseline", "requiresPath": False},
     {"id": "wait", "label": "Wait", "kind": "baseline", "requiresPath": False},
     {"id": "scripted", "label": "Scripted", "kind": "baseline", "requiresPath": False},
-    {"id": CHECKPOINT_ALGORITHM, "label": "Masked PPO", "kind": "checkpoint", "requiresPath": True},
+    {"id": "jev", "label": "Jev", "kind": "llm", "requiresPath": False},
+    {"id": "masked_ppo", "label": "Masked PPO", "kind": "checkpoint", "requiresPath": True},
+    {"id": "masked_dqn", "label": "Masked DQN", "kind": "checkpoint", "requiresPath": True},
 ]
 
 # ponytail: max 4 cached RLModules; single-user local API; bump for multi-session prod
@@ -67,6 +73,13 @@ def rllib_available() -> bool:
     return True
 
 
+def jev_available() -> bool:
+    """Return whether the TypeSafe SDK and an API key are available for Jev."""
+    from ..algorithms.jev.client import jev_available as live_jev_available
+
+    return live_jev_available()
+
+
 def _is_safe_resolved_checkpoint(candidate: Path) -> bool:
     if ".." in candidate.parts:
         return False
@@ -76,7 +89,7 @@ def _is_safe_resolved_checkpoint(candidate: Path) -> bool:
 def resolve_checkpoint_path(path: str) -> Path:
     """Resolve and validate one absolute checkpoint sidecar path."""
     if not path.strip():
-        raise PolicyError("CHECKPOINT_NOT_FOUND", "Checkpoint path is required for masked PPO.")
+        raise PolicyError("CHECKPOINT_NOT_FOUND", "Checkpoint path is required for this learned policy.")
     raw = Path(path).expanduser()
     if not raw.is_absolute():
         raise PolicyError("CHECKPOINT_NOT_FOUND", "Checkpoint path must be absolute.")
@@ -112,7 +125,7 @@ def _cache_put(key: str, agent: Agent[Any, Any]) -> None:
 def load_checkpoint_agent(path: str) -> Agent[Any, Any]:
     """Load one checkpoint sidecar, using the process-level LRU cache."""
     if not rllib_available():
-        raise PolicyError("RLLIB_UNAVAILABLE", "Masked PPO requires the aresim[rllib] extra on the API host.")
+        raise PolicyError("RLLIB_UNAVAILABLE", "Learned checkpoint policies require the aresim[rllib] extra on the API host.")
     sidecar = resolve_checkpoint_path(path)
     key = _cache_key(sidecar)
     cached = _cache_get(key)
@@ -123,7 +136,7 @@ def load_checkpoint_agent(path: str) -> Agent[Any, Any]:
 
         agent = make_checkpoint_agent(sidecar)
     except (ImportError, OSError) as error:
-        raise PolicyError("RLLIB_UNAVAILABLE", "Masked PPO requires the aresim[rllib] extra on the API host.") from error
+        raise PolicyError("RLLIB_UNAVAILABLE", "Learned checkpoint policies require the aresim[rllib] extra on the API host.") from error
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as error:
         raise PolicyError("CHECKPOINT_INCOMPATIBLE", str(error)) from error
     _cache_put(key, agent)
@@ -152,9 +165,17 @@ def resolve_agent(algorithm_id: str, checkpoint_path: str | None = None) -> tupl
     if algorithm_id in BASELINE_ALGORITHMS:
         agent = make_agent(algorithm_id)
         return agent, agent.policy_id, None
-    if algorithm_id == CHECKPOINT_ALGORITHM:
+    if algorithm_id in LLM_ALGORITHMS:
+        if not jev_available():
+            raise PolicyError(
+                "JEV_UNAVAILABLE",
+                "Jev requires aresim[jev] and JEV_API_KEY.",
+            )
+        agent = make_agent(algorithm_id)
+        return agent, agent.policy_id, None
+    if algorithm_id in CHECKPOINT_ALGORITHMS:
         if checkpoint_path is None or not checkpoint_path.strip():
-            raise PolicyError("CHECKPOINT_NOT_FOUND", "Checkpoint path is required for masked PPO.")
+            raise PolicyError("CHECKPOINT_NOT_FOUND", "Checkpoint path is required for this learned policy.")
         agent = load_checkpoint_agent(checkpoint_path)
         return agent, agent.policy_id, str(resolve_checkpoint_path(checkpoint_path))
     raise PolicyError("UNKNOWN_ALGORITHM", f"Unknown algorithm id: {algorithm_id}")
@@ -170,6 +191,7 @@ class PolicyStepResult:
     policy_id: str
     algorithm_id: str
     action_mask: list[int]
+    info: dict[str, object] | None = None
 
 
 class PolicyBridge:
@@ -197,6 +219,7 @@ class PolicyBridge:
         action_index = int(agent.act(observation, action_mask))
         command = self._actions.decode(state, action_index)
         transition = engine.step(command, Actor.AGENT)
+        info = _agent_info(agent)
         return PolicyStepResult(
             transition=transition,
             command=command,
@@ -204,6 +227,7 @@ class PolicyBridge:
             policy_id=agent.policy_id,
             algorithm_id=algorithm_id,
             action_mask=[int(value) for value in action_mask.tolist()],
+            info=info,
         )
 
 
@@ -215,21 +239,41 @@ def command_to_ui_payload(command: ActionCommand) -> dict[str, object]:
     return payload
 
 
+def _agent_info(agent: object) -> dict[str, object] | None:
+    info = getattr(agent, "last_info", None)
+    if not isinstance(info, dict) or not info:
+        return None
+    return dict(info)
+
+
 def policy_meta_from_result(result: PolicyStepResult) -> dict[str, object]:
     """Build camelCase policy metadata for one agent-step API response."""
-    return {
+    meta: dict[str, object] = {
         "algorithmId": result.algorithm_id,
         "policyId": result.policy_id,
         "actionIndex": result.action_index,
         "action": command_to_ui_payload(result.command),
         "actionMask": result.action_mask,
     }
+    if result.info:
+        meta["jev"] = {
+            "choice": result.info.get("choice"),
+            "confidence": result.info.get("confidence"),
+            "probabilities": result.info.get("probabilities") or {},
+            "action": result.info.get("action"),
+            "fallback": result.info.get("fallback"),
+            "waitRecharges": result.info.get("wait_recharges"),
+        }
+    return meta
 
 
 __all__ = [
     "BASELINE_ALGORITHMS",
     "CHECKPOINT_ALGORITHM",
+    "CHECKPOINT_ALGORITHMS",
+    "LLM_ALGORITHMS",
     "POLICY_CATALOG",
+    "jev_available",
     "PolicyBridge",
     "PolicyError",
     "PolicyStepResult",

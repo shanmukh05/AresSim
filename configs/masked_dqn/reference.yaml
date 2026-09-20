@@ -1,0 +1,58 @@
+schema_version: aresim.experiment.v1
+experiment_id: rllib_masked_dqn_reference
+trial_id: seed_13
+algorithm: masked_dqn
+model: local_cnn_q
+learner_seed: 13
+environment:
+  scenario_id: phase1_default_v1
+  observation: local
+  action: discrete
+  reward: shaped_train
+  task: open_exploration
+  max_episode_steps: 1200
+algorithm_config:
+  total_environment_steps: 2097152
+  rollout_batch_size: 4096
+  train_batch_size: 256
+  replay_capacity: 250000
+  learning_starts: 20000
+  n_step: 3
+  double_q: true
+  dueling: true
+  gamma: 0.995
+  learning_rate: 0.0000625
+  max_gradient_norm: 40.0
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_timesteps: 400000
+  target_network_update_freq: 4000
+  tau: 1.0
+model_config:
+  terrain_embedding: 4
+  objective_embedding: 4
+  conv_channels: [32, 64]
+  telemetry_layers: [128, 128]
+  fused_width: 256
+evaluation:
+  seed_manifest: notebooks/phase1_open_exploration_split_v1.yaml
+  interval_environment_steps: 81920
+  split: validation
+  record_trajectories: false
+checkpoint:
+  interval_environment_steps: 81920
+  keep: 3
+tracking:
+  mode: online
+  project: aresim
+  group: reference
+  tags: [reference, dqn, gpu]
+artifacts:
+  root: results
+  reject_existing: false
+resources:
+  num_env_runners: 4
+  num_envs_per_env_runner: 1
+  num_learners: 0
+  cpus_per_env_runner: 1
+  gpus_per_learner: 1.0

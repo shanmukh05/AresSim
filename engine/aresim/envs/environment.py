@@ -116,6 +116,7 @@ class AresEnvironment(Generic[ObservationT, ActionT]):
         self.engine = AresEngine(engine_config)
         self._reset = False
         self._done = False
+        self._last_step: tuple[WorldState, EngineTransition, TaskOutcome] | None = None
 
     @property
     def observation_space(self):
@@ -184,7 +185,13 @@ class AresEnvironment(Generic[ObservationT, ActionT]):
         command = self.action_adapter.decode(before, action_id)
         transition = self.engine.step(command, Actor.AGENT)
         outcome = self.task.evaluate(before, transition)
-        breakdown = self.reward_profile.calculate(before, transition, outcome)
+        self._last_step = (before, transition, outcome)
+        breakdown = self.reward_profile.calculate(
+            before,
+            transition,
+            outcome,
+            episode_end=outcome.terminated,
+        )
         observation = self.observation_builder.build(transition.state, self.engine_config)
         action_mask = self.action_adapter.mask(transition.state, self.engine_config)
         info = self._base_info(transition.state.seed, transition.after_checksum)
@@ -209,6 +216,13 @@ class AresEnvironment(Generic[ObservationT, ActionT]):
             transition=transition,
             reward_breakdown=breakdown,
         )
+
+    def episode_end_breakdown(self) -> RewardBreakdown | None:
+        """Recompute reward with episode-end terms when truncation follows a non-terminal step."""
+        if self._last_step is None:
+            return None
+        before, transition, outcome = self._last_step
+        return self.reward_profile.calculate(before, transition, outcome, episode_end=True)
 
 
 class AresTimeLimit(Generic[ObservationT, ActionT]):
@@ -274,5 +288,19 @@ class AresTimeLimit(Generic[ObservationT, ActionT]):
         }
         if reached_limit and not result.terminated and not result.truncated:
             info["truncation_reason"] = "max_episode_steps"
+        reward = result.reward
+        reward_breakdown = result.reward_breakdown
+        if truncated and not result.terminated and hasattr(self.environment, "episode_end_breakdown"):
+            end_breakdown = self.environment.episode_end_breakdown()
+            if end_breakdown is not None:
+                reward = end_breakdown.total
+                reward_breakdown = end_breakdown
+                info["reward_breakdown"] = end_breakdown.as_dict()
         self._done = result.terminated or truncated
-        return replace(result, truncated=truncated, info=info)
+        return replace(
+            result,
+            reward=reward,
+            reward_breakdown=reward_breakdown,
+            truncated=truncated,
+            info=info,
+        )

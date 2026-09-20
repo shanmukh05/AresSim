@@ -1,14 +1,29 @@
 schema_version: aresim.experiment.v1
 experiment_id: rllib_masked_ppo_reference
-trial_id: seed_9
+trial_id: seed_14
 algorithm: masked_ppo
 model: local_cnn_actor_critic
-learner_seed: 9
+learner_seed: 15
+environment:
+  scenario_id: phase1_default_v1
+  observation: local
+  action: discrete
+  reward: shaped_train
+  task: open_exploration
+  max_episode_steps: 1200
 algorithm_config:
-  total_environment_steps: 1048576
-  rollout_batch_size: 2048
+  total_environment_steps: 3145728
+  rollout_batch_size: 8192
   minibatch_size: 512
-  update_epochs: 4
+  update_epochs: 2
+  gamma: 0.995
+  gae_lambda: 0.95
+  clip_param: 0.2
+  value_loss_coefficient: 0.5
+  entropy_coefficient: 0.06
+  learning_rate: 0.0001
+  max_gradient_norm: 0.5
+  target_kl: 0.02
 evaluation:
   seed_manifest: notebooks/phase1_open_exploration_split_v1.yaml
   interval_environment_steps: 81920
@@ -21,13 +36,13 @@ tracking:
   mode: online
   project: aresim
   group: reference
-  tags: [reference, cpu, fast]
+  tags: [reference, explore, gpu]
 artifacts:
   root: results
   reject_existing: true
 resources:
-  num_env_runners: 0
-  num_envs_per_env_runner: 4
+  num_env_runners: 28
+  num_envs_per_env_runner: 1
   num_learners: 0
   cpus_per_env_runner: 1
-  gpus_per_learner: 0.0
+  gpus_per_learner: 1.0

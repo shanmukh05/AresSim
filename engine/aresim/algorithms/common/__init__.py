@@ -1,8 +1,10 @@
 """Internal helpers shared across algorithm and training configuration code.
 
-**Last updated:** September 5, 2026
+**Last updated:** September 12, 2026
 
-**Contains:** action-mask helpers, typed config decode/validation utilities, and W&B run id helpers.
+**Contains:** action-mask helpers, typed config decode/validation utilities, W&B run id helpers,
+and the shared local observation encoder used by PPO and DQN.
+Resume path resolution lives in :mod:`aresim.algorithms.common.resume` and is imported by training, not re-exported here.
 """
 
 from .config_decode import decode_dataclass, finite_number, mapping, positive_integer

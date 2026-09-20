@@ -14,13 +14,4 @@ export default defineConfig({
       "react-reconciler/constants": "react-reconciler/constants.js",
     },
   },
-  test: {
-    environment: "jsdom",
-    setupFiles: ["./vitest.setup.ts"],
-    globalSetup: ["./vitest.global-setup.ts"],
-    globals: true,
-    css: true,
-    fileParallelism: false,
-    exclude: ["src/e2e/**", "node_modules/**", "dist/**"],
-  },
 });

@@ -1,6 +1,6 @@
 # AresSim Algorithm Literature Survey and Research Proposals
 
-Last updated: 2026-08-02
+Last updated: 2026-09-12
 
 Status: Short research guide. It does not change the composed environment, single-rover Gymnasium adapter, future PettingZoo multi-agent contract, or RLlib training architecture in [RL Algorithms, Training, and Evaluation](rl_quickstart.md).
 
@@ -25,7 +25,7 @@ The table separates complete control algorithms from supporting methods. JEPA, c
 |---|---|---|---|
 | Random-valid, scripted, and oracle planners | Non-learning baselines | Catch environment bugs and provide lower and upper reference points. | Essential |
 | Action-masked PPO in RLlib | First learned controller and pipeline-parity baseline | A tested RLModule uses the same mask in exploration, inference, and training. | Essential |
-| Mask-aware DQN | Off-policy comparison | Reuses experience and directly matches discrete actions. Invalid actions must be masked during both selection and target calculation. Rainbow components can be added only after plain DQN works. | Essential |
+| Mask-aware DQN | Off-policy comparison | Implemented as Double/dueling DQN with `-inf` masking in selection and TD targets. Rainbow components can be added only after this baseline is measured. | Essential |
 | Recurrent PPO or recurrent DQN | Memory under partial observability | An LSTM can remember discovered ice, routes, the pad location, and earlier warnings that have left the local view. A small sequence-replay agent can borrow R2D2's recurrent replay rules without copying its distributed training system. | High |
 | Gated Transformer-XL policy | Longer memory alternative | May retain longer histories than an LSTM, but should be tested only after a recurrent baseline because it is heavier and more sensitive. | Medium |
 | Prioritized Level Replay (PLR) | Seed curriculum | AresSim seeds act like procedural levels. PLR revisits seeds with high learning potential instead of sampling all seeds uniformly. | High |
@@ -78,7 +78,7 @@ Combine PLR with a shared encoder: train on seeds chosen by learning progress, t
 
 | Stage | Experiments | Main question |
 |---:|---|---|
-| 1 | Random-valid, scripted, oracle, action-masked PPO in RLlib | Is the environment learnable, are masks/rewards correct, and do the adapters preserve the contract? |
+| 1 | Random-valid, scripted, oracle, action-masked PPO, mask-aware DQN | Is the environment learnable, are masks/rewards correct, and do on-policy vs off-policy adapters preserve the contract? |
 | 2 | Recurrent PPO, recurrent DQN, discovered-map policy | How much does memory help under the local view? |
 | 3 | PLR and constrained PPO | Can policies generalize across seeds while respecting safety costs? |
 | 4 | Behavior cloning and IQL | Can saved manual/scripted experience reduce online interaction? |

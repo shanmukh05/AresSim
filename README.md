@@ -26,9 +26,9 @@ One simulator supports human play, scripted baselines, and learned policies:
 
 - **Play** a survival loop: scout terrain, scan, extract ice and ore, haul cargo, service the pad, and build while battery, health, power, weather, and livability decay.
 - **Inspect** the same episode as a player, an analyst, or a policy: Manual, Algorithm, and Replay modes share snapshots from the Python API.
-- **Train** action-masked PPO with checked-in YAML, W&B metrics, native checkpoints, and frozen evaluation on fixed seed splits.
+- **Train** action-masked PPO or mask-aware DQN with checked-in YAML, W&B metrics, native checkpoints, and frozen evaluation on fixed seed splits.
 - **Record** portable trajectories (`aresim.trajectory.episode.v1`) from the UI or from `RolloutRunner`, then reload them in Replay.
-- **Attach** a baseline or a PPO checkpoint in Algorithm mode; inference stays on the API host, and Python still validates every action.
+- **Attach** a baseline or a PPO/DQN checkpoint in Algorithm mode; inference stays on the API host, and Python still validates every action.
 
 Phase 1 is open exploration: there is no mission-complete victory. Reward, survival, and coverage are diagnostics, not a score to “win.”
 
@@ -39,8 +39,8 @@ Phase 1 is open exploration: there is no mission-complete victory. Reward, survi
 - **Local policy crop** — `aresim.obs.local.v1` is a fixed `8×8` window with an authoritative legal-action mask; Wait is always legal
 - **3D shell** — orthographic Survey, north-up Top, and Rover POV; zoom, follow, mini-map, visibility flashlight, layers, and Martian day/night
 - **HUD and analytics** — grouped status, mission/warning chips, inspector, guide, and run charts without duplicating engine math
-- **Training stack** — RLlib masked PPO, CNN actor-critic, mid-run UI-loadable checkpoints, W&B as the sole app-level log
-- **Baselines** — Wait, uniform random, random-valid, and a scripted local-observation heuristic, all on the same `Agent` contract as PPO
+- **Training stack** — RLlib masked PPO and mask-aware DQN, shared local CNN encoder, mid-run UI-loadable checkpoints, W&B as the sole app-level log
+- **Baselines** — Wait, uniform random, random-valid, and a scripted local-observation heuristic, all on the same `Agent` contract as PPO and DQN
 
 ## Flexibility
 
@@ -56,7 +56,7 @@ The engine is the source of truth. New behavior plugs in at registries; adapters
 
 Unknown YAML fields, unsafe tags, and incompatible batch sizes fail before Ray workers start. `--set path=value` overrides a config without editing the file. Custom components do not require source edits, inheritance, or plugin discovery.
 
-Later milestones (multi-rover, DQN, recurrence, LLM agents) are designed to reuse this core rather than fork it. See [Implementation Checklist](docs/project/implementation_checklist.md).
+Later milestones (multi-rover, recurrence, LLM agents) are designed to reuse this core rather than fork it. See [Implementation Checklist](docs/project/implementation_checklist.md).
 
 ## Repository layout
 
@@ -95,22 +95,19 @@ The API listens on `127.0.0.1:8000`. Vite proxies `/api` to it. Open the URL Vit
 python3 -m venv engine/.venv
 engine/.venv/bin/pip install -e './engine[dev,rllib,notebook]'
 engine/.venv/bin/aresim-rl train configs/masked_ppo/smoke.yaml
+engine/.venv/bin/aresim-rl train configs/masked_dqn/smoke.yaml
 ```
 
 | Config | Steps | Purpose |
 |---|---:|---|
-| [`configs/masked_ppo/smoke.yaml`](configs/masked_ppo/smoke.yaml) | 4,096 | Pipeline smoke test |
+| [`configs/masked_ppo/smoke.yaml`](configs/masked_ppo/smoke.yaml) | 102,400 | Pipeline smoke test |
 | [`configs/masked_ppo/dev.yaml`](configs/masked_ppo/dev.yaml) | 102,400 | Local development |
-| [`configs/masked_ppo/reference.yaml`](configs/masked_ppo/reference.yaml) | 1,048,576 | Longer reference run |
+| [`configs/masked_ppo/reference.yaml`](configs/masked_ppo/reference.yaml) | 2,097,152 | Longer reference run (28 env runners, CUDA learner) |
+| [`configs/masked_dqn/smoke.yaml`](configs/masked_dqn/smoke.yaml) | 4,096 | Masked DQN pipeline smoke |
+| [`configs/masked_dqn/dev.yaml`](configs/masked_dqn/dev.yaml) | 102,400 | Local DQN development |
+| [`configs/masked_dqn/reference.yaml`](configs/masked_dqn/reference.yaml) | 2,097,152 | DQN reference (4 env runners, CUDA learner, n-step=3) |
 
 See the [RL usage guide](docs/rl/usage.md) for W&B, evaluation, trajectories, and extension contracts.
-
-## Tests
-
-```bash
-engine/.venv/bin/pytest engine/tests
-npm test
-```
 
 ## Documentation
 

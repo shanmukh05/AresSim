@@ -1,18 +1,19 @@
 # AresSim RL Usage Guide
 
-Practical guide for running environments, training masked PPO, configuring W&B, recording trajectories, and extending components. For network architecture, PPO internals, and metric definitions, see [RL Algorithms, Training, and Evaluation](rl_quickstart.md).
+Practical guide for running environments, training masked PPO and mask-aware DQN, configuring W&B, recording trajectories, and extending components. For network architecture, PPO/DQN internals, and metric definitions, see [RL Algorithms, Training, and Evaluation](rl_quickstart.md).
 
 ## Contents
 
 | Section | What you will find |
 |---|---|
 | [Setup](#setup) | Virtual environment and optional extras |
-| [Train masked PPO from the CLI](#train-masked-ppo-from-the-cli) | `aresim-rl train`, configs, overrides, run layout |
+| [Train from the CLI](#train-from-the-cli) | `aresim-rl train`, configs, overrides, run layout |
+| [Train on JarvisLabs](#train-on-jarvislabs) | Cloud GPU/CPU instances, upload, download `results/` |
 | [Weights & Biases (W&B)](#weights--biases-wb) | YAML `tracking` block, auth, modes, logged metrics |
 | [Experiment YAML](#experiment-yaml) | Checked-in configs and key fields |
 | [Train from Python](#train-from-python) | `load_experiment`, `run_experiment`, checkpoints |
 | [After training](#after-training) | Evaluate, inspect, and report |
-| [UI policy inference](#ui-policy-inference) | Attach baselines or PPO checkpoints in Algorithm mode |
+| [UI policy inference](#ui-policy-inference) | Attach baselines, Jev, or PPO/DQN checkpoints in Algorithm mode |
 | [Create an environment](#create-an-environment) | Framework-neutral, Gymnasium, PettingZoo factories |
 | [Run baseline rollouts](#run-baseline-rollouts) | Deterministic episodes with built-in agents |
 | [Record trajectories](#record-trajectories) | `aresim.trajectory.v1` datasets and validation |
@@ -40,9 +41,10 @@ engine/.venv/bin/python -m ipykernel install --user --name aresim --display-name
 
 | Extra | Installs | Use when |
 |---|---|---|
-| `dev` | pytest, coverage | Running tests |
+| `dev` | httpx | Local API client work |
 | `env` | NumPy, Gymnasium, PettingZoo | Baselines and rollouts only |
-| `rllib` | Ray, RLlib, PyTorch, W&B | Masked PPO training and evaluation |
+| `rllib` | Ray, RLlib, PyTorch, W&B | Masked PPO/DQN training and evaluation |
+| `jev` | TypeSafe SDK | Live Jev rover agent and `aresim-rl rollout` |
 | `notebook` | Jupyter, papermill | Running notebooks locally |
 
 Select the `AresSim (.venv)` kernel in Jupyter. The base UI/backend install does not require NumPy, Gymnasium, Ray, PyTorch, or W&B.
@@ -51,26 +53,41 @@ Seed splits for evaluation live in [`notebooks/phase1_open_exploration_split_v1.
 
 ---
 
-## Train masked PPO from the CLI
+## Train from the CLI
 
-Masked PPO is the only implemented learned algorithm. Training is driven by validated YAML under `configs/<algorithm>/` and the `aresim-rl` console script.
+Masked PPO and mask-aware DQN are the implemented learned algorithms. Training is driven by validated YAML under `configs/<algorithm>/` and the `aresim-rl` console script.
 
 ### Checked-in configs
 
 | File | Environment steps | W&B | Purpose |
 |---|---:|---|---|
-| [`configs/masked_ppo/smoke.yaml`](../../configs/masked_ppo/smoke.yaml) | 4,096 | disabled | Fast pipeline smoke test (2-seed eval, no trajectory export) |
+| [`configs/masked_ppo/smoke.yaml`](../../configs/masked_ppo/smoke.yaml) | 102,400 | disabled | Fast pipeline smoke test (2-seed eval, no trajectory export) |
 | [`configs/masked_ppo/dev.yaml`](../../configs/masked_ppo/dev.yaml) | 102,400 | online | Local development run |
-| [`configs/masked_ppo/reference.yaml`](../../configs/masked_ppo/reference.yaml) | 1,048,576 | online | Longer reference training |
+| [`configs/masked_ppo/reference.yaml`](../../configs/masked_ppo/reference.yaml) | 2,097,152 | online | Longer reference training (28 env runners + CUDA learner; needs a GPU host such as JarvisLabs L4) |
+| [`configs/masked_dqn/smoke.yaml`](../../configs/masked_dqn/smoke.yaml) | 4,096 | disabled | Masked DQN pipeline smoke (uniform replay, n-step=1) |
+| [`configs/masked_dqn/dev.yaml`](../../configs/masked_dqn/dev.yaml) | 102,400 | online | Local DQN development (2 env runners) |
+| [`configs/masked_dqn/reference.yaml`](../../configs/masked_dqn/reference.yaml) | 2,097,152 | online | DQN reference (4 env runners + CUDA learner; n-step=3) |
+| [`configs/jev/smoke.yaml`](../../configs/jev/smoke.yaml) | 20 (rollout) | n/a | Fake-client Jev pipeline smoke |
+| [`configs/jev/dev.yaml`](../../configs/jev/dev.yaml) | 40 (rollout) | n/a | Live Jev episodes (requires `JEV_API_KEY`) |
+
+Jev is not trained. See the [Jev workflow](../../engine/aresim/algorithms/jev/workflow.md). Roll it out with:
+
+```bash
+engine/.venv/bin/aresim-rl rollout configs/jev/smoke.yaml
+```
 
 Run from the **repository root** so seed manifests and artifact paths resolve correctly:
 
 ```bash
-# Smoke test (no W&B, ~minutes on CPU)
+# PPO smoke test (no W&B, ~minutes on CPU)
 engine/.venv/bin/aresim-rl train configs/masked_ppo/smoke.yaml
+
+# DQN smoke test
+engine/.venv/bin/aresim-rl train configs/masked_dqn/smoke.yaml
 
 # Development run (requires W&B login — see below)
 engine/.venv/bin/aresim-rl train configs/masked_ppo/dev.yaml
+engine/.venv/bin/aresim-rl train configs/masked_dqn/dev.yaml
 
 # Override hyperparameters without editing YAML
 engine/.venv/bin/aresim-rl train configs/masked_ppo/dev.yaml \
@@ -100,6 +117,23 @@ results/<experiment_id>/<trial_id>/
 ```
 
 `experiment_id` and `trial_id` come from the YAML (`rllib_masked_ppo_smoke`, `seed_7`, etc.). Set `artifacts.reject_existing: false` in YAML or change `trial_id` to reuse a directory.
+
+---
+
+## Train on JarvisLabs
+
+The CLI above is the same on a cloud box. To create a JarvisLabs GPU or CPU instance, upload the training payload, install Python 3.12, run `aresim-rl train`, and download the entire `results/` folder, see [Train on JarvisLabs](jarvislabs.md).
+
+From the repository root, after `jl setup` and `export WANDB_API_KEY=...`:
+
+```bash
+python3 scripts/jarvislabs/cloud_train.py run --gpu L4 \
+  --config configs/masked_ppo/reference.yaml
+python3 scripts/jarvislabs/cloud_train.py run --gpu L4 \
+  --config configs/masked_dqn/reference.yaml
+```
+
+That helper pauses the instance when the run finishes. Use `--detach` to leave training running, then `fetch` and `down` later. Do not `jl run .` from the repo root: it uploads local `results/` and the pytorch template's Python 3.10 cannot install AresSim.
 
 ---
 
@@ -141,7 +175,7 @@ Each `aresim-rl train` invocation gets a fresh W&B id so a deleted remote run ca
 
 ### What gets logged
 
-During training, [`AresMetricsCallback`](../../engine/aresim/algorithms/ppo/train.py) maps RLlib metrics to stable names. The learning-curve x-axis is `train/environment_steps`. Logged groups include shaped return, episode length, action counts, invalid actions, policy/value losses, entropy, KL, clip fraction, explained variance, and throughput.
+During training, [`AresMetricsCallback`](../../engine/aresim/algorithms/ppo/train.py) maps RLlib metrics to stable names. The learning-curve x-axis is `train/environment_steps`. Logged groups include shaped return, episode length, action counts, invalid actions, policy/value losses (PPO), TD error and Q stats (DQN), entropy, KL, clip fraction, explained variance, and throughput.
 
 After training, frozen validation evaluation metrics are appended to the same W&B run (unless `mode: disabled`).
 
@@ -194,7 +228,7 @@ environment:
 algorithm_config:
   total_environment_steps: 102400
   rollout_batch_size: 4096
-  learning_rate: 0.0003
+  learning_rate: 0.0001
 
 evaluation:
   seed_manifest: notebooks/phase1_open_exploration_split_v1.yaml
@@ -215,7 +249,7 @@ artifacts:
   reject_existing: true
 ```
 
-Add new algorithms under `configs/<algorithm>/`. The `algorithm` field must match a name registered in `TrainingRegistry` (`masked_ppo` today).
+Add new algorithms under `configs/<algorithm>/`. The `algorithm` field must match a name registered in `TrainingRegistry` (`masked_ppo` or `masked_dqn` today).
 
 ---
 
@@ -264,7 +298,22 @@ engine/.venv/bin/aresim-rl report results/rllib_masked_ppo_dev/seed_7
 
 `--checkpoint` accepts a path to `checkpoint.json` or a checkpoint folder name under `checkpoints/` (e.g. `final`).
 
-Evaluation writes `evaluation/<label>/summary.json` and optional trajectory shards. `aresim-rl report` reads W&B history plus local evaluation artifacts without restarting Ray.
+Evaluation writes `evaluation/<label>/summary.json` and optional trajectory shards. When `record_trajectories` is false, the validation split plus `random_valid` and `scripted` baselines run as one CPU process pool (not the training EnvRunners). Logs print `Frozen evaluation N/M`. Trajectory recording stays sequential so shard writes stay ordered. `aresim-rl report` reads W&B history plus local evaluation artifacts without restarting Ray.
+
+### Resume training
+
+Continue a prior run from its Ray experiment state or an exported checkpoint sidecar. The resumed run reuses the same run directory, manifest `wandb_run_id`, and requires the same resolved experiment (`config_hash` must match).
+
+```bash
+# Resume from the default run directory for experiment_id/trial_id in the YAML
+engine/.venv/bin/aresim-rl train configs/masked_ppo/reference.yaml --resume-from .
+
+# Resume from a specific exported checkpoint under checkpoints/
+engine/.venv/bin/aresim-rl train configs/masked_ppo/reference.yaml \
+  --resume-from results/rllib_masked_ppo_reference/seed_7/checkpoints/step_081920/checkpoint.json
+```
+
+Set `artifacts.reject_existing: false` (or use `--resume-from`) so the existing run directory is reused. Increase `algorithm_config.total_environment_steps` in YAML when extending a completed run.
 
 ---
 
@@ -277,7 +326,8 @@ Algorithm mode in the React UI runs policies **server-side** through the Python 
 | Policy type | API install |
 |---|---|
 | Baselines (`random`, `random_valid`, `wait`, `scripted`) | `aresim[env]` (default dev install) |
-| Masked PPO checkpoint | `aresim[rllib]` on the API host |
+| Jev | `aresim[jev]` plus `JEV_API_KEY` |
+| Masked PPO or DQN checkpoint | `aresim[rllib]` on the API host |
 
 Start the API with `engine/.venv/bin/python -m aresim.api` (from any working directory).
 
@@ -285,7 +335,7 @@ Start the API with `engine/.venv/bin/python -m aresim.api` (from any working dir
 engine/.venv/bin/python -m aresim.api
 ```
 
-`GET /api/health` returns `rllibAvailable: true` when the optional RLlib stack is importable.
+`GET /api/health` returns `rllibAvailable` and `jevAvailable` when those optional stacks can actually run.
 
 ### Attach and step
 
@@ -303,12 +353,19 @@ curl -X POST http://127.0.0.1:8000/api/sessions/<sessionId>/attach-policy \
 curl -X POST http://127.0.0.1:8000/api/sessions/<sessionId>/agent-step
 ```
 
-For masked PPO during development, pass the **checkpoint sidecar** path in the UI or API:
+For masked PPO or DQN during development, pass the **checkpoint sidecar** path in the UI or API:
 
 ```json
 {
   "algorithmId": "masked_ppo",
   "checkpointPath": "/absolute/path/to/results/rllib_masked_ppo_smoke/seed_7/checkpoints/final/checkpoint.json"
+}
+```
+
+```json
+{
+  "algorithmId": "masked_dqn",
+  "checkpointPath": "/absolute/path/to/results/rllib_masked_dqn_smoke/seed_7/checkpoints/final/checkpoint.json"
 }
 ```
 
@@ -330,7 +387,7 @@ curl -X POST http://127.0.0.1:8000/api/policies/validate-checkpoint \
   -d '{"checkpointPath":"/absolute/path/to/results/rllib_masked_ppo_smoke/seed_7/checkpoints/final/checkpoint.json"}'
 ```
 
-Saved trajectories record `algorithmId` and, for masked PPO, `checkpointPath` in replay metadata.
+Saved trajectories record `algorithmId` and, for learned policies, `checkpointPath` in replay metadata.
 
 ---
 
@@ -353,7 +410,7 @@ The external step limit produces truncation; it is not a simulator failure or ta
 
 ## Run baseline rollouts
 
-Built-in agent registry names:
+Built-in agent registry names (see [baseline workflow](../../engine/aresim/algorithms/baselines/workflow.md)):
 
 | Name | Behavior |
 |---|---|
@@ -361,6 +418,7 @@ Built-in agent registry names:
 | `random_valid` | Uniform over legal actions only |
 | `wait` | Always action 0 (Wait) |
 | `scripted` | Deterministic partial-observation heuristic |
+| `jev` | TypeSafe Choice over legal actions; skips idle Wait and action loops; unloads cargo on the pad; logs traces under `results/jev/`. See [Jev workflow](../../engine/aresim/algorithms/jev/workflow.md) |
 
 ```python
 from aresim.training import EpisodeSpec, RolloutConfig, RolloutRunner
@@ -482,7 +540,7 @@ registry.register_reward("my_reward", lambda context: MyReward(MyRewardConfig(sc
 environment = make_gym_env(replace(DEFAULT_ENVIRONMENT_CONFIG, reward="my_reward"), registry=registry)
 ```
 
-Use `engine/tests/test_extensibility.py` patterns for contract tests. Registration is programmatic; package entry points remain deferred.
+Registration is programmatic; package entry points remain deferred.
 
 ---
 
@@ -518,7 +576,7 @@ Checkpoint-backed policies implement the same contract for framework-neutral eva
 
 ## Extend learned policies
 
-`TrainingRegistry` exposes three extension seams: `AlgorithmFactory`, `ModelFactory`, and `CheckpointLoader`. Built-in names are `masked_ppo`, `local_cnn_actor_critic`, and `rllib_masked_ppo`.
+`TrainingRegistry` exposes three extension seams: `AlgorithmFactory`, `ModelFactory`, and `CheckpointLoader`. Built-in names are `masked_ppo`, `masked_dqn`, `local_cnn_actor_critic`, `local_cnn_q`, `rllib_masked_ppo`, and `rllib_masked_dqn`.
 
 ```python
 from aresim.training import create_training_registry, load_experiment, run_experiment

@@ -1,16 +1,17 @@
 """Public entry point for baseline policies and the shared ``Agent`` contract.
 
 Re-exports every built-in deterministic-seeded baseline from
-:mod:`aresim.algorithms.baselines`. Learned masked PPO lives under
-under :mod:`aresim.algorithms.ppo`; rollout collection and experiment YAML remain in
+:mod:`aresim.algorithms.baselines`. Jev lives under :mod:`aresim.algorithms.jev`.
+Learned masked PPO and mask-aware DQN live under
+:mod:`aresim.algorithms.ppo` and :mod:`aresim.algorithms.dqn`; rollout collection and experiment YAML remain in
 :mod:`aresim.training`.
 
-**Last updated:** September 1, 2026
+**Last updated:** September 20, 2026
 
 **Contains:** ``Agent``, ``UniformRandomAgent``, ``RandomValidAgent``, ``WaitAgent``,
 ``ScriptedAgent``.
 
-**Registry names:** ``random``, ``random_valid``, ``wait``, ``scripted`` (via
+**Registry names:** ``random``, ``random_valid``, ``wait``, ``scripted``, ``jev`` (via
 :func:`aresim.registry.create_default_registry`).
 
 **Import note:** Does not import Ray or PyTorch. Safe for lightweight tests and

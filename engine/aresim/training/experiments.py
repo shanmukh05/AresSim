@@ -1,11 +1,12 @@
 """Validated experiment configuration for the optional learned-policy stack.
 
 Immutable dataclasses decode repository YAML before Ray or W&B starts. Algorithm-
-specific hyperparameters live in :mod:`aresim.algorithms.ppo.config`; checked-in
-YAML lives in repository ``configs/<algorithm>/``, not the installable package. Training
+specific hyperparameters live in :mod:`aresim.algorithms.ppo.config` and
+:mod:`aresim.algorithms.dqn.config`; checked-in YAML lives in repository
+``configs/<algorithm>/``, not the installable package. Training
 run artifacts default to ``results/``.
 
-**Last updated:** September 1, 2026
+**Last updated:** September 12, 2026
 
 **Contains:** ``ExperimentSpec``, resource/tracking/artifact configs,
 :func:`parse_experiment`, :func:`load_experiment`, :func:`apply_overrides`.
@@ -123,10 +124,13 @@ class ArtifactConfig:
 
     root: str = "results"
     reject_existing: bool = True
+    resume_from: str | None = None
 
     def validate(self) -> None:
         if not isinstance(self.root, str) or not self.root.strip() or not isinstance(self.reject_existing, bool):
             raise ValueError("artifact root cannot be empty")
+        if self.resume_from is not None and (not isinstance(self.resume_from, str) or not self.resume_from.strip()):
+            raise ValueError("resume_from must be a non-empty path when set")
 
 
 @dataclass(frozen=True)
@@ -155,9 +159,7 @@ class ExperimentSpec(Generic[AlgorithmConfigT]):
         if isinstance(self.learner_seed, bool) or self.learner_seed < 0:
             raise ValueError("learner_seed must be non-negative")
         _validate_components(self.environment, self.algorithm_config, self.model_config, self.resources, self.evaluation, self.checkpoint, self.tracking, self.artifacts)
-        if not isinstance(self.algorithm_config, MaskedPPOConfig):
-            return
-        _validate_ppo_schedule(self.algorithm_config, self.evaluation, self.checkpoint)
+        _validate_step_schedule(self.algorithm_config, self.evaluation, self.checkpoint)
 
     def as_dict(self) -> dict[str, object]:
         """Return the stable JSON/YAML representation."""
@@ -183,10 +185,13 @@ def _validate_components(*components: object) -> None:
         validate()
 
 
-def _validate_ppo_schedule(ppo: MaskedPPOConfig, evaluation: EvaluationConfig, checkpoint: CheckpointConfig) -> None:
-    batch = ppo.rollout_batch_size
+def _validate_step_schedule(algorithm_config: object, evaluation: EvaluationConfig, checkpoint: CheckpointConfig) -> None:
+    batch = getattr(algorithm_config, "rollout_batch_size", None)
+    total = getattr(algorithm_config, "total_environment_steps", None)
+    if not isinstance(batch, int) or isinstance(batch, bool) or not isinstance(total, int) or isinstance(total, bool):
+        return
     schedules = (
-        (ppo.total_environment_steps, "total_environment_steps"),
+        (total, "total_environment_steps"),
         (evaluation.interval_environment_steps, "evaluation interval"),
         (checkpoint.interval_environment_steps, "checkpoint interval"),
     )
@@ -199,6 +204,20 @@ _TOP_LEVEL = {
     "schema_version", "experiment_id", "trial_id", "algorithm", "model", "learner_seed",
     "environment", "algorithm_config", "model_config", "resources", "evaluation", "checkpoint", "tracking", "artifacts",
 }
+
+
+def _decoder_for_algorithm(name: str):
+    if name == "masked_ppo":
+        from ..algorithms.ppo.config import MaskedPPOConfig, decode_config
+
+        return lambda raw: decode_config(MaskedPPOConfig, raw, "algorithm_config")
+    if name == "masked_dqn":
+        from ..algorithms.dqn.config import MaskedDQNConfig, decode_config
+
+        return lambda raw: decode_config(MaskedDQNConfig, raw, "algorithm_config")
+    from ..algorithms.registry import create_training_registry
+
+    return lambda raw: create_training_registry().decode_algorithm_config(name, raw)
 
 
 def parse_experiment(
@@ -220,7 +239,7 @@ def parse_experiment(
         trial_id=str(values["trial_id"]), algorithm=str(values["algorithm"]), model=str(values["model"]),
         learner_seed=values["learner_seed"],
         environment=decode_dataclass(EnvironmentTrainingConfig, values.get("environment", {}), "environment"),
-        algorithm_config=(algorithm_config_decoder or (lambda raw: decode_algorithm_config(MaskedPPOConfig, raw, "algorithm_config")))(values.get("algorithm_config", {})),
+        algorithm_config=(algorithm_config_decoder or _decoder_for_algorithm(str(values["algorithm"])))(values.get("algorithm_config", {})),
         model_config=decode_algorithm_config(ModelConfig, values.get("model_config", {}), "model_config"),
         resources=decode_dataclass(RLlibResourceConfig, values.get("resources", {}), "resources"),
         evaluation=decode_dataclass(EvaluationConfig, values.get("evaluation", {}), "evaluation"),

@@ -4,7 +4,7 @@ This package contains the deterministic Phase 1 gameplay engine, the local REST 
 
 ## Development
 
-`pyproject.toml` is the canonical backend dependency manifest. The base dependencies run the API, while the `dev`, `env`, and `notebook` extras add tests, RL environment frameworks, and the Jupyter kernel respectively.
+`pyproject.toml` is the canonical backend dependency manifest. The base dependencies run the API, while the `dev`, `env`, `jev`, and `notebook` extras add tests, RL environment frameworks, the TypeSafe client, and the Jupyter kernel respectively.
 
 ```bash
 python3 -m venv .venv
@@ -69,7 +69,7 @@ The supported extension surface is the typed protocols in `aresim.components`, t
 
 ## Baseline rollouts
 
-The optional environment extra also includes deterministic random, random-valid, Wait, and local-observation scripted agents:
+The optional environment extra also includes deterministic random, random-valid, Wait, scripted, and Jev agents. Jev needs `aresim[jev]` and `JEV_API_KEY` for live calls; smoke rollouts use a fake client. See [`algorithms/baselines/workflow.md`](aresim/algorithms/baselines/workflow.md) and [`algorithms/jev/workflow.md`](aresim/algorithms/jev/workflow.md).
 
 ```python
 from aresim.training import EpisodeSpec, RolloutConfig, RolloutRunner, TrajectoryWriter
@@ -94,6 +94,7 @@ Install the complete learned-policy stack and run the checked-in smoke experimen
 ```bash
 pip install -e '.[dev,rllib,notebook]'
 aresim-rl train configs/masked_ppo/smoke.yaml
+aresim-rl train configs/masked_dqn/smoke.yaml
 ```
 
-The optional `aresim.training` package provides strict experiment YAML, a compact algorithm/model/checkpoint registry, RLlib action-masked PPO, fixed seed splits, canonical W&B metrics, native checkpoint sidecars, framework-neutral evaluation, UI-loadable trajectories, and executed Jupyter reports. Experiment configs live in repository `configs/`; training run artifacts in `results/`. It deliberately avoids parallel JSONL, CSV, and TensorBoard logging. See [RL Algorithms, Training, and Evaluation](../docs/rl/rl_quickstart.md) and [RL Usage Guide](../docs/rl/usage.md#train-and-extend-learned-policies).
+The optional `aresim.training` package provides strict experiment YAML, a compact algorithm/model/checkpoint registry, RLlib action-masked PPO and mask-aware DQN, fixed seed splits, canonical W&B metrics, native checkpoint sidecars, framework-neutral evaluation, UI-loadable trajectories, and executed Jupyter reports. Experiment configs live in repository `configs/`; training run artifacts in `results/`. It deliberately avoids parallel JSONL, CSV, and TensorBoard logging. See [RL Algorithms, Training, and Evaluation](../docs/rl/rl_quickstart.md) and [RL Usage Guide](../docs/rl/usage.md#train-from-the-cli).

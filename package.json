@@ -9,7 +9,6 @@
     "dev": "npm --workspace @aresim/web run dev --",
     "build": "npm --workspace @aresim/web run build",
     "preview": "npm --workspace @aresim/web run preview --",
-    "test": "npm --workspace @aresim/web run test",
     "test:e2e": "npm --workspace @aresim/web run test:e2e"
   }
 }

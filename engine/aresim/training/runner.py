@@ -193,7 +193,13 @@ class RolloutRunner:
             truncated.append(result.truncated)
             action_legal.append(legal)
             effective_actions.append(result.transition.effective_action.value)
-            events.append(tuple(result.transition.events))
+            step_events = list(result.transition.events)
+            info = getattr(self.agent, "last_info", None)
+            if isinstance(info, dict):
+                summary = info.get("summary")
+                if isinstance(summary, str) and summary and summary not in step_events:
+                    step_events.append(summary)
+            events.append(tuple(step_events))
             terminal_reasons.append(
                 result.info.get("terminal_reason") or result.info.get("truncation_reason")
             )

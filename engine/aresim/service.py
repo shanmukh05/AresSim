@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import secrets
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from .config import EngineConfig
@@ -67,6 +67,7 @@ class LiveSession:
     recorder: TrajectoryRecorder
     policy: AttachedPolicy | None = None
     policy_bridge: PolicyBridge | None = None
+    policy_events: dict[int, str] = field(default_factory=dict)
 
 
 class AresService:
@@ -154,9 +155,9 @@ class AresService:
 
     def list_policies(self) -> JsonObject:
         """Return the built-in policy catalog and optional RLlib capability."""
-        from .integrations.policy import POLICY_CATALOG, rllib_available
+        from .integrations.policy import POLICY_CATALOG, jev_available, rllib_available
 
-        return {"policies": POLICY_CATALOG, "capabilities": {"rllib": rllib_available()}}
+        return {"policies": POLICY_CATALOG, "capabilities": {"rllib": rllib_available(), "jev": jev_available()}}
 
     def validate_checkpoint(self, checkpoint_path: str) -> JsonObject:
         """Validate one checkpoint sidecar without attaching it."""
@@ -177,6 +178,7 @@ class AresService:
                 policy_id=policy_id,
                 checkpoint_path=resolved_path,
             )
+            session.policy_events.clear()
             if session.policy_bridge is None:
                 session.policy_bridge = PolicyBridge.for_engine(self.config)
             return {"algorithmId": algorithm_id, "policyId": policy_id, "checkpointPath": resolved_path}
@@ -203,6 +205,10 @@ class AresService:
                 algorithm_id=session.policy.algorithm_id,
             )
             after = snapshot_from_state(result.transition.state)
+            summary = result.info.get("summary") if result.info else None
+            if isinstance(summary, str) and summary:
+                session.policy_events[int(after["step"])] = summary
+            _merge_policy_events(after, session.policy_events)
             if after["step"] != before["step"]:
                 session.recorder.record(before, after)
             return {"snapshot": after, "policyMeta": policy_meta_from_result(result)}
@@ -255,12 +261,30 @@ class AresService:
             return replay
 
 
+def _merge_policy_events(snapshot: JsonObject, notes: dict[int, str]) -> None:
+    history = snapshot.get("history")
+    if not isinstance(history, list) or not notes:
+        return
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        note = notes.get(int(entry["step"])) if isinstance(entry.get("step"), int) else None
+        if not isinstance(note, str) or not note:
+            continue
+        events = entry.get("events")
+        current = list(events) if isinstance(events, list) else []
+        if note not in current:
+            current.append(note)
+            entry["events"] = current
+
+
 def _policy_service_error(error: PolicyError) -> ServiceError:
     status = {
         "POLICY_NOT_ATTACHED": 400,
         "CHECKPOINT_NOT_FOUND": 400,
         "CHECKPOINT_INCOMPATIBLE": 400,
         "RLLIB_UNAVAILABLE": 503,
+        "JEV_UNAVAILABLE": 503,
         "UNKNOWN_ALGORITHM": 400,
     }.get(error.code, 400)
     return ServiceError(error.code, error.message, status)

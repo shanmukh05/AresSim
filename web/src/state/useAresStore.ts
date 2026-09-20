@@ -9,6 +9,7 @@ import { AresApiClient, AresApiError, type ReplayResponse } from "../api/aresCli
 import { downloadTrajectoryFile } from "../lib/trajectoryFile";
 import { payloadUsedKg } from "../lib/payload";
 import type { ActionType, AresReplayProjectionV1, AlgorithmId, AnalyticsSeriesPoint, CameraView, LoadedReplay, OverlayMode, RunMode, SelectionTarget, SimAction, SimSnapshot, SimWarning, ViewportZoomMode } from "../types/sim";
+import { usesCheckpoint, usesJev } from "../types/sim";
 
 const client = new AresApiClient();
 
@@ -107,7 +108,7 @@ function buildSeriesFromGameplay(gameplay: AresReplayProjectionV1): AnalyticsSer
       cargoIce: currentRover?.cargoIce ?? 0,
       cargoSamples: currentRover?.cargoSamples ?? 0,
       payloadUsedKg: currentRover ? payloadUsedKg(currentRover) : 0,
-      payloadCapacityKg: currentRover?.cargoCapacityKg ?? gameplay.initialSnapshot.rovers[0]?.cargoCapacityKg ?? 12,
+      payloadCapacityKg: currentRover?.cargoCapacityKg ?? gameplay.initialSnapshot.rovers[0]?.cargoCapacityKg ?? 0,
       buildProgress: delta.changes.objectiveStats?.habitatBuildProgress ?? 0,
       serviceCount: delta.changes.objectiveStats?.serviceCount ?? 0,
     });
@@ -129,6 +130,7 @@ interface AresStore {
   algorithmId: AlgorithmId;
   checkpointPath: string;
   rllibAvailable: boolean;
+  jevAvailable: boolean;
   policyCapabilitiesLoaded: boolean;
   policyAttachKey: string | null;
   loadedReplay: LoadedReplay | null;
@@ -234,6 +236,7 @@ export const useAresStore = create<AresStore>((set, get) => {
   algorithmId: "random",
   checkpointPath: "",
   rllibAvailable: false,
+  jevAvailable: false,
   policyCapabilitiesLoaded: false,
   policyAttachKey: null,
   loadedReplay: null,
@@ -315,7 +318,7 @@ export const useAresStore = create<AresStore>((set, get) => {
         fileName: safeName,
         runMode,
         algorithmId: runMode === "algorithm" ? get().algorithmId : undefined,
-        checkpointPath: runMode === "algorithm" && get().algorithmId === "masked_ppo" ? get().checkpointPath : undefined,
+        checkpointPath: runMode === "algorithm" && usesCheckpoint(get().algorithmId) ? get().checkpointPath : undefined,
       }),
       (trajectory) => {
         downloadTrajectoryFile(safeName, trajectory);
@@ -463,11 +466,19 @@ export const useAresStore = create<AresStore>((set, get) => {
   refreshPolicyCapabilities: async () => {
     try {
       const policies = await client.listPolicies();
-      set({ rllibAvailable: policies.capabilities.rllib, policyCapabilitiesLoaded: true });
+      set({
+        rllibAvailable: policies.capabilities.rllib,
+        jevAvailable: policies.capabilities.jev === true,
+        policyCapabilitiesLoaded: true,
+      });
     } catch {
       try {
         const health = await client.fetchHealth();
-        set({ rllibAvailable: health.rllibAvailable, policyCapabilitiesLoaded: true });
+        set({
+          rllibAvailable: health.rllibAvailable,
+          jevAvailable: health.jevAvailable,
+          policyCapabilitiesLoaded: true,
+        });
       } catch {
         set({ policyCapabilitiesLoaded: false });
       }
@@ -476,15 +487,27 @@ export const useAresStore = create<AresStore>((set, get) => {
   attachCurrentPolicy: async () => {
     const { algorithmId, checkpointPath, snapshot, runMode } = get();
     if (!snapshot || runMode !== "algorithm") return;
-    const key = `${algorithmId}:${algorithmId === "masked_ppo" ? checkpointPath.trim() : ""}`;
+    const key = `${algorithmId}:${usesCheckpoint(algorithmId) ? checkpointPath.trim() : ""}`;
     if (get().policyAttachKey === key) return;
-    if (algorithmId === "masked_ppo" && !checkpointPath.trim()) {
+    if (usesCheckpoint(algorithmId) && !checkpointPath.trim()) {
       set({
         actionWarning: {
           id: snapshot.step,
           kind: "blocked",
           title: "Checkpoint required",
-          message: "Enter an absolute path to checkpoint.json for Masked PPO.",
+          message: "Enter an absolute path to checkpoint.json for this learned policy.",
+          severity: "warning",
+        },
+      });
+      return;
+    }
+    if (usesJev(algorithmId) && get().policyCapabilitiesLoaded && !get().jevAvailable) {
+      set({
+        actionWarning: {
+          id: snapshot.step,
+          kind: "blocked",
+          title: "Jev unavailable",
+          message: "Install aresim[jev] and set JEV_API_KEY on the API host.",
           severity: "warning",
         },
       });
@@ -493,7 +516,7 @@ export const useAresStore = create<AresStore>((set, get) => {
     await runBackend(
       () => client.attachPolicy({
         algorithmId,
-        checkpointPath: algorithmId === "masked_ppo" ? checkpointPath.trim() : undefined,
+        checkpointPath: usesCheckpoint(algorithmId) ? checkpointPath.trim() : undefined,
       }),
       () => set({ policyAttachKey: key, actionWarning: null }),
       "Policy attach failed",

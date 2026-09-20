@@ -1,0 +1,18 @@
+schema_version: aresim.rollout.v1
+agent: jev
+max_episode_steps: 20
+fake_client: true
+episodes:
+  - id: jev-smoke-000
+    environment_seed: 1447
+    agent_seed: 1
+algorithm_config:
+  model: jev-latest
+  timeout_seconds: 8.0
+  confidence_floor: 0.4
+  fallback: wait
+  max_calls: 20
+  memory_length: 10
+  neighborhood_size: 5
+  explore_second_prob: 0.3
+  log_path: results/jev

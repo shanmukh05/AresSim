@@ -1,8 +1,8 @@
 # AresSim RL Algorithms: Implementation, Training, and Evaluation
 
-Last updated: 2026-08-31
+Last updated: 2026-09-20
 
-This is the canonical guide to the reinforcement-learning implementation in AresSim. It explains the implemented policies, action-masked PPO, neural network, online trajectory sampling, learner updates, evaluation, metrics, checkpoints, and extension surface.
+This is the canonical guide to the reinforcement-learning implementation in AresSim. It explains the implemented policies, action-masked PPO, mask-aware DQN, neural network, online sampling, learner updates, evaluation, metrics, checkpoints, and extension surface.
 
 The current `phase1_open_exploration_v1` task has no victory condition. Reward, survival, exploration, legality, safety, and resource behavior are diagnostics—not evidence of mission completion or grounds for promoting a scientifically “best” checkpoint.
 
@@ -14,10 +14,12 @@ The current `phase1_open_exploration_v1` task has no victory condition. Reward, 
 | Uniform random | No | No; may select illegal actions | Implemented | Invalid-action and environment robustness baseline |
 | Random-valid | No | Yes | Implemented | Untrained legal-action baseline |
 | Scripted | No | Yes | Implemented | Deterministic partial-observation heuristic baseline |
+| Jev (TypeSafe) | No | Yes, legal Choice options only | Implemented | Per-tick System One rover; see [Jev workflow](../../engine/aresim/algorithms/jev/workflow.md) |
 | Action-masked PPO | Yes, on-policy | Yes, in exploration, training, and inference | Implemented | First learned reference policy |
-| DQN, recurrent PPO, multi-agent policies | — | — | Planned | Later milestones; see the [Algorithm Literature Survey](algorithm_literature_survey.md) |
+| Action-masked DQN | Yes, off-policy | Yes, in selection, epsilon-greedy, and TD targets | Implemented | Sample-efficient discrete comparison |
+| Recurrent PPO, multi-agent policies | — | — | Planned | Later milestones; see the [Algorithm Literature Survey](algorithm_literature_survey.md) |
 
-Only action-masked PPO is currently a learned RL algorithm. The other implemented policies are baselines: they are important comparisons and pipeline tests, but they do not optimize network parameters.
+Action-masked PPO and mask-aware DQN are the learned RL algorithms. Wait, random, random-valid, scripted, and Jev are inference-only comparisons; Jev calls TypeSafe and does not optimize parameters.
 
 ## Install and run
 
@@ -32,12 +34,16 @@ The `rllib` extra installs the environment dependencies, Ray with RLlib/Tune, Py
 
 Checked-in experiment configurations are:
 
-- [`configs/masked_ppo/smoke.yaml`](../../configs/masked_ppo/smoke.yaml): 4,096 environment steps;
+- [`configs/masked_ppo/smoke.yaml`](../../configs/masked_ppo/smoke.yaml): 102,400 environment steps;
 - [`configs/masked_ppo/dev.yaml`](../../configs/masked_ppo/dev.yaml): 102,400 steps;
-- [`configs/masked_ppo/reference.yaml`](../../configs/masked_ppo/reference.yaml): 1,048,576 steps.
+- [`configs/masked_ppo/reference.yaml`](../../configs/masked_ppo/reference.yaml): 2,097,152 steps (28 env runners and a CUDA learner; not for a CPU-only laptop).
+- [`configs/masked_dqn/smoke.yaml`](../../configs/masked_dqn/smoke.yaml): 4,096 steps;
+- [`configs/masked_dqn/dev.yaml`](../../configs/masked_dqn/dev.yaml): 102,400 steps;
+- [`configs/masked_dqn/reference.yaml`](../../configs/masked_dqn/reference.yaml): 2,097,152 steps (4 env runners and a CUDA learner; n-step=3).
 
 ```bash
 engine/.venv/bin/aresim-rl train configs/masked_ppo/smoke.yaml
+engine/.venv/bin/aresim-rl train configs/masked_dqn/smoke.yaml
 engine/.venv/bin/aresim-rl train configs/masked_ppo/dev.yaml \
   --set algorithm_config.learning_rate=0.0001 \
   --set resources.num_env_runners=2
@@ -112,35 +118,7 @@ The mask is computed by the environment from canonical validation rules. Wait is
 
 ## Implemented baseline policies
 
-The baselines live in [`engine/aresim/algorithms/baselines/`](../../engine/aresim/algorithms/baselines/) (`random.py`, `random_valid.py`, `scripted.py`, `wait.py`) and implement the same public `Agent` contract used by checkpoint policies.
-
-### Wait
-
-Wait always returns action `0` after asserting that its mask entry is legal. It measures passive resource decay, survival, reward time cost, and external truncation without navigation decisions.
-
-### Uniform random
-
-Uniform random samples all ten action IDs with equal probability. It deliberately ignores mask values and can select illegal actions. This makes it useful for checking invalid-action handling and for quantifying how much legality alone improves a policy.
-
-### Random-valid
-
-Random-valid samples uniformly from indices whose mask value is one. It has no observation-dependent strategy, but it never knowingly violates the current mask. It is the cleanest untrained comparison for masked PPO.
-
-### Scripted
-
-The scripted policy reads only `aresim.obs.local.v1`, the action mask, and resettable private navigation memory. Its priorities are:
-
-1. unload carried cargo on the pad;
-2. service when needed and legal;
-3. continue legal build progress;
-4. recharge on the pad below 80% battery;
-5. return toward its remembered pad below 35% battery, at 75% payload, or when service is needed;
-6. extract current-cell ice or scan current-cell rock;
-7. navigate toward visible ice or unscanned rock;
-8. explore in deterministic heading order, avoiding immediate backtracking;
-9. Wait as the final fallback.
-
-It is a fair partial-observation heuristic, not an oracle and not a network-training algorithm.
+The baselines live in [`engine/aresim/algorithms/baselines/`](../../engine/aresim/algorithms/baselines/) and implement the same public `Agent` contract used by checkpoint policies. What each one does is documented in [`baselines/workflow.md`](../../engine/aresim/algorithms/baselines/workflow.md).
 
 ## Action-masked PPO
 
@@ -197,7 +175,7 @@ This ensures that both the behavior distribution stored during sampling and the 
 
 ## Neural network implementation
 
-The built-in `local_cnn_actor_critic` is implemented in [`train.py`](../../engine/aresim/algorithms/ppo/train.py) and selected through [`algorithms/registry.py`](../../engine/aresim/algorithms/registry.py).
+The local CNN trunk lives in [`algorithms/common/encoder.py`](../../engine/aresim/algorithms/common/encoder.py). Masked PPO attaches policy and value heads (`local_cnn_actor_critic`); masked DQN attaches a Q / dueling head (`local_cnn_q`). Both are selected through [`algorithms/registry.py`](../../engine/aresim/algorithms/registry.py).
 
 ```mermaid
 flowchart TB
@@ -231,6 +209,24 @@ Terrain and objective embeddings default to width `4`; convolution channels are 
 
 The model consumes no `WorldState`, browser snapshot, remaining episode time, or privileged global map.
 
+## Action-masked DQN
+
+DQN is the off-policy comparison. EnvRunners write transitions into RLlib's `EpisodeReplayBuffer`. After `learning_starts` environment steps, the learner samples minibatches and minimizes Huber TD error. Double DQN selects the next action with the online net and evaluates it with the target net. Dueling splits state value from advantages. Illegal Q-values are set to `-inf` **before** those operations, including the next-state mask stored on `NEXT_OBS`.
+
+```text
+Q[a] = raw_Q[a]                 if action_mask[a] == 1
+Q[a] = -inf                     if action_mask[a] == 0
+
+a*     = argmax Q_online(s')          # legal only
+target = r + γ^n (1 - terminated) Q_target(s', a*)
+```
+
+`rollout_batch_size` is environment steps per Tune iteration. `train_batch_size` is the replay minibatch (typically 32–256). DQN uses a few env runners and a large replay; it does not copy PPO's 28-runner reference layout. n-step is 1 in smoke/dev and 3 in `configs/masked_dqn/reference.yaml`. Prioritized replay, C51, and recurrence are later.
+
+Compare PPO and DQN on held-out seeds at equal environment steps. Open exploration still has no victory condition.
+
+Sources: [`dqn/config.py`](../../engine/aresim/algorithms/dqn/config.py), [`dqn/train.py`](../../engine/aresim/algorithms/dqn/train.py), [`dqn/workflow.md`](../../engine/aresim/algorithms/dqn/workflow.md).
+
 ## How training trajectories are sampled
 
 ### Important terminology
@@ -242,7 +238,7 @@ The model consumes no `WorldState`, browser snapshot, remaining episode time, or
 | Episode fragment | A contiguous portion of an episode emitted for batching; it may end before the episode does |
 | Train batch | Fresh fragments combined until the learner has its configured number of environment transitions |
 | Minibatch | A smaller shuffled slice used for one optimizer pass |
-| Recorded trajectory | A validated evaluation artifact written by `TrajectoryWriter`; not PPO’s online replay memory |
+| Recorded trajectory | A validated evaluation artifact written by `TrajectoryWriter`; not the learner’s replay buffer |
 
 ### One environment interaction
 
@@ -328,17 +324,17 @@ Training EnvRunners draw only from the training list. Each worker/vector pair re
 
 | Setting | Value | Role |
 |---|---:|---|
-| Discount `gamma` | 0.99 | Weight of future rewards |
+| Discount `gamma` | 0.995 | Weight of future rewards |
 | GAE `lambda` | 0.95 | Bias/variance balance for advantages |
 | PPO clip | 0.2 | Bounds the policy probability-ratio update |
 | Value-loss coefficient | 0.5 | Weight of critic error |
-| Entropy coefficient | 0.01 | Encourages exploration among legal actions |
-| Learning rate | 0.0003 | Optimizer step size |
+| Entropy coefficient | 0.04 | Encourages exploration among legal actions |
+| Learning rate | 0.0001 | Optimizer step size |
 | Max gradient norm | 0.5 | Gradient clipping threshold |
-| KL target | 0.01 | Target for RLlib’s adaptive KL control |
+| KL target | 0.02 | Target for RLlib’s adaptive KL control |
 | Train batch | 4,096 transitions per learner | Fresh on-policy experience per update |
 | Minibatch | 256 transitions | Optimizer slice |
-| Update epochs | 10 | Reuses the current on-policy batch |
+| Update epochs | 2 | Reuses the current on-policy batch |
 | Episode limit | 1,200 transitions | External truncation, not task failure |
 
 The immutable experiment envelope lives in [`experiments.py`](../../engine/aresim/training/experiments.py); PPO hyperparameters in [`ppo/config.py`](../../engine/aresim/algorithms/ppo/config.py); RLlib training in [`ppo/train.py`](../../engine/aresim/algorithms/ppo/train.py).
@@ -352,15 +348,16 @@ PPO trains on `aresim.reward.shaped_train.v1`, not the engine/UI reward. Both ar
 | Mission success | +10 | Inactive for open exploration |
 | Terminal failure | -5 | Authoritative failure |
 | Objective progress | +2 | Inactive for open exploration |
-| New scan | +0.10 | Newly scanned terrain |
-| Delivered ice | +0.50 | Delivered mass divided by payload capacity |
-| Delivered samples | +0.20 | Delivered mass divided by payload capacity |
-| Build progress | +0.50 | Normalized build increase |
-| Service recovery | +0.25 | Infrastructure-health or dust recovery |
+| New scan | +0.20 | Newly scanned terrain |
+| Collected ice | +0.20 | Ice collected on Extract |
+| Delivered ice | +0.80 | Delivered mass divided by payload capacity |
+| Delivered samples | +0.12 | Delivered mass divided by payload capacity |
+| Build progress | +0.25 | Normalized build increase |
+| Service recovery | +0.15 | Infrastructure-health or dust recovery |
 | Health loss | -1.00 | Normalized rover-health loss |
 | Battery use | -0.05 | Normalized colony-battery decrease |
 | Invalid action | -0.10 | Canonical action resolved as invalid |
-| Nonterminal time cost | -0.001 | Each nonterminal transition |
+| Nonterminal time cost | -0.002 | Each nonterminal transition |
 
 Nonterminal shaped totals are clipped to `[-2, 2]`. Sparse evaluation retains only mission success, terminal failure, and invalid-action terms. Since mission success is unavailable, reports present it as unavailable rather than zero.
 
@@ -374,7 +371,7 @@ Logged values include:
 
 - shaped return, engine return, reward terms, episodes, and episode length;
 - action counts, invalid actions, mask violations, and rover/colony telemetry;
-- policy, value, and total losses;
+- policy, value, and total losses (PPO) or TD error and Q-value stats (DQN);
 - entropy, approximate KL, clip fraction, explained variance, learning rate, and gradient norm;
 - environment-step throughput when RLlib reports it;
 - frozen evaluation summary values.
@@ -398,7 +395,7 @@ flowchart LR
     Files --> Notebook
 ```
 
-`RLlibCheckpointAgent` consumes only observation and mask. Deterministic evaluation uses masked argmax; explicitly seeded stochastic evaluation is also supported. The shared rollout path preserves observations, masks, actions, selected and engine rewards, events, end flags, effective actions, and state checksums.
+`RLlibCheckpointAgent` consumes only observation and mask. Deterministic evaluation uses masked argmax; explicitly seeded stochastic evaluation is also supported. The shared rollout path preserves observations, masks, actions, selected and engine rewards, events, end flags, effective actions, and state checksums. After Tune, Ray shuts down and frozen eval fans the same 32 validation seeds plus both baselines across CPU workers. `record_trajectories: true` stays one process.
 
 ```bash
 engine/.venv/bin/aresim-rl evaluate results/<experiment>/<trial> \
@@ -413,7 +410,7 @@ Local run artifacts contain only reproducibility state that W&B metrics cannot r
 
 ## Baseline and evaluation trajectory recording
 
-To generate a complete recorded episode outside online PPO collection:
+To generate a complete recorded episode outside online collection:
 
 ```python
 from aresim.training import EpisodeSpec, RolloutConfig, RolloutRunner, TrajectoryWriter
@@ -449,7 +446,7 @@ A new algorithm should:
 6. add a real learner smoke test and deterministic checkpoint test;
 7. document whether its samples are on-policy, replay-buffer based, or sequence based.
 
-Do not add a framework selector, duplicate environment rules, or introduce an algorithm base class beyond the existing protocol. Future DQN must mask both action selection and target maximization. Recurrent policies must preserve sequence boundaries and reset hidden state. Multi-agent learning waits for real simultaneous multi-rover mechanics.
+Do not add a framework selector, duplicate environment rules, or introduce an algorithm base class beyond the existing protocol. Masked DQN already masks selection and target maximization. Recurrent policies must preserve sequence boundaries and reset hidden state. Multi-agent learning waits for real simultaneous multi-rover mechanics.
 
 ## Source map
 
@@ -457,7 +454,11 @@ Do not add a framework selector, duplicate environment rules, or introduce an al
 |---|---|
 | Experiment schema | [`engine/aresim/training/experiments.py`](../../engine/aresim/training/experiments.py) |
 | PPO hyperparameters and model arch | [`engine/aresim/algorithms/ppo/config.py`](../../engine/aresim/algorithms/ppo/config.py) |
-| PPO training (model, RLModule, RLlib, W&B metrics) | [`engine/aresim/algorithms/ppo/train.py`](../../engine/aresim/algorithms/ppo/train.py) |
+| PPO training (RLModule, RLlib/Tune, W&B metrics) | [`engine/aresim/algorithms/ppo/train.py`](../../engine/aresim/algorithms/ppo/train.py) |
+| Shared local encoder | [`engine/aresim/algorithms/common/encoder.py`](../../engine/aresim/algorithms/common/encoder.py) |
+| DQN hyperparameters | [`engine/aresim/algorithms/dqn/config.py`](../../engine/aresim/algorithms/dqn/config.py) |
+| DQN training (Q-network, RLModule, factory) | [`engine/aresim/algorithms/dqn/train.py`](../../engine/aresim/algorithms/dqn/train.py) |
+| DQN checkpoint loader | [`engine/aresim/algorithms/dqn/checkpoint.py`](../../engine/aresim/algorithms/dqn/checkpoint.py) |
 | Checkpoint-backed agent | [`engine/aresim/algorithms/ppo/checkpoint.py`](../../engine/aresim/algorithms/ppo/checkpoint.py) |
 | Algorithm/model registration | [`engine/aresim/algorithms/registry.py`](../../engine/aresim/algorithms/registry.py) |
 | Fixed-seed evaluation | [`engine/aresim/training/evaluation.py`](../../engine/aresim/training/evaluation.py) |
@@ -474,4 +475,6 @@ Do not add a framework selector, duplicate environment rules, or introduce an al
 - Ray, [RLlib key concepts](https://docs.ray.io/en/latest/rllib/key-concepts.html).
 - Ray, [RLModule documentation](https://docs.ray.io/en/latest/rllib/rl-modules.html).
 - Ray, [RLlib scaling guide](https://docs.ray.io/en/latest/rllib/scaling-guide.html).
+- [Rainbow: Combining Improvements in Deep Reinforcement Learning](https://ojs.aaai.org/index.php/AAAI/article/view/11796)
+- [Human-level control through deep reinforcement learning](https://www.nature.com/articles/nature14236)
 - AresSim, [RL Usage Guide](usage.md) and [Algorithm Literature Survey](algorithm_literature_survey.md).

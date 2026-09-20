@@ -2,14 +2,14 @@
 
 Heavy optional dependencies load only for the subcommand that needs them.
 
-**Last updated:** September 1, 2026
+**Last updated:** September 12, 2026
 
-**Commands:** ``train``, ``evaluate``, ``report``, ``inspect``.
+**Commands:** ``train``, ``evaluate``, ``report``, ``inspect``, ``rollout``.
 
 **Entry point:** ``aresim-rl`` (console script).
 
 **See also:** :mod:`aresim.training.experiments`, :mod:`aresim.algorithms.ppo.train`,
-:mod:`aresim.training.evaluation`.
+:mod:`aresim.algorithms.dqn.train`, :mod:`aresim.training.evaluation`.
 """
 
 from __future__ import annotations
@@ -26,6 +26,12 @@ def _parser() -> argparse.ArgumentParser:
     train = commands.add_parser("train", help="run a validated experiment YAML")
     train.add_argument("config", type=Path)
     train.add_argument("--set", dest="overrides", action="append", default=[], metavar="PATH=VALUE")
+    train.add_argument(
+        "--resume-from",
+        dest="resume_from",
+        default=None,
+        help="continue a prior run from its Ray state or checkpoints/<label>/checkpoint.json",
+    )
     evaluate = commands.add_parser("evaluate", help="evaluate a frozen checkpoint on fixed seeds")
     evaluate.add_argument("run", type=Path)
     evaluate.add_argument("--checkpoint", required=True)
@@ -33,6 +39,8 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("report", help="generate W&B metric plots under <run>/reports/").add_argument("run", type=Path)
     inspect = commands.add_parser("inspect", help="print a run manifest or checkpoint sidecar")
     inspect.add_argument("path", type=Path)
+    rollout = commands.add_parser("rollout", help="run a Jev agent from rollout YAML")
+    rollout.add_argument("config", type=Path)
     return parser
 
 
@@ -54,7 +62,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         from ..algorithms.ppo.train import run_experiment
 
         spec = load_experiment_with_overrides(arguments.config, tuple(arguments.overrides))
-        print(run_experiment(spec))
+        print(run_experiment(spec, resume_from=arguments.resume_from))
         return 0
     if arguments.command == "evaluate":
         from .evaluation import evaluate_checkpoint
@@ -67,6 +75,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .reports import generate_report
 
         print(generate_report(arguments.run))
+        return 0
+    if arguments.command == "rollout":
+        from ..algorithms.jev.rollout import load_jev_rollout, run_jev_rollout
+
+        result = run_jev_rollout(load_jev_rollout(arguments.config))
+        for summary in result.summaries:
+            print(summary.episode_id, summary.length, summary.episode_return)
         return 0
     path = arguments.path
     if path.is_dir():

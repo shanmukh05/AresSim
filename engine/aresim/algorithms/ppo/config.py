@@ -4,7 +4,7 @@ Immutable dataclasses for PPO hyperparameters and the local CNN actor-critic
 architecture. Safe to import without Ray or PyTorch; used by experiment YAML
 decoding and RLlib module construction.
 
-**Last updated:** September 5, 2026
+**Last updated:** September 11, 2026
 
 **Contains:** ``MaskedPPOConfig``, ``ModelConfig``, :func:`decode_config`.
 
@@ -36,15 +36,15 @@ class MaskedPPOConfig:
     total_environment_steps: int = 4096
     rollout_batch_size: int = 4096
     minibatch_size: int = 256
-    update_epochs: int = 10
-    gamma: float = 0.99
+    update_epochs: int = 2
+    gamma: float = 0.995
     gae_lambda: float = 0.95
     clip_param: float = 0.2
     value_loss_coefficient: float = 0.5
-    entropy_coefficient: float = 0.01
-    learning_rate: float = 0.0003
+    entropy_coefficient: float = 0.06
+    learning_rate: float = 0.0001
     max_gradient_norm: float = 0.5
-    target_kl: float = 0.01
+    target_kl: float = 0.02
 
     def validate(self) -> None:
         """Raise ``ValueError`` when any hyperparameter is outside allowed ranges."""

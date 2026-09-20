@@ -1,8 +1,8 @@
 # AresSim Agent Data, RL, and LLM Architecture Proposal
 
-Last updated: 2026-08-25
+Last updated: 2026-09-12
 
-Status: The framework-neutral environments, baselines, truncation, deterministic rollouts, unified trajectories, fixed seed splits, RLlib masked PPO pipeline, checkpoint evaluation, canonical metrics, and reports are implemented. Goal-bearing tasks, DQN/recurrent policies, advanced representation learning, and multiple rovers remain proposed. Existing simulation semantics remain governed by [Environment Rules Reference](../product/environment_rules.md), trajectory usage by [RL Usage Guide](usage.md), and learned-policy implementation by [RL Algorithms, Training, and Evaluation](rl_quickstart.md).
+Status: The framework-neutral environments, baselines, truncation, deterministic rollouts, unified trajectories, fixed seed splits, RLlib masked PPO, mask-aware DQN, checkpoint evaluation, canonical metrics, and reports are implemented. Goal-bearing tasks, recurrent policies, advanced representation learning, and multiple rovers remain proposed. Existing simulation semantics remain governed by [Environment Rules Reference](../product/environment_rules.md), trajectory usage by [RL Usage Guide](usage.md), and learned-policy implementation by [RL Algorithms, Training, and Evaluation](rl_quickstart.md).
 
 > New to RL or implementing an agent? Start with [RL Algorithms, Training, and Evaluation](rl_quickstart.md). It explains the active contracts, implemented policies, online sampling, learner updates, and evaluation workflow.
 
@@ -38,7 +38,7 @@ The recommended first implementation is:
 4. Configurable training and evaluation reward profiles built from the same named reward terms.
 5. PettingZoo Parallel as the canonical multi-agent RL API from the first one-rover adapter, preserving the same dictionary contract when multiple rovers arrive.
 6. A thin `AresGymEnv` for exactly one rover, unwrapping PettingZoo-shaped results into Gymnasium's scalar API without becoming another source of behavior.
-7. RLlib as the single supported learned-policy framework. Masked PPO is the reference; DQN, recurrence, JEPA, world models, and hybrids use explicit RLlib module/learner extensions when implemented.
+7. RLlib as the single supported learned-policy framework. Masked PPO is the on-policy reference; mask-aware DQN is the off-policy comparison. Recurrence, JEPA, world models, and hybrids use explicit RLlib module/learner extensions when implemented.
 8. LLMs first as low-frequency mission planners that issue structured subgoals to an RL or deterministic executor—not as unvalidated, per-tick simulator controllers.
 9. RLlib-owned online collection/training through EnvRunners and learners, with AresSim-owned configuration, evaluation, metrics, artifacts, and optional unified trajectory persistence.
 
@@ -691,15 +691,17 @@ Recommended initial values, to be tuned only on training/validation scenarios:
 | `mission_success` | `1` on successful terminal step | `+10.0` |
 | `terminal_failure` | `1` on failed terminal step | `-5.0` |
 | `objective_progress` | Increase in normalized required-objective progress | `+2.0` |
-| `new_scan` | `1` for first valid scan of a required site | `+0.10` |
-| `ice_delivered` | Delivered ice / task target | `+0.50` |
-| `samples_delivered` | Delivered geological sample mass / task target | `+0.20` |
-| `build_progress` | Positive normalized build delta | `+0.50` |
-| `service_recovery` | Normalized restored service/health | `+0.25` |
+| `new_scan` | `1` for first valid scan of a required site | `+0.20` |
+| `ice_collected` | `1` when ice is collected on Extract | `+0.10` |
+| `ice_delivered` | Delivered ice / task target | `+1.0` |
+| `samples_delivered` | Delivered geological sample mass / task target | `+0.60` |
+| `build_progress` | Positive normalized build delta | `+0.15` |
+| `service_recovery` | Normalized restored service/health | `+0.10` |
+| `undelivered_cargo` | Remaining ice+sample cargo at episode end / capacity | `-0.50` |
 | `hazard_damage` | Normalized health loss caused this step | `-1.0` |
 | `energy_used` | Battery used / capacity | `-0.05` |
 | `invalid_action` | `1` for rejected command | `-0.10` |
-| `time_cost` | `1` per nonterminal step | `-0.001` |
+| `time_cost` | `1` per nonterminal step | `-0.002` |
 
 Clip only the final nonterminal shaped reward to `[-2, 2]`; do not clip terminal success/failure. Log the unclipped value. Reward normalization may be applied by a learner wrapper, but the stored environment reward stays canonical.
 
@@ -794,7 +796,7 @@ The runner has two output modes independent of the selected framework:
 |---|---|
 | RLlib PPO | EnvRunners collect episode fragments with the current action-masked RLModule; learners update the module and synchronized collection continues. Persistent recording is optional. |
 | RLlib PPO | EnvRunners collect episodes; learners calculate advantages/losses and update policy/value modules. Persistent recording is optional. |
-| Future mask-aware RLlib DQN | Store current/next masks and exclude illegal actions from selection and target calculation. |
+| Mask-aware RLlib DQN | EnvRunners write `EpisodeReplayBuffer`; illegal Q is `-inf` so selection, epsilon-greedy, and Double-DQN targets exclude them. |
 | Recurrent RLlib policy | Preserve temporal order, episode-start markers, and recurrent state. Sequence chunks and burn-in windows must never cross an episode boundary. |
 | Behavior cloning and offline RL | Train from recorded episodes produced by random-valid, scripted, human, LLM, or checkpoint policies. Dataset manifests identify every policy source. |
 | JEPA | Sample ordered observation/action windows from recorded episodes. The collector is unchanged; only the dataset sampler and JEPA loss are new. |
@@ -808,7 +810,7 @@ A practical first target is one local EnvRunner/learner. Batches may contain par
 
 Training, validation, and test use separate saved seed lists. Training workers may cycle or sample only from the training list. Evaluation uses frozen checkpoints with learning disabled and records complete episodes. External time-limit transitions retain `truncated=True` and permit bootstrapping; mission completion/failure uses `terminated=True` and does not.
 
-The Python package now provides the shared environments, numerical actor inputs, external truncation, registered baseline agents, deterministic complete-episode rollouts, and optional `aresim.trajectory.v1` JSONL shards. It does not yet provide RLlib integration, metric bridges, formal train/validation/test scenario manifests, aggregate evaluation, or online rollout/replay training. The old TypeScript simulator is retained only for test fixtures and historical parity, not as a production authority.
+The Python package provides the shared environments, numerical actor inputs, external truncation, registered baseline agents, deterministic complete-episode rollouts, optional `aresim.trajectory.v1` JSONL shards, RLlib masked PPO and mask-aware DQN, metric bridges, fixed seed manifests, and aggregate evaluation. The old TypeScript simulator is retained only for test fixtures and historical parity, not as a production authority.
 
 ### 9.3 Transition alignment
 
@@ -877,7 +879,7 @@ Every learned policy must beat random-valid and be compared with the scripted ba
 |---:|---|---|---|
 | P0 | RLlib PPO with action-masking RLModule | Local `8 x 8` + `Discrete(10)` | Scalable reference baseline and distributed collection path |
 | P0 | RLlib PPO with masked categorical policy | Same local input, action space, and seed manifests | Explicit collector/advantage/loss loop and cross-adapter parity |
-| P1 | Mask-aware RLlib DQN | Local `8 x 8` + `Discrete(10)` | Off-policy sample efficiency and correct masking in selection/targets |
+| P1 | Mask-aware RLlib DQN | Local `8 x 8` + `Discrete(10)` | Implemented: off-policy sample efficiency and correct masking in selection/targets |
 | P1 | Recurrent RLlib policy | Local `8 x 8` + mask metadata | Explicit memory and sequence handling under partial observability |
 | P1 | PPO partial-map | Discovered global map + mask | Exploration without recurrent-memory dependence |
 | P1 | Behavior cloning | Scripted/human trajectories | Demonstration pipeline and policy warm-start |
@@ -897,9 +899,9 @@ Every learned policy must beat random-valid and be compared with the scripted ba
 - **World models before deterministic baselines:** model error makes basic simulator/reward bugs harder to isolate.
 - **LLM-only per-tick control as the default:** it is slow, costly, nondeterministic, and weak at long repetitive navigation.
 
-RLlib supports custom RLModules and learner extensions. PPO masks logits during exploration, inference, and training. Future DQN masks selection and target values; recurrence applies masks per sequence step and resets memory at episode boundaries. Manifests pin exact installed versions.
+RLlib supports custom RLModules and learner extensions. PPO masks logits during exploration, inference, and training. Masked DQN masks selection and target values; recurrence applies masks per sequence step and resets memory at episode boundaries. Manifests pin exact installed versions.
 
-Folder names follow algorithm meaning. Later `dqn/` and `recurrent_ppo/` implementations use RLlib extensions. JEPA, world models, reusable encoders, and hybrids use PyTorch components hosted by RLlib without replacing authoritative state or reward logic.
+Folder names follow algorithm meaning. `dqn/` is implemented. Later `recurrent_ppo/` implementations use RLlib extensions. JEPA, world models, reusable encoders, and hybrids use PyTorch components hosted by RLlib without replacing authoritative state or reward logic.
 
 ### 10.4 Model architecture for the hybrid observation
 
@@ -931,7 +933,7 @@ Run these in order:
 5. RLlib recurrent policy versus feed-forward local PPO.
 6. Behavior-cloning warm-start versus training from scratch.
 7. Scenario randomization and held-out seed/generalization evaluation.
-8. Only then add RLlib-first DQN, world-model, and offline algorithms.
+8. Only then add RLlib-first world-model and offline algorithms.
 9. After multi-rover mechanics exist: IPPO, MAPPO, and QMIX on matched scenarios.
 
 ## 11. Curriculum and scenario design
@@ -1017,15 +1019,17 @@ For every algorithm/configuration:
 
 ## 13. How to use LLMs
 
-### 13.1 Recommended role: strategic planner
+### 13.1 Implemented first: Jev per-tick Choice, recommended later: planner
 
-The best initial hybrid is:
+The first implemented LLM-class rover is Jev as a **per-tick masked Choice** over `aresim.action.rover.v1`. Encoding, attach, and fallbacks are documented in the [Jev workflow](../../engine/aresim/algorithms/jev/workflow.md). The 5x5 named-cell encoder is the `aresim.llm.ops.v1` slice used at inference.
+
+The stronger long-horizon hybrid remains:
 
 ```text
 LLM mission planner (every 10–50 steps or on important event)
        |
        v
-structured subgoal: navigate / scan / collect / build / service / conserve
+  structured subgoal: navigate / scan / collect / build / service / conserve
        |
        v
 RL or deterministic executor (every environment step)
@@ -1300,7 +1304,7 @@ Exit criterion: direct/Gymnasium/PettingZoo transitions agree; live/restored mod
 ### Phase D — RLlib research algorithms, memory, and representation learning
 
 - Add the optional discovered partial-map profile derived only from observation history.
-- Add mask-aware RLlib DQN, covering both action selection and next-state target masks.
+- Mask-aware RLlib DQN is implemented (selection and next-state target masks).
 - Add a recurrent RLlib policy with explicit mask, sequence, and state-reset tests.
 - Add RLlib/PyTorch JEPA training over transition windows and save a reusable encoder artifact.
 - Add behavior cloning and one offline RL baseline.
@@ -1347,7 +1351,7 @@ Ray Tune owns RLlib trial lifecycle. JAX and remote training/inference services 
 - RLlib EnvRunners use independent deterministic seeds and preserve episode/agent identities.
 - PPO sampled-step counts agree with each framework's resolved configuration; DQN entries contain both current and next masks; recurrent and representation-learning windows never cross episode boundaries.
 - Saved manifests reconstruct component names, revisions, signature hashes, resolved configuration, and seed sets.
-- RLlib PPO completes a focused one-rover smoke test and masks logits in exploration, inference, and training; future DQN masks selection and targets.
+- RLlib PPO completes a focused one-rover smoke test and masks logits in exploration, inference, and training; masked DQN masks selection and targets.
 - Recurrent PPO tests explicitly record whether masks are supported.
 - JEPA windows/encoder artifacts and world-model inputs/outputs match declared signatures.
 - Fake-provider LLM and hybrid tests cover malformed output, timeout, staleness, fallback, and canonical validation.
@@ -1391,7 +1395,7 @@ Treat these as benchmark gates to measure and revise, not correctness requiremen
 | Spatial storage | Mixed typed arrays | Packed float tensor only inside model preprocessing |
 | Variable entities | None in the Phase 1 actor input | Add versioned padded tables or graph/set encoders only when multi-rover or independent entities exist |
 | First RL action | Fixed masked `Discrete(10)` with current-cell operations | Add a versioned targeted adapter only when ranged/entity mechanics exist |
-| First learned agent | Masked PPO in RLlib | Mask-aware RLlib DQN as a later off-policy comparison |
+| First learned agent | Masked PPO in RLlib | Mask-aware RLlib DQN as the implemented off-policy comparison |
 | Partial-observation agent | Recurrent PPO | Transformer/state-space memory after baseline |
 | Continuous algorithm | None initially | SAC only after continuous controls exist |
 | Multi-agent API | PettingZoo Parallel from the first one-rover adapter | Multiple rover mechanics remain deferred, not the API |
@@ -1412,7 +1416,7 @@ The next end-to-end RL slice should reuse the implemented deterministic integrat
 - `aresim.trajectory.v1` output on every evaluation run
 - canonical W&B metrics and a reproducible Jupyter evaluation report
 
-Once this slice is reproducible, add mask-aware DQN, discovered-map memory, recurrent control, and behavior cloning. Add the LLM planner after subgoals and visibility-safe tools are deterministic. Add multiple rovers and MARL only when simultaneous conflict rules exist.
+Once this slice is reproducible, mask-aware DQN is the implemented off-policy comparison. Next: discovered-map memory, recurrent control, and behavior cloning. Add the LLM planner after subgoals and visibility-safe tools are deterministic. Add multiple rovers and MARL only when simultaneous conflict rules exist.
 
 This order gives AresSim a stable scientific core: algorithms can change, local observations can gain explicit memory, and LLMs can be added without allowing any of them to redefine the world, rewards, or replay semantics.
 

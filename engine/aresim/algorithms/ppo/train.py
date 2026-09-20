@@ -5,7 +5,7 @@ and end-to-end experiment execution for the built-in ``masked_ppo`` algorithm.
 Simulator semantics remain owned by :mod:`aresim.core` and :mod:`aresim.components`;
 RLlib and PyTorch are implementation details inside this module.
 
-**Last updated:** September 1, 2026
+**Last updated:** September 12, 2026
 
 **Contains:**
 
@@ -58,6 +58,8 @@ from ...defaults import DEFAULT_ENVIRONMENT_CONFIG
 from ...factory import make_env, make_gym_env
 from ...training.experiments import ExperimentSpec
 from ...training.seeds import load_seed_manifest, resolve_checkout_file
+from ..common.encoder import LocalObservationEncoder, mask_illegal_actions
+from ..common.resume import ResolvedResume, resolve_resume_target
 from ..common.tracking import load_wandb_run_id, new_wandb_run_id, resolve_wandb_run_id
 from ..registry import TrainingContext, TrainingRegistry, create_training_registry
 from .checkpoint import write_checkpoint_sidecar
@@ -88,66 +90,21 @@ class LocalMaskedActorCritic(nn.Module):
             raise ValueError("local actor-critic requires a positive crop and Discrete(10)")
         self.config = config
         self.action_count = action_count
-        self.terrain_embedding = nn.Embedding(8, config.terrain_embedding)
-        in_channels = config.terrain_embedding + 5 + 4
-        self.spatial = nn.Sequential(
-            nn.Conv2d(in_channels, config.conv_channels[0], 3, padding=1), nn.Tanh(),
-            nn.Conv2d(config.conv_channels[0], config.conv_channels[1], 3, padding=1), nn.Tanh(), nn.Flatten(),
-        )
-        spatial_width = config.conv_channels[1] * window_size * window_size
-        self.pad_embedding = nn.Embedding(3, 4)
-        self.weather_embedding = nn.Embedding(6, 4)
-        self.objective_embedding = nn.Embedding(9, config.objective_embedding)
-        self.objective_encoder = nn.Sequential(nn.Linear(config.objective_embedding + 4, 32), nn.Tanh())
-        telemetry_width = 10 + 14 + 4 + 4 + 32
-        self.telemetry = nn.Sequential(
-            nn.Linear(telemetry_width, config.telemetry_layers[0]), nn.Tanh(),
-            nn.Linear(config.telemetry_layers[0], config.telemetry_layers[1]), nn.Tanh(),
-        )
-        self.fusion = nn.Sequential(nn.Linear(spatial_width + config.telemetry_layers[1], config.fused_width), nn.Tanh())
+        self.encoder = LocalObservationEncoder(config, window_size)
         self.policy = nn.Linear(config.fused_width, action_count)
         self.value = nn.Linear(config.fused_width, 1)
-        self.apply(self._initialize)
         nn.init.orthogonal_(self.policy.weight, gain=0.01)
         nn.init.orthogonal_(self.value.weight, gain=1.0)
-
-    @staticmethod
-    def _initialize(module: nn.Module) -> None:
-        if isinstance(module, (nn.Linear, nn.Conv2d)):
-            nn.init.orthogonal_(module.weight, gain=2 ** 0.5)
-            if module.bias is not None:
-                nn.init.zeros_(module.bias)
-
-    @staticmethod
-    def _as_batch(value: Tensor, dimensions: int) -> Tensor:
-        return value.unsqueeze(0) if value.ndim == dimensions - 1 else value
+        nn.init.zeros_(self.policy.bias)
+        nn.init.zeros_(self.value.bias)
 
     def forward(self, observation: Mapping[str, Tensor], action_mask: Tensor) -> tuple[Tensor, Tensor]:
         """Return finite masked action logits and one value per batch row."""
-        terrain = self._as_batch(observation["terrain_type"].long(), 3)
-        spatial = self._as_batch(observation["spatial"].float(), 4)
-        flags = self._as_batch(observation["cell_flags"].float(), 4)
-        terrain_features = self.terrain_embedding(terrain).permute(0, 3, 1, 2)
-        spatial_features = self.spatial(torch.cat((terrain_features, spatial, flags), dim=1))
-
-        self_vector = self._as_batch(observation["self"].float(), 2)
-        colony = self._as_batch(observation["colony"].float(), 2)
-        pad = observation["pad_proximity"].long().reshape(-1)
-        weather = observation["weather_type"].long().reshape(-1)
-        objective_type = self._as_batch(observation["objective_type"].long(), 2)
-        objectives = self._as_batch(observation["objectives"].float(), 3)
-        objective_mask = self._as_batch(observation["objective_mask"].float(), 2).unsqueeze(-1)
-        rows = self.objective_encoder(torch.cat((self.objective_embedding(objective_type), objectives), dim=-1))
-        objective_features = (rows * objective_mask).sum(dim=1) / objective_mask.sum(dim=1).clamp(min=1.0)
-        telemetry = self.telemetry(torch.cat((self_vector, colony, self.pad_embedding(pad), self.weather_embedding(weather), objective_features), dim=-1))
-        fused = self.fusion(torch.cat((spatial_features, telemetry), dim=-1))
-        logits = self.policy(fused)
-        mask = self._as_batch(action_mask, 2).bool()
-        if mask.shape != logits.shape or not torch.all(mask.any(dim=-1)):
-            raise ValueError("action mask shape is invalid or contains no legal action")
-        logits = logits.masked_fill(~mask, torch.finfo(logits.dtype).min)
+        fused = self.encoder(observation)
+        logits = mask_illegal_actions(self.policy(fused), action_mask)
         values = self.value(fused).squeeze(-1)
-        if not torch.isfinite(logits[mask]).all() or not torch.isfinite(values).all():
+        legal = action_mask.unsqueeze(0).bool() if action_mask.ndim == 1 else action_mask.bool()
+        if not torch.isfinite(logits[legal]).all() or not torch.isfinite(values).all():
             raise ValueError("actor-critic produced non-finite outputs")
         return logits, values
 
@@ -223,7 +180,7 @@ def canonicalize_rllib_metrics(result: Mapping[str, object]) -> dict[str, float]
         "train/episode_length": (("env_runners", "episode_len_mean"), ("episode_len_mean",)),
         "train/shaped_return": (("env_runners", "episode_return_mean"), ("episode_reward_mean",)),
         "system/environment_steps_per_second": (("env_runners", "num_env_steps_sampled_per_second"),),
-        "learner/total_loss": (("learners", "default_policy", "total_loss"),),
+        "learner/total_loss": (("learners", "default_policy", "total_loss"), ("learners", "default_policy", "qf_loss")),
         "learner/policy_loss": (("learners", "default_policy", "policy_loss"),),
         "learner/value_loss": (("learners", "default_policy", "vf_loss"),),
         "learner/entropy": (("learners", "default_policy", "entropy"),),
@@ -232,6 +189,10 @@ def canonicalize_rllib_metrics(result: Mapping[str, object]) -> dict[str, float]
         "learner/learning_rate": (("learners", "default_policy", "default_optimizer_learning_rate"),),
         "learner/gradient_norm": (("learners", "default_policy", "gradients_default_optimizer_global_norm"),),
         "learner/explained_variance": (("learners", "default_policy", "vf_explained_var"),),
+        "learner/td_error": (("learners", "default_policy", "td_error_mean"),),
+        "learner/q_mean": (("learners", "default_policy", "qf_mean"),),
+        "learner/q_max": (("learners", "default_policy", "qf_max"),),
+        "learner/q_min": (("learners", "default_policy", "qf_min"),),
     }
     metrics = {
         name: value
@@ -659,38 +620,130 @@ def _resolve_training(spec: ExperimentSpec, registry: TrainingRegistry | None, c
     return schemas, selected, algorithm, algorithm.build(TrainingContext(spec, model, component_registry))
 
 
-def _prepare_run(spec: ExperimentSpec) -> Path:
+def _run_config(
+    spec: ExperimentSpec,
+    run_directory: Path,
+    algorithm,
+    schemas: Mapping[str, str],
+    *,
+    target_iterations: int,
+) -> tune.RunConfig:
+    batch = spec.algorithm_config.rollout_batch_size
+    return tune.RunConfig(
+        name="ray",
+        storage_path=str(run_directory),
+        stop={"training_iteration": target_iterations},
+        callbacks=_training_callbacks(spec, run_directory, algorithm, schemas),
+        checkpoint_config=tune.CheckpointConfig(
+            checkpoint_frequency=max(1, spec.checkpoint.interval_environment_steps // batch),
+            checkpoint_at_end=True,
+            num_to_keep=spec.checkpoint.keep,
+        ),
+    )
+
+
+def _target_iterations(spec: ExperimentSpec) -> int:
+    batch = spec.algorithm_config.rollout_batch_size
+    return max(1, spec.algorithm_config.total_environment_steps // batch)
+
+
+class _TuneTrialResult:
+    """Minimal adapter so checkpoint export works after ``tune.run`` resume."""
+
+    def __init__(self, trial) -> None:
+        self.checkpoint = trial.checkpoint
+        self.path = trial.path
+        self.metrics = trial.last_result or {}
+
+
+def _fit_from_native_checkpoint(
+    spec: ExperimentSpec,
+    algorithm,
+    config,
+    run_directory: Path,
+    schemas: Mapping[str, str],
+    native_checkpoint: Path,
+) -> _TuneTrialResult:
+    analysis = tune.run(
+        algorithm.trainable,
+        config=config.to_dict(),
+        storage_path=str(run_directory),
+        name="ray",
+        stop={"training_iteration": _target_iterations(spec)},
+        restore=str(native_checkpoint.resolve()),
+        checkpoint_config=tune.CheckpointConfig(
+            checkpoint_frequency=max(1, spec.checkpoint.interval_environment_steps // spec.algorithm_config.rollout_batch_size),
+            checkpoint_at_end=True,
+            num_to_keep=spec.checkpoint.keep,
+        ),
+        callbacks=_training_callbacks(spec, run_directory, algorithm, schemas),
+        resume=False,
+    )
+    if not analysis.trials:
+        raise RuntimeError("Ray Tune resume trial did not start")
+    trial = analysis.trials[0]
+    if trial.status != "TERMINATED" or trial.error_file:
+        raise RuntimeError(f"Ray Tune resume trial failed: {trial.error_file}")
+    return _TuneTrialResult(trial)
+
+
+def _prepare_run(spec: ExperimentSpec, resume: ResolvedResume | None = None) -> Path:
     run_directory = Path(spec.artifacts.root).resolve() / spec.experiment_id / spec.trial_id
-    if run_directory.exists() and spec.artifacts.reject_existing:
+    if resume is not None:
+        if resume.run_directory != run_directory:
+            raise ValueError("resume target run directory does not match experiment_id/trial_id")
+        if not run_directory.is_dir():
+            raise FileNotFoundError(f"resume run directory does not exist: {run_directory}")
+    elif run_directory.exists() and spec.artifacts.reject_existing:
         raise FileExistsError(f"run already exists: {run_directory}")
-    run_directory.mkdir(parents=True, exist_ok=True)
+    else:
+        run_directory.mkdir(parents=True, exist_ok=True)
     import yaml
 
     (run_directory / "resolved_config.yaml").write_text(yaml.safe_dump(spec.as_dict(), sort_keys=True), encoding="utf-8")
-    _write_run_manifest(run_directory, spec, "running", wandb_run_id=new_wandb_run_id())
+    wandb_run_id = None if resume is not None else new_wandb_run_id()
+    _write_run_manifest(run_directory, spec, "running", wandb_run_id=wandb_run_id)
     _write_status(run_directory, "running")
     return run_directory
 
 
-def _fit(spec: ExperimentSpec, algorithm, config, run_directory: Path, schemas: Mapping[str, str]):
-    batch = spec.algorithm_config.rollout_batch_size
-    iterations = max(1, spec.algorithm_config.total_environment_steps // batch)
-    tuner = tune.Tuner(
-        algorithm.trainable,
-        param_space=config.to_dict(),
-        run_config=tune.RunConfig(
-            name="ray",
-            storage_path=str(run_directory),
-            stop={"training_iteration": iterations},
-            callbacks=_training_callbacks(spec, run_directory, algorithm, schemas),
-            checkpoint_config=tune.CheckpointConfig(
-                checkpoint_frequency=max(1, spec.checkpoint.interval_environment_steps // batch),
-                checkpoint_at_end=True,
-                num_to_keep=spec.checkpoint.keep,
+def _fit(
+    spec: ExperimentSpec,
+    algorithm,
+    config,
+    run_directory: Path,
+    schemas: Mapping[str, str],
+    resume: ResolvedResume | None = None,
+):
+    target_iterations = _target_iterations(spec)
+    ray_directory = run_directory / "ray"
+    if resume is not None and resume.explicit_checkpoint and resume.native_checkpoint is not None:
+        return _fit_from_native_checkpoint(spec, algorithm, config, run_directory, schemas, resume.native_checkpoint)
+    if resume is not None and tune.Tuner.can_restore(str(ray_directory)):
+        from ray.tune.tune_config import ResumeConfig
+
+        tuner = tune.Tuner.restore(
+            str(ray_directory),
+            trainable=algorithm.trainable,
+            param_space=config.to_dict(),
+            resume_unfinished=True,
+            _resume_config=ResumeConfig(
+                finished=ResumeConfig.ResumeType.RESUME,
+                unfinished=ResumeConfig.ResumeType.RESUME,
             ),
-        ),
-    )
-    grid = tuner.fit()
+        )
+        internal = tuner._local_tuner
+        internal._run_config = _run_config(spec, run_directory, algorithm, schemas, target_iterations=target_iterations)
+        grid = tuner.fit()
+    elif resume is not None:
+        raise ValueError("cannot resume: no Ray experiment state or checkpoint found for the requested run")
+    else:
+        tuner = tune.Tuner(
+            algorithm.trainable,
+            param_space=config.to_dict(),
+            run_config=_run_config(spec, run_directory, algorithm, schemas, target_iterations=target_iterations),
+        )
+        grid = tuner.fit()
     if grid.errors:
         raise RuntimeError(f"Ray Tune trial failed: {grid.errors[0]}")
     return grid[0]
@@ -700,6 +753,13 @@ def _save_checkpoint(run_directory: Path, result, spec: ExperimentSpec, algorith
     if result.checkpoint is None:
         return None
     return _export_checkpoint(run_directory, result.checkpoint, "final", spec, algorithm, schemas)
+
+
+def _shutdown_ray() -> None:
+    import ray
+
+    if ray.is_initialized():
+        ray.shutdown()
 
 
 def _finish_run(spec: ExperimentSpec, run_directory: Path, checkpoint: Path | None, registry, component_registry, *, evaluate: bool, report: bool) -> None:
@@ -727,13 +787,18 @@ def run_experiment(
     evaluate: bool = True,
     report: bool = True,
     component_registry=None,
+    resume_from: str | Path | None = None,
 ) -> Path:
     """Run one validated Ray Tune trial and publish an immutable run manifest.
 
     Accepts a resolved :class:`~aresim.training.experiments.ExperimentSpec` or a
     path to experiment YAML. Writes ``resolved_config.yaml``, ``manifest.json``,
     and ``status.json`` under the artifact root. Optionally runs post-training
-    evaluation and W&B-backed reporting. Always shuts down Ray in ``finally``.
+    evaluation and W&B-backed reporting. Shuts down Ray after Tune so frozen
+    evaluation can use the CPUs, and again in ``finally``.
+
+    Pass ``resume_from`` (or ``artifacts.resume_from`` in YAML) to continue a
+    prior run from its Ray experiment state or an exported ``checkpoints/*`` sidecar.
 
     Returns the run directory path on success; leaves a failed manifest on error.
     """
@@ -745,24 +810,27 @@ def run_experiment(
     else:
         resolved = spec
     resolved.validate()
+    resume_target = (
+        resolve_resume_target(resume_from or resolved.artifacts.resume_from, resolved)
+        if (resume_from or resolved.artifacts.resume_from)
+        else None
+    )
     schemas, selected, algorithm, config = _resolve_training(resolved, selected, component_registry)
-    run_directory = _prepare_run(resolved)
+    run_directory = _prepare_run(resolved, resume_target)
     try:
         _authenticate_tracking(resolved)
-        result = _fit(resolved, algorithm, config, run_directory, schemas)
+        result = _fit(resolved, algorithm, config, run_directory, schemas, resume_target)
         checkpoint = _save_checkpoint(run_directory, result, resolved, algorithm, schemas)
+        _shutdown_ray()
         _finish_run(resolved, run_directory, checkpoint, selected, component_registry, evaluate=evaluate, report=report)
-        _write_run_manifest(run_directory, resolved, "completed", str(result.path))
+        _write_run_manifest(run_directory, resolved, "completed", str(getattr(result, "path", run_directory)))
         _write_status(run_directory, "completed")
     except Exception as error:
         _write_run_manifest(run_directory, resolved, "failed")
         _write_status(run_directory, "failed", f"{type(error).__name__}: {error}")
         raise
     finally:
-        import ray
-
-        if ray.is_initialized():
-            ray.shutdown()
+        _shutdown_ray()
     return run_directory
 
 

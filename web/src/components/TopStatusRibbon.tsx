@@ -8,11 +8,12 @@ import type { ReactNode } from "react";
 import { useAresStore } from "../state/useAresStore";
 import { formatFixed, formatSignedFixed } from "../lib/format";
 import { payloadUsedKg } from "../lib/payload";
+import { getPowerMargin } from "../lib/power";
 
 export function TopStatusRibbon({ onOpenGuide, onOpenHistory, onOpenMission }: { onOpenGuide: () => void; onOpenHistory: () => void; onOpenMission: () => void }) {
   const snapshot = useAresStore((state) => state.snapshot)!;
   const setAnalyticsOpen = useAresStore((state) => state.setAnalyticsOpen);
-  const powerMargin = snapshot.resources.powerGenerated - snapshot.resources.powerConsumed;
+  const powerMargin = getPowerMargin(snapshot);
   const roverHealth = snapshot.rovers[0]?.health ?? 0;
   const rover = snapshot.rovers[0];
   const payload = rover ? payloadUsedKg(rover) : 0;
@@ -45,7 +46,7 @@ export function TopStatusRibbon({ onOpenGuide, onOpenHistory, onOpenMission }: {
         <TelemetryGroup label="Rover" testId="header-rover-group">
           <Telemetry icon={<Battery size={13} />} label="Battery" value={formatFixed(snapshot.resources.battery, "%")} tone={snapshot.resources.battery > 35 ? "good" : "bad"} />
           <Telemetry icon={<Activity size={13} />} label="Health" value={formatFixed(roverHealth, "%")} tone={roverHealth > 35 ? "good" : "bad"} />
-          <StorageTelemetry capacity={rover?.cargoCapacityKg ?? 12} ice={rover?.cargoIce ?? 0} ore={rover?.cargoOre ?? 0} samples={rover?.cargoSamples ?? 0} used={payload} />
+          <StorageTelemetry capacity={rover?.cargoCapacityKg ?? 0} ice={rover?.cargoIce ?? 0} ore={rover?.cargoOre ?? 0} samples={rover?.cargoSamples ?? 0} used={payload} />
         </TelemetryGroup>
         <TelemetryGroup label="Build pad" testId="header-build-pad-group">
           <Telemetry icon={<Zap size={13} />} label="Power" value={formatSignedFixed(powerMargin, " kW")} tone={powerMargin >= 0 ? "good" : "bad"} />

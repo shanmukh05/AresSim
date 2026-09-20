@@ -8,6 +8,7 @@ Thanks for helping. Keep changes small, match nearby style, and leave gameplay r
 - **Keep the deterministic core pure.** `engine/aresim/core/` must not import NumPy, Gymnasium, PettingZoo, Ray, Torch, or wall-clock/unseeded randomness. Same seed + commands → same checksums.
 - Change only what the task needs. No drive-by refactors or extra dependencies.
 - When behavior or ownership changes, update the matching doc under `docs/` and [`docs/project/implementation_checklist.md`](docs/project/implementation_checklist.md).
+- Do not add unit tests (pytest, unittest, Vitest). Do not restore deleted ones.
 
 Full coding standards: [`.cursor/rules/coding-standards.mdc`](.cursor/rules/coding-standards.mdc).
 Architecture map: [`docs/product/engine_code_reference.md`](docs/product/engine_code_reference.md).
@@ -33,21 +34,12 @@ python -m aresim.api
 npm run dev
 ```
 
-## Tests
-
-```bash
-engine/.venv/bin/pytest engine/tests
-npm test
-```
-
-Add or update tests when behavior changes. Do not weaken tests to make them pass.
-
 ## Pull requests
 
 1. Branch from `main`.
 2. Keep the diff focused. Do not commit `results/`, `datasets/`, `design_docs/`, secrets, or virtualenvs.
 3. Document surprising contracts (copy vs mutate, invalid actions still tick the clock, UI helpers that only display engine numbers).
-4. New major extension (observation, action, reward, task, agent, algorithm) must implement the existing contract, register explicitly, and include contract tests. See [Extend environment components](docs/rl/usage.md#extend-environment-components).
+4. New major extension (observation, action, reward, task, agent, algorithm) must implement the existing contract and register explicitly. See [Extend environment components](docs/rl/usage.md#extend-environment-components).
 
 ## Where to put code
 

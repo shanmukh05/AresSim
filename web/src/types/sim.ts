@@ -22,13 +22,29 @@ export type ViewportZoomMode = "fit" | "manual";
 export type CameraView = "survey" | "top" | "rover";
 export type RunMode = "manual" | "algorithm" | "load";
 export type SavedRunMode = RunMode | "llm";
-export type AlgorithmId = "random" | "random_valid" | "wait" | "scripted" | "masked_ppo";
+export type AlgorithmId = "random" | "random_valid" | "wait" | "scripted" | "jev" | "masked_ppo" | "masked_dqn";
+
+export function usesCheckpoint(algorithmId: AlgorithmId): boolean {
+  return algorithmId === "masked_ppo" || algorithmId === "masked_dqn";
+}
+
+export function usesJev(algorithmId: AlgorithmId): boolean {
+  return algorithmId === "jev";
+}
 export interface PolicyMeta {
   algorithmId: AlgorithmId;
   policyId: string;
   actionIndex: number;
   action: SimAction;
   actionMask: number[];
+  jev?: {
+    choice: string | null;
+    confidence: number;
+    probabilities: Record<string, number>;
+    action: string;
+    fallback: string | null;
+    waitRecharges: boolean;
+  };
 }
 
 export interface AgentStepResponse {
@@ -39,13 +55,13 @@ export interface AgentStepResponse {
 export interface PolicyCatalogEntry {
   id: AlgorithmId;
   label: string;
-  kind: "baseline" | "checkpoint";
+  kind: "baseline" | "checkpoint" | "llm";
   requiresPath: boolean;
 }
 
 export interface PoliciesResponse {
   policies: PolicyCatalogEntry[];
-  capabilities: { rllib: boolean };
+  capabilities: { rllib: boolean; jev?: boolean };
 }
 
 export interface AttachPolicyResponse {

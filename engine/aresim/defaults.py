@@ -4,7 +4,7 @@ Single source of truth for world size, cargo limits, reward coefficients,
 observation scales, and default component names. Import-time validation fails
 fast; copy with ``dataclasses.replace`` and never mutate in place.
 
-**Last updated:** September 1, 2026
+**Last updated:** September 11, 2026
 
 **Contains:** ``DEFAULT_ENGINE_CONFIG``, ``DEFAULT_ENVIRONMENT_CONFIG``.
 
@@ -267,7 +267,7 @@ DEFAULT_ENGINE_CONFIG = EngineConfig(
         schema_version="aresim.gameplay.v1",
         app_version="0.1.0",
         checkpoint_interval=10,
-        max_upload_bytes=25_000_000,
+        max_upload_bytes=100_000_000,
     ),
 )
 
@@ -291,15 +291,17 @@ DEFAULT_ENVIRONMENT_CONFIG = EnvironmentConfig(
         mission_success=10,
         terminal_failure=-5,
         objective_progress=2,
-        new_scan=0.10,
-        ice_delivered=0.50,
-        samples_delivered=0.20,
-        build_progress=0.50,
-        service_recovery=0.25,
+        new_scan=0.20,
+        ice_collected=0.10,
+        ice_delivered=1.0,
+        samples_delivered=0.60,
+        build_progress=0.15,
+        service_recovery=0.10,
+        undelivered_cargo=-0.80,
         hazard_damage=-1,
         energy_used=-0.05,
         invalid_action=-0.10,
-        time_cost=-0.001,
+        time_cost=-0.002,
         clip_min=-2,
         clip_max=2,
     ),

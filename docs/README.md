@@ -15,8 +15,9 @@ Canonical and planned project docs, grouped by purpose. Historical research note
 
 | Document | Purpose |
 |---|---|
-| [RL Algorithms, Training, and Evaluation](rl/rl_quickstart.md) | Implemented policies, PPO, network architecture, online sampling, W&B, checkpoints, and evaluation |
-| [RL Usage Guide](rl/usage.md) | CLI training, W&B setup, baselines, trajectories, and extension contracts |
+| [RL Algorithms, Training, and Evaluation](rl/rl_quickstart.md) | Implemented policies, PPO, DQN, network architecture, online sampling, W&B, checkpoints, and evaluation |
+| [RL Usage Guide](rl/usage.md) | CLI training, W&B setup, baselines, trajectories, Jev, and extension contracts |
+| [Train on JarvisLabs](rl/jarvislabs.md) | GPU/CPU instances, code upload, remote setup, and `results/` download |
 | [Masked PPO training notebook](../notebooks/masked_ppo_training.ipynb) | End-to-end learned-policy training in Jupyter |
 | [Algorithm Pipeline Notebook](../notebooks/rl_algorithm_pipeline.ipynb) | Baseline rollout, trajectory, validation, and determinism smoke test |
 | [Evaluation Report Template](../notebooks/evaluation_report_template.ipynb) | Optional manual W&B analysis notebook |
@@ -35,5 +36,5 @@ Coding standards live in the always-on Cursor rule [`.cursor/rules/coding-standa
 
 1. New to the product: Environment Rules → UI Design → Gameplay Save Format
 2. Working on the Python backend: Engine Code Reference → Implementation Checklist
-3. Starting RL work: [RL Usage Guide](rl/usage.md) (CLI + W&B) → [RL Algorithms, Training, and Evaluation](rl/rl_quickstart.md) → Agent Data proposal
+3. Starting RL work: [RL Usage Guide](rl/usage.md) (CLI + W&B) → [Train on JarvisLabs](rl/jarvislabs.md) for cloud GPUs → [RL Algorithms, Training, and Evaluation](rl/rl_quickstart.md) → [Jev workflow](../engine/aresim/algorithms/jev/workflow.md) → Agent Data proposal
 4. Exploring algorithms: Algorithm Literature Survey

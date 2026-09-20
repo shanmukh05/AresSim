@@ -1,6 +1,6 @@
 # AresSim Implementation Checklist
 
-**Last updated:** August 31, 2026  
+**Last updated:** September 20, 2026  
 **Status:** Living project checklist
 
 This document gives a high-level view of what is implemented and what remains. Detailed behavior and architecture stay in the linked reference documents.
@@ -33,9 +33,9 @@ This document gives a high-level view of what is implemented and what remains. D
 - [x] Compact three-section Action Bar for Manual, Algorithm, and Replay modes.
 - [x] Build-pad status visualization, rover path direction markers, action feedback, and sound cues.
 - [x] Ambient Martian day/night backdrop with Sun, moons, planets, and reduced-motion handling.
-- [x] Manual play, server-driven Algorithm autoplay (baselines + masked PPO checkpoints), and backend-owned Replay flow.
+- [x] Manual play, server-driven Algorithm autoplay (baselines + masked PPO/DQN checkpoints), and backend-owned Replay flow.
 
-Algorithm mode attaches registered baselines or a masked PPO checkpoint sidecar through `POST /api/sessions/{id}/attach-policy` and steps with `POST /api/sessions/{id}/agent-step`. Inference stays on the API host; the UI sends algorithm selection and an optional dev-time checkpoint path.
+Algorithm mode attaches registered baselines, Jev, or a masked PPO/DQN checkpoint sidecar through `POST /api/sessions/{id}/attach-policy` and steps with `POST /api/sessions/{id}/agent-step`. Inference stays on the API host; the UI sends algorithm selection and an optional dev-time checkpoint path. Jev requires `aresim[jev]` and an API key.
 
 ## 3. RL-ready environment — completed
 
@@ -51,7 +51,7 @@ Algorithm mode attaches registered baselines or a masked PPO checkpoint sidecar 
 
 - [x] Add external episode truncation and explicit environment/agent seeds for rollouts.
 - [x] Add the versioned fixed train, validation, and test seed manifest for the current scenario.
-- [x] Add random, random-valid, Wait, and scripted baseline agents.
+- [x] Add random, random-valid, Wait, scripted, and Jev baseline/inference agents.
 - [x] Add a simple rollout runner for generating trajectory samples.
 - [x] Add optional `aresim.trajectory.v1` recording and validation with unified, UI-loadable `aresim.trajectory.episode.v1` artifacts.
 - [x] Add reproducible frozen-policy evaluation over validation/test seeds through the shared rollout path.
@@ -62,8 +62,9 @@ Algorithm mode attaches registered baselines or a masked PPO checkpoint sidecar 
 - [ ] Verify the implemented action-masked PPO RLModule, learner update, and frozen evaluation with the full dev acceptance run.
 - [ ] Verify the implemented canonical W&B logging, local report plots, and reproducibility artifacts with the full dev acceptance run.
 - [x] Verify native RLlib checkpoint loading through the shared `Agent` interface with the full dev acceptance run.
-- [x] Wire UI Algorithm mode to server-side policy attach and agent-step (baselines + masked PPO checkpoint path).
-- [ ] Add mask-aware DQN and recurrent-policy experiments primarily through RLlib.
+- [x] Wire UI Algorithm mode to server-side policy attach and agent-step (baselines, Jev, masked PPO/DQN checkpoint path).
+- [x] Add mask-aware DQN through RLlib (selection, epsilon-greedy, and TD-target masking).
+- [ ] Add recurrent-policy experiments primarily through RLlib.
 
 ## 6. Advanced research — later
 
@@ -71,7 +72,7 @@ Algorithm mode attaches registered baselines or a masked PPO checkpoint sidecar 
 - [ ] Add JEPA representation learning and reusable encoder artifacts.
 - [ ] Add learned world-model experiments without replacing authoritative simulator transitions.
 - [ ] Add offline learning and behavior-cloning experiments where useful.
-- [ ] Add provider-neutral LLM agents with budgets, audit records, validation, and deterministic fallbacks.
+- [x] Add a Jev (TypeSafe) per-tick rover agent with named 5x5 encoding, budgets, audit fallbacks to Wait, and Algorithm-mode attach. Provider-neutral multi-LLM agents remain later.
 - [ ] Add LLM + scripted, LLM + RL, JEPA + RL, and world-model + RL hybrids.
 
 ## 7. Multi-rover environment — later

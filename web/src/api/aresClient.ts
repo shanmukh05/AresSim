@@ -105,9 +105,9 @@ export class AresApiClient {
     });
   }
 
-  async fetchHealth(): Promise<{ rllibAvailable: boolean }> {
-    const response = await request<{ rllibAvailable?: boolean }>("/api/health");
-    return { rllibAvailable: response.rllibAvailable === true };
+  async fetchHealth(): Promise<{ rllibAvailable: boolean; jevAvailable: boolean }> {
+    const response = await request<{ rllibAvailable?: boolean; jevAvailable?: boolean }>("/api/health");
+    return { rllibAvailable: response.rllibAvailable === true, jevAvailable: response.jevAvailable === true };
   }
 
   /** @deprecated Use agentStep after attachPolicy. Kept for manual pre-decoded agent actions if needed. */

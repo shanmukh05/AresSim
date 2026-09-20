@@ -4,7 +4,7 @@ Maps camelCase JSON to :class:`~aresim.service.AresService` calls and returns UI
 snapshots. Errors use ``{ error: { code, message } }`` so the client switches on
 ``code``, not prose.
 
-**Last updated:** September 1, 2026
+**Last updated:** September 12, 2026
 
 **Contains:** route handlers, request models, validation error mapping.
 
@@ -26,9 +26,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from .config import EngineConfig
 from .defaults import DEFAULT_ENGINE_CONFIG
 from .gameplay import CHECKPOINT_REASON_PRIORITY, TRAJECTORY_EPISODE_SCHEMA, TRAJECTORY_REPLAY_SCHEMA, JsonObject, ReplayCursor
-from .integrations.policy import rllib_available
+from .integrations.policy import jev_available, rllib_available
 from .service import AresService, ServiceError
 from .types import ActionCommand, ActionType, Actor, Position
+
+AlgorithmId = Literal["random", "random_valid", "wait", "scripted", "jev", "masked_ppo", "masked_dqn"]
 
 
 class StrictModel(BaseModel):
@@ -61,13 +63,13 @@ class SaveRequest(StrictModel):
     """`POST /api/sessions/{id}/save`. Downloads one unified trajectory JSON."""
     file_name: str = Field(alias="fileName", max_length=180)
     run_mode: Literal["manual", "algorithm"] = Field(alias="runMode")
-    algorithm_id: Literal["random", "random_valid", "wait", "scripted", "masked_ppo"] | None = Field(default=None, alias="algorithmId")
+    algorithm_id: AlgorithmId | None = Field(default=None, alias="algorithmId")
     checkpoint_path: str | None = Field(default=None, alias="checkpointPath", max_length=500)
 
 
 class AttachPolicyRequest(StrictModel):
     """`POST /api/sessions/{id}/attach-policy`."""
-    algorithm_id: Literal["random", "random_valid", "wait", "scripted", "masked_ppo"] = Field(alias="algorithmId")
+    algorithm_id: AlgorithmId = Field(alias="algorithmId")
     checkpoint_path: str | None = Field(default=None, alias="checkpointPath", max_length=500)
 
 
@@ -137,6 +139,7 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
             "trajectoryReplaySchemaVersion": TRAJECTORY_REPLAY_SCHEMA,
             "gameplaySchemaVersion": config.replay.schema_version,
             "rllibAvailable": rllib_available(),
+            "jevAvailable": jev_available(),
         }
 
     @app.get("/api/policies")

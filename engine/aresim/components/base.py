@@ -70,6 +70,8 @@ class RewardFunction(Protocol):
         before: WorldState,
         transition: EngineTransition,
         outcome: TaskOutcome,
+        *,
+        episode_end: bool = False,
     ) -> RewardBreakdown:
         """Return a stable reward breakdown without mutating inputs."""
         ...

@@ -4,18 +4,19 @@ Owns the training-side extension registry separate from component registration i
 :mod:`aresim.registry`. New algorithms register here with explicit names; there is
 no automatic discovery.
 
-**Last updated:** September 1, 2026
+**Last updated:** September 12, 2026
 
 **Contains:** ``TrainingRegistry``, ``TrainingContext``, factory protocols
 (``AlgorithmFactory``, ``ModelFactory``, ``CheckpointLoader``), and
 :func:`create_training_registry`.
 
-**Built-in registrations:** algorithm ``masked_ppo``, model
-``local_cnn_actor_critic``, checkpoint loader ``rllib_masked_ppo``.
+**Built-in registrations:** algorithms ``masked_ppo`` and ``masked_dqn``, models
+``local_cnn_actor_critic`` and ``local_cnn_q``, checkpoint loaders
+``rllib_masked_ppo`` and ``rllib_masked_dqn``.
 
 **Re-exported from:** :mod:`aresim.registry` (lazy) and :mod:`aresim.training`.
 
-**See also:** :mod:`aresim.algorithms.ppo` for the masked PPO implementation.
+**See also:** :mod:`aresim.algorithms.ppo` and :mod:`aresim.algorithms.dqn`.
 """
 
 from __future__ import annotations
@@ -178,19 +179,25 @@ class TrainingRegistry:
 
 
 def create_training_registry() -> TrainingRegistry:
-    """Return a fresh registry with built-in masked PPO, model, and loader entries."""
-    from .ppo.checkpoint import BuiltinCheckpointLoader
+    """Return a fresh registry with built-in PPO and DQN entries."""
+    from .dqn.checkpoint import BuiltinCheckpointLoader as DQNCheckpointLoader
+    from .dqn.train import MaskedDQNFactory
+    from .ppo.checkpoint import BuiltinCheckpointLoader as PPOCheckpointLoader
     from .ppo.train import MaskedPPOFactory
 
     registry = TrainingRegistry()
     masked_ppo = MaskedPPOFactory()
+    masked_dqn = MaskedDQNFactory()
     registry.register_algorithm("masked_ppo", lambda context: masked_ppo, config_decoder=masked_ppo.decode_config)
-    registry.register_model("local_cnn_actor_critic", lambda context: _BuiltinModelFactory())
-    registry.register_checkpoint_loader("rllib_masked_ppo", BuiltinCheckpointLoader)
+    registry.register_algorithm("masked_dqn", lambda context: masked_dqn, config_decoder=masked_dqn.decode_config)
+    registry.register_model("local_cnn_actor_critic", lambda context: _BuiltinPPOModelFactory())
+    registry.register_model("local_cnn_q", lambda context: _BuiltinDQNModelFactory())
+    registry.register_checkpoint_loader("rllib_masked_ppo", PPOCheckpointLoader)
+    registry.register_checkpoint_loader("rllib_masked_dqn", DQNCheckpointLoader)
     return registry
 
 
-class _BuiltinModelFactory:
+class _BuiltinPPOModelFactory:
     """Built-in ``local_cnn_actor_critic`` model registration for masked PPO."""
 
     model_id = "local_cnn_actor_critic"
@@ -202,6 +209,20 @@ class _BuiltinModelFactory:
         from .ppo.train import AresMaskedPPORLModule
 
         return AresMaskedPPORLModule
+
+
+class _BuiltinDQNModelFactory:
+    """Built-in ``local_cnn_q`` model registration for masked DQN."""
+
+    model_id = "local_cnn_q"
+    observation_schema = "aresim.obs.local.v1"
+    action_schema = "aresim.action.rover.v1"
+
+    @property
+    def rl_module_class(self) -> type:
+        from .dqn.train import AresMaskedDQNRLModule
+
+        return AresMaskedDQNRLModule
 
 
 __all__ = [

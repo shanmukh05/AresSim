@@ -9,7 +9,7 @@ baseline does not duplicate validation logic.
 
 **Used by:** :mod:`aresim.algorithms.baselines.random`,
 :mod:`aresim.algorithms.baselines.random_valid`, :mod:`aresim.algorithms.baselines.wait`,
-:mod:`aresim.algorithms.baselines.scripted`.
+:mod:`aresim.algorithms.baselines.scripted`, :mod:`aresim.algorithms.jev.agent`.
 """
 
 from __future__ import annotations

@@ -11,7 +11,7 @@ No automatic discovery or third-party entry points.
 
 **Built-in component names:** ``local``, ``discrete``, ``shaped_train``,
 ``sparse_eval``, ``open_exploration``; agents ``random``, ``random_valid``,
-``wait``, ``scripted``.
+``wait``, ``scripted``, ``jev``.
 
 **See also:** :mod:`aresim.algorithms.registry` (learned-policy registration),
 :mod:`aresim.factory` (construction helpers).
@@ -180,6 +180,7 @@ def create_default_registry() -> ComponentRegistry:
     """Return a fresh registry populated with all built-in RL components."""
     from .components import DiscreteActions, LocalObservation, OpenExplorationTask, ShapedTrainReward, SparseEvalReward
     from .algorithms import RandomValidAgent, ScriptedAgent, UniformRandomAgent, WaitAgent
+    from .algorithms.jev.agent import build_jev_agent
 
     registry = ComponentRegistry()
     registry.register_observation(
@@ -200,6 +201,7 @@ def create_default_registry() -> ComponentRegistry:
     registry.register_agent("random_valid", lambda context: RandomValidAgent())
     registry.register_agent("wait", lambda context: WaitAgent())
     registry.register_agent("scripted", lambda context: ScriptedAgent())
+    registry.register_agent("jev", build_jev_agent)
     return registry
 
 

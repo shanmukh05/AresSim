@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { useAresStore } from "../state/useAresStore";
 import type { ActionType, AlgorithmId, LoadedReplay, RunMode, SimAction } from "../types/sim";
+import { usesCheckpoint, usesJev } from "../types/sim";
 
 const MODE_STYLE: Record<RunMode, { label: string; icon: ReactNode; accent: string; active: string }> = {
   manual: { label: "Manual", icon: <Gamepad2 size={13} />, accent: "#39d5e8", active: "border-cyan-500/40 bg-cyan-500/10 text-cyan-200 shadow-[0_0_12px_rgba(57,213,232,0.15)]" },
@@ -51,13 +52,17 @@ const ALGORITHMS: Array<{ value: AlgorithmId; label: string }> = [
   { value: "random_valid", label: "Random (valid)" },
   { value: "wait", label: "Wait" },
   { value: "scripted", label: "Scripted" },
+  { value: "jev", label: "Jev" },
   { value: "masked_ppo", label: "Masked PPO" },
+  { value: "masked_dqn", label: "Masked DQN" },
 ];
 
 const PLAY_INTERVAL_MS = 700;
 
 export function ActionBar() {
-  const snapshot = useAresStore((state) => state.snapshot)!;
+  const sessionId = useAresStore((state) => state.snapshot?.sessionId ?? "");
+  const gameStatus = useAresStore((state) => state.snapshot?.gameStatus);
+  const snapshotSeed = useAresStore((state) => state.snapshot?.seed ?? 0);
   const runMode = useAresStore((state) => state.runMode);
   const selectedTool = useAresStore((state) => state.selectedTool);
   const loadedReplay = useAresStore((state) => state.loadedReplay);
@@ -75,19 +80,18 @@ export function ActionBar() {
   const start = useAresStore((state) => state.start);
   const loadGameplay = useAresStore((state) => state.loadGameplay);
   const saveRun = useAresStore((state) => state.saveRun);
-  const backendBusy = useAresStore((state) => state.backendBusy);
 
-  const [seed, setSeed] = useState(String(snapshot.seed));
+  const [seed, setSeed] = useState(String(snapshotSeed));
   const [playing, setPlaying] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const uploadRef = useRef<HTMLInputElement>(null);
-  const terminal = snapshot.gameStatus === "game_over";
+  const terminal = gameStatus === "game_over";
   const replayEnded = !!loadedReplay && loadedReplay.cursor >= loadedReplay.totalSteps;
   const modeStyle = MODE_STYLE[runMode];
-  const controlsDisabled = terminal || backendBusy;
+  const controlsDisabled = terminal;
 
-  useEffect(() => setSeed(String(snapshot.seed)), [snapshot.seed]);
-  useEffect(() => setPlaying(false), [runMode, snapshot.sessionId]);
+  useEffect(() => setSeed(String(snapshotSeed)), [snapshotSeed]);
+  useEffect(() => setPlaying(false), [runMode, sessionId]);
   useEffect(() => { if (terminal || replayEnded) setPlaying(false); }, [replayEnded, terminal]);
   useEffect(() => {
     if (!playing || paused || terminal || runMode === "manual" || (runMode === "load" && !loadedReplay)) return;
@@ -135,16 +139,16 @@ export function ActionBar() {
       <div className="grid h-12 w-full max-w-[1180px] grid-cols-[1fr_auto_1fr] items-center gap-4" aria-label="Gameplay controls" data-testid="action-bar-controls">
         <section className="relative flex h-12 w-fit justify-self-start items-center gap-2 rounded-lg border border-white/[0.07] bg-[#090b11]/80 px-3 pt-1 shadow-[0_4px_20px_rgba(0,0,0,0.4),inset_0_1px_rgba(255,255,255,0.03)]" aria-label="Mode and source controls" data-testid="action-bar-left">
           <ZoneLabel color={modeStyle.accent}>Mode</ZoneLabel>
-          <ModeSwitch active={runMode} onChange={(mode) => void changeMode(mode)} disabled={backendBusy} />
-          {runMode === "algorithm" ? <><Divider /><AlgorithmSetup disabled={backendBusy} /></> : null}
-          {runMode === "load" ? <><Divider /><ReplaySource loadedReplay={loadedReplay} uploadRef={uploadRef} onUpload={uploadReplay} disabled={backendBusy} /></> : null}
+          <ModeSwitch active={runMode} onChange={(mode) => void changeMode(mode)} />
+          {runMode === "algorithm" ? <><Divider /><AlgorithmSetup /></> : null}
+          {runMode === "load" ? <><Divider /><ReplaySource loadedReplay={loadedReplay} uploadRef={uploadRef} onUpload={uploadReplay} /></> : null}
         </section>
 
         <section className="relative flex h-12 w-fit justify-self-center items-center justify-center gap-2 rounded-lg border border-white/[0.1] bg-[#0c0f16]/95 px-4 pt-1 shadow-[0_4px_20px_rgba(0,0,0,0.5),inset_0_1px_rgba(255,255,255,0.04)]" aria-label="Active game controls" data-testid="action-bar-center" style={{ borderColor: `${modeStyle.accent}30`, boxShadow: `0_4px_20px_rgba(0,0,0,0.5), inset_0_1px_rgba(255,255,255,0.04), 0_0_16px_${modeStyle.accent}08` }}>
           <ZoneLabel color={modeStyle.accent}>{runMode === "manual" ? "Rover commands" : runMode === "algorithm" ? "Run controls" : "Replay controls"}</ZoneLabel>
-          {runMode === "manual" ? <><div className="flex gap-1.5" aria-label="Environment actions">{ACTIONS.map((action) => <CommandButton key={action.id} label={action.label} active={selectedTool === action.id} accent={modeStyle.accent} disabled={controlsDisabled} onClick={() => void dispatchAction({ type: action.id })}>{action.icon}</CommandButton>)}</div><Divider /><RunUtilities disabled={backendBusy} onReset={() => void resetCurrentRun()} onSave={() => setSaveOpen(true)} /></> : null}
-          {runMode === "algorithm" ? <><Transport playing={playing} paused={paused} disabled={controlsDisabled} stepDisabled={controlsDisabled || (playing && !paused)} onToggle={() => void togglePlay()} onStep={() => void step()} /><SpeedControl speed={speed} onChange={setSpeed} accent={modeStyle.accent} disabled={backendBusy} /><Divider /><RunUtilities disabled={backendBusy} onReset={() => void resetCurrentRun()} onSave={() => setSaveOpen(true)} /></> : null}
-          {runMode === "load" ? <ReplayControls loadedReplay={loadedReplay} playing={playing} paused={paused} ended={replayEnded} busy={backendBusy} speed={speed} onToggle={() => void togglePlay()} onStep={() => void step()} onSpeed={setSpeed} onRepeat={() => { setPlaying(false); void resetReplay(); }} onJump={(target) => void jumpToReplayStep(target)} accent={modeStyle.accent} /> : null}
+          {runMode === "manual" ? <><div className="flex gap-1.5" aria-label="Environment actions">{ACTIONS.map((action) => <CommandButton key={action.id} label={action.label} active={selectedTool === action.id} accent={modeStyle.accent} disabled={controlsDisabled} onClick={() => void dispatchAction({ type: action.id })}>{action.icon}</CommandButton>)}</div><Divider /><RunUtilities onReset={() => void resetCurrentRun()} onSave={() => setSaveOpen(true)} /></> : null}
+          {runMode === "algorithm" ? <><Transport playing={playing} paused={paused} disabled={controlsDisabled} stepDisabled={controlsDisabled || (playing && !paused)} onToggle={() => void togglePlay()} onStep={() => void step()} /><SpeedControl speed={speed} onChange={setSpeed} accent={modeStyle.accent} /><Divider /><RunUtilities onReset={() => void resetCurrentRun()} onSave={() => setSaveOpen(true)} /></> : null}
+          {runMode === "load" ? <ReplayControls loadedReplay={loadedReplay} playing={playing} paused={paused} ended={replayEnded} speed={speed} onToggle={() => void togglePlay()} onStep={() => void step()} onSpeed={setSpeed} onRepeat={() => { setPlaying(false); void resetReplay(); }} onJump={(target) => void jumpToReplayStep(target)} accent={modeStyle.accent} /> : null}
         </section>
 
         <section className="relative flex h-12 w-fit justify-self-end items-center justify-end rounded-lg border border-white/[0.07] bg-[#090b11]/80 px-3 pt-1 shadow-[0_4px_20px_rgba(0,0,0,0.4),inset_0_1px_rgba(255,255,255,0.03)]" aria-label="Environment controls" data-testid="action-bar-right">
@@ -154,16 +158,16 @@ export function ActionBar() {
             setSeed={setSeed}
             applySeed={applySeed}
             randomize={randomize}
-            disabled={backendBusy || (runMode === "load" && loadedReplay !== null)}
+            disabled={runMode === "load" && loadedReplay !== null}
           />
         </section>
       </div>
-      <SaveDialog open={saveOpen} sessionId={snapshot.sessionId} onClose={() => setSaveOpen(false)} onSave={(name) => { void saveRun(name); setSaveOpen(false); }} />
+      <SaveDialog open={saveOpen} sessionId={sessionId} onClose={() => setSaveOpen(false)} onSave={(name) => { void saveRun(name); setSaveOpen(false); }} />
     </footer>
   );
 }
 
-function ModeSwitch({ active, onChange, disabled = false }: { active: RunMode; onChange: (mode: RunMode) => void; disabled?: boolean }) {
+function ModeSwitch({ active, onChange }: { active: RunMode; onChange: (mode: RunMode) => void }) {
   const widths: Record<RunMode, string> = { manual: "w-[76px]", algorithm: "w-[94px]", load: "w-[76px]" };
   return (
     <nav className="flex gap-1" aria-label="Simulation mode">
@@ -173,7 +177,6 @@ function ModeSwitch({ active, onChange, disabled = false }: { active: RunMode; o
           <TooltipButton
             key={mode}
             label={`${style.label} mode`}
-            disabled={disabled}
             ariaPressed={active === mode}
             className={`relative flex h-9 ${widths[mode]} items-center justify-center gap-1.5 rounded-lg border px-1.5 font-sans text-[11px] font-bold tracking-wide transition max-[1099px]:w-9 ${active === mode
                 ? style.active
@@ -221,10 +224,11 @@ function Transport({ playing, paused, disabled, stepDisabled, onToggle, onStep }
   );
 }
 
-function AlgorithmSetup({ disabled = false }: { disabled?: boolean }) {
+function AlgorithmSetup() {
   const algorithmId = useAresStore((state) => state.algorithmId);
   const checkpointPath = useAresStore((state) => state.checkpointPath);
   const rllibAvailable = useAresStore((state) => state.rllibAvailable);
+  const jevAvailable = useAresStore((state) => state.jevAvailable);
   const policyCapabilitiesLoaded = useAresStore((state) => state.policyCapabilitiesLoaded);
   const setAlgorithmId = useAresStore((state) => state.setAlgorithmId);
   const setCheckpointPath = useAresStore((state) => state.setCheckpointPath);
@@ -239,23 +243,25 @@ function AlgorithmSetup({ disabled = false }: { disabled?: boolean }) {
     <div className="flex items-center gap-1.5">
       <label className="flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-[#0c0f16]/90 px-2.5 text-xs text-stone-300 focus-within:border-violet-500/40 transition">
         <Cpu size={13} className="text-violet-300" />
-        <select aria-label="Algorithm policy" disabled={disabled} className="max-w-[108px] bg-transparent font-semibold text-white outline-none cursor-pointer text-[11px] disabled:opacity-30" value={algorithmId} onChange={(event) => setAlgorithmId(event.target.value as AlgorithmId)}>
+        <select aria-label="Algorithm policy" className="max-w-[108px] bg-transparent font-semibold text-white outline-none cursor-pointer text-[11px]" value={algorithmId} onChange={(event) => setAlgorithmId(event.target.value as AlgorithmId)}>
           {ALGORITHMS.map((option) => {
-            const blocked = option.value === "masked_ppo" && policyCapabilitiesLoaded && !rllibAvailable;
+            const blockedCheckpoint = usesCheckpoint(option.value) && policyCapabilitiesLoaded && !rllibAvailable;
+            const blockedJev = usesJev(option.value) && policyCapabilitiesLoaded && !jevAvailable;
+            const blocked = blockedCheckpoint || blockedJev;
+            const suffix = blockedCheckpoint ? " (rllib required)" : blockedJev ? " (API key required)" : "";
             return (
               <option key={option.value} value={option.value} disabled={blocked} className="bg-[#0b0e14] text-white">
-                {option.label}{blocked ? " (rllib required)" : ""}
+                {option.label}{suffix}
               </option>
             );
           })}
         </select>
       </label>
-      {algorithmId === "masked_ppo" ? (
+      {usesCheckpoint(algorithmId) ? (
         <label className="flex h-9 min-w-[180px] items-center gap-2 rounded-lg border border-white/[0.08] bg-[#0c0f16]/90 px-2.5 text-xs text-stone-300 focus-within:border-violet-500/40 transition">
           <input
             aria-label="Checkpoint path"
-            disabled={disabled}
-            className="w-full bg-transparent font-mono text-[10px] text-white outline-none placeholder:text-stone-500 disabled:opacity-30"
+            className="w-full bg-transparent font-mono text-[10px] text-white outline-none placeholder:text-stone-500"
             placeholder="/absolute/path/to/checkpoint.json"
             value={checkpointPath}
             onChange={(event) => setCheckpointPath(event.target.value)}
@@ -269,39 +275,39 @@ function AlgorithmSetup({ disabled = false }: { disabled?: boolean }) {
           />
         </label>
       ) : null}
-      <CommandButton label="Apply checkpoint path" disabled={disabled || algorithmId !== "masked_ppo"} onClick={() => void attachCurrentPolicy()}>
+      <CommandButton label="Apply checkpoint path" disabled={!usesCheckpoint(algorithmId)} onClick={() => void attachCurrentPolicy()}>
         <Check size={15} />
       </CommandButton>
     </div>
   );
 }
 
-function ReplaySource({ loadedReplay, uploadRef, onUpload, disabled = false }: { loadedReplay: LoadedReplay | null; uploadRef: React.RefObject<HTMLInputElement | null>; onUpload: (file?: File) => void; disabled?: boolean }) {
+function ReplaySource({ loadedReplay, uploadRef, onUpload }: { loadedReplay: LoadedReplay | null; uploadRef: React.RefObject<HTMLInputElement | null>; onUpload: (file?: File) => void }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
       <input ref={uploadRef} aria-label="Upload trajectory JSON" className="sr-only" type="file" accept="application/json,.json" onChange={(event) => void onUpload(event.target.files?.[0])} />
-      <CommandButton label={loadedReplay ? "Replace replay" : "Choose replay"} disabled={disabled} onClick={() => uploadRef.current?.click()}><Upload size={15} /></CommandButton>
+      <CommandButton label={loadedReplay ? "Replace replay" : "Choose replay"} onClick={() => uploadRef.current?.click()}><Upload size={15} /></CommandButton>
       <span className="max-w-24 truncate font-mono text-[10px] text-stone-400" data-testid="loaded-replay-meta">{loadedReplay?.fileName ?? "No replay"}</span>
     </div>
   );
 }
 
-function ReplayControls({ loadedReplay, playing, paused, ended, busy, speed, onToggle, onStep, onSpeed, onRepeat, onJump, accent }: { loadedReplay: LoadedReplay | null; playing: boolean; paused: boolean; ended: boolean; busy: boolean; speed: number; onToggle: () => void; onStep: () => void; onSpeed: (speed: number) => void; onRepeat: () => void; onJump: (step: number) => void; accent: string }) {
+function ReplayControls({ loadedReplay, playing, paused, ended, speed, onToggle, onStep, onSpeed, onRepeat, onJump, accent }: { loadedReplay: LoadedReplay | null; playing: boolean; paused: boolean; ended: boolean; speed: number; onToggle: () => void; onStep: () => void; onSpeed: (speed: number) => void; onRepeat: () => void; onJump: (step: number) => void; accent: string }) {
   const loaded = !!loadedReplay;
   return (
     <div className="flex items-center gap-2" aria-label="Replay controls">
       <div className="flex gap-1.5">
-        <CommandButton label={!playing ? "Play replay" : paused ? "Resume replay" : "Pause replay"} disabled={!loaded || ended || busy} onClick={onToggle}>
+        <CommandButton label={!playing ? "Play replay" : paused ? "Resume replay" : "Pause replay"} disabled={!loaded || ended} onClick={onToggle}>
           {playing && !paused ? <Pause size={15} /> : <Play size={15} />}
         </CommandButton>
-        <CommandButton label="Step replay" disabled={!loaded || ended || busy} onClick={onStep}>
+        <CommandButton label="Step replay" disabled={!loaded || ended} onClick={onStep}>
           <StepForward size={15} />
         </CommandButton>
       </div>
-      <CommandButton label="Repeat replay" disabled={!loaded || busy} onClick={onRepeat}><RotateCcw size={15} /></CommandButton>
-      <SpeedControl speed={speed} onChange={onSpeed} disabled={!loaded || busy} accent={accent} />
+      <CommandButton label="Repeat replay" disabled={!loaded} onClick={onRepeat}><RotateCcw size={15} /></CommandButton>
+      <SpeedControl speed={speed} onChange={onSpeed} disabled={!loaded} accent={accent} />
       <span className="w-11 text-right font-mono text-[10px] text-stone-300" data-testid="replay-cursor">{loadedReplay?.cursor ?? 0}/{loadedReplay?.totalSteps ?? 0}</span>
-      <input aria-label="Replay step" data-testid="step-scrubber" className="h-1 w-32 cursor-pointer rounded-lg bg-white/10 accent-current transition disabled:opacity-20" style={{ accentColor: accent }} type="range" min={0} max={Math.max(1, loadedReplay?.totalSteps ?? 0)} value={Math.min(loadedReplay?.cursor ?? 0, Math.max(1, loadedReplay?.totalSteps ?? 0))} disabled={!loaded || busy} onChange={(event) => onJump(Number(event.target.value))} />
+      <input aria-label="Replay step" data-testid="step-scrubber" className="h-1 w-32 cursor-pointer rounded-lg bg-white/10 accent-current transition disabled:opacity-20" style={{ accentColor: accent }} type="range" min={0} max={Math.max(1, loadedReplay?.totalSteps ?? 0)} value={Math.min(loadedReplay?.cursor ?? 0, Math.max(1, loadedReplay?.totalSteps ?? 0))} disabled={!loaded} onChange={(event) => onJump(Number(event.target.value))} />
     </div>
   );
 }
@@ -315,11 +321,11 @@ function SpeedControl({ speed, onChange, accent, disabled = false }: { speed: nu
   );
 }
 
-function RunUtilities({ onReset, onSave, disabled = false }: { onReset: () => void; onSave: () => void; disabled?: boolean }) {
+function RunUtilities({ onReset, onSave }: { onReset: () => void; onSave: () => void }) {
   return (
     <div className="flex gap-1.5">
-      <CommandButton label="Reset run" disabled={disabled} onClick={onReset}><RotateCcw size={15} /></CommandButton>
-      <CommandButton label="Export trajectory" disabled={disabled} onClick={onSave}><Save size={15} /></CommandButton>
+      <CommandButton label="Reset run" onClick={onReset}><RotateCcw size={15} /></CommandButton>
+      <CommandButton label="Export trajectory" onClick={onSave}><Save size={15} /></CommandButton>
     </div>
   );
 }

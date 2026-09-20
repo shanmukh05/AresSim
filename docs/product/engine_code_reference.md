@@ -1,6 +1,6 @@
 # AresSim Engine Code Reference
 
-**Last updated:** August 31, 2026  
+**Last updated:** September 20, 2026  
 **Status:** Living document
 
 This document explains the purpose of every maintained file in `engine/`, how the files work together, and where future backend code should be added. Update it in the same change whenever an engine file is added, removed, renamed, or given a different responsibility.
@@ -44,13 +44,35 @@ engine/
 │   │   │   ├── random.py
 │   │   │   ├── random_valid.py
 │   │   │   ├── scripted.py
-│   │   │   └── wait.py
+│   │   │   ├── wait.py
+│   │   │   └── workflow.md
 │   │   ├── common/
-│   │   │   └── masks.py
+│   │   │   ├── __init__.py
+│   │   │   ├── masks.py
+│   │   │   ├── config_decode.py
+│   │   │   ├── tracking.py
+│   │   │   ├── resume.py
+│   │   │   └── encoder.py
+│   │   ├── dqn/
+│   │   │   ├── __init__.py
+│   │   │   ├── config.py
+│   │   │   ├── train.py
+│   │   │   ├── checkpoint.py
+│   │   │   └── workflow.md
+│   │   ├── jev/
+│   │   │   ├── __init__.py
+│   │   │   ├── config.py
+│   │   │   ├── state.py
+│   │   │   ├── questions.py
+│   │   │   ├── client.py
+│   │   │   ├── agent.py
+│   │   │   ├── rollout.py
+│   │   │   └── workflow.md
 │   │   └── ppo/
 │   │       ├── config.py
 │   │       ├── train.py
-│   │       └── checkpoint.py
+│   │       ├── checkpoint.py
+│   │       └── workflow.md
 │   ├── envs/
 │   │   ├── __init__.py
 │   │   ├── environment.py
@@ -67,21 +89,11 @@ engine/
 │   │   └── trajectories.py
 │   └── integrations/
 │       ├── __init__.py
-│       └── ui.py
-└── tests/
-    ├── test_agents.py
-    ├── test_components.py
-    ├── test_extensibility.py
-    ├── test_envs.py
-    ├── test_engine.py
-    ├── test_gameplay.py
-    ├── test_rollouts.py
-    ├── test_trajectories.py
-    ├── test_api.py
-    └── test_rllib_pipeline.py
+│       ├── ui.py
+│       └── policy.py
 ```
 
-The engine is the deterministic gameplay backend used by the UI and the core composed by the optional RL environment. Local observations, masks, rewards, adapters, baselines, truncation, rollouts, trajectories, fixed seed splits, RLlib masked PPO, checkpoint evaluation, metrics, tracking, and reports are implemented. Jupyter notebooks, seed-split YAML, and experiment configs live in repository `notebooks/` and `configs/`, not in the installable package. Training run artifacts live in `results/`.
+The engine is the deterministic gameplay backend used by the UI and the core composed by the optional RL environment. Local observations, masks, rewards, adapters, baselines, truncation, rollouts, trajectories, fixed seed splits, RLlib masked PPO and mask-aware DQN, checkpoint evaluation, metrics, tracking, and reports are implemented. Jupyter notebooks, seed-split YAML, and experiment configs live in repository `notebooks/` and `configs/`, not in the installable package. Training run artifacts live in `results/`.
 
 ## 2. How the engine is organized
 
@@ -128,8 +140,7 @@ Defines the installable `aresim` Python package.
 - Lists the runtime dependencies: FastAPI and Uvicorn.
 - Defines the optional `env` extra for NumPy, Gymnasium, and PettingZoo.
 - Defines the self-contained `rllib` extra and the `aresim-rl` command.
-- Lists the development dependencies: pytest and HTTPX.
-- Configures the `engine/tests/` directory as the pytest test path.
+- Lists the development extra: HTTPX.
 
 Change this file when the package metadata, supported Python version, dependencies, or test configuration changes. Dependencies should not be added for functionality that can be implemented clearly with the standard library.
 
@@ -216,7 +227,7 @@ The module validates the completed default configuration during import so invali
 
 ### `engine/aresim/registry.py`
 
-Owns the explicit repository-local component and agent registry and the uniform `ComponentBuildContext`. Every entry is a typed factory over that context. The registry includes the built-in environment components plus `random`, `random_valid`, `wait`, and `scripted` policies, validates factory results against public contracts and spaces, and rejects duplicate or unknown names. It does not use entry points or automatic import discovery.
+Owns the explicit repository-local component and agent registry and the uniform `ComponentBuildContext`. Every entry is a typed factory over that context. The registry includes the built-in environment components plus `random`, `random_valid`, `wait`, `scripted`, and `jev` policies, validates factory results against public contracts and spaces, and rejects duplicate or unknown names. It does not use entry points or automatic import discovery.
 
 ### `engine/aresim/factory.py`
 
@@ -346,14 +357,28 @@ Neither adapter implements gameplay validation, state mutation, observation feat
 ### `engine/aresim/algorithms/`
 
 - `base.py` defines the public generic `Agent` contract, schema compatibility, reset seeding, and action interface.
-- `baselines/` groups the four built-in baseline policies (`random.py`, `random_valid.py`, `wait.py`, `scripted.py`). The scripted policy cannot access canonical `WorldState`.
+- `baselines/` groups the four built-in baseline policies (`random.py`, `random_valid.py`, `wait.py`, `scripted.py`). [`workflow.md`](../../engine/aresim/algorithms/baselines/workflow.md) explains each one. The scripted policy cannot access canonical `WorldState`.
+- `jev/` is the inference-only TypeSafe Jev rover agent (`state.py` encodes `aresim.llm.ops.v1`, `agent.py` implements `Agent`). Canonical usage and payload docs are [`jev/workflow.md`](../../engine/aresim/algorithms/jev/workflow.md). It cannot access canonical `WorldState`.
 - `common/masks.py` shares mask validation across baselines.
 - `common/config_decode.py` shares YAML-to-dataclass decoding and scalar validation for algorithm and experiment configs.
+- `common/tracking.py` owns W&B run-id helpers so training entry points do not invent ids.
+- `common/resume.py` resolves a run directory or checkpoint sidecar into a validated resume target without starting Ray.
+- `common/encoder.py` owns the shared local CNN + telemetry trunk used by masked PPO and masked DQN.
 - `registry.py` owns the algorithm, model, and checkpoint-loader training registry.
 - `ppo/config.py` owns masked PPO hyperparameters and model architecture dataclasses.
 - `ppo/workflow.md` documents the masked PPO data flow, model inputs, and training/checkpoint path.
 - `ppo/train.py` owns the actor-critic, RLModule, W&B callbacks, and Ray Tune training path.
 - `ppo/checkpoint.py` validates native checkpoint provenance and adapts frozen inference to `Agent`.
+- `dqn/config.py` owns masked DQN hyperparameters.
+- `dqn/workflow.md` documents replay, Double/dueling DQN, and `-inf` action masking.
+- `dqn/train.py` owns the Q-network, RLModule, and RLlib DQN factory.
+- `dqn/checkpoint.py` loads `rllib_masked_dqn` sidecars into the shared checkpoint `Agent`.
+- `jev/config.py` owns Jev timeouts, confidence floor, and neighborhood size.
+- `jev/state.py` owns the `aresim.llm.ops.v1` 5x5 encoder.
+- `jev/questions.py` owns the masked Choice question.
+- `jev/client.py` owns TypeSafe/fake clients and `JEV_API_KEY`.
+- `jev/agent.py` owns the inference `JevAgent`, idle-Wait skip, and Choice probability traces.
+- `jev/rollout.py` owns `aresim.rollout.v1` YAML for `aresim-rl rollout`.
 - `__init__.py` re-exports the contract and built-in policies.
 
 ### `engine/aresim/training/`
@@ -363,7 +388,7 @@ Neither adapter implements gameplay validation, state mutation, observation feat
 - `experiments.py` owns immutable experiment settings, safe YAML, strict typed overrides, and configuration hashes.
 - `seeds.py` and `evaluation.py` own fixed splits and framework-neutral frozen-policy evaluation. The checked-in split is `notebooks/phase1_open_exploration_split_v1.yaml`.
 - `reports.py` pulls W&B training history and writes matplotlib plots plus exported metrics under `<run>/reports/` without starting Ray or the simulator.
-- `cli.py` provides train, evaluate, report, and inspect commands.
+- `cli.py` provides train, evaluate, report, inspect, and rollout commands.
 - `__init__.py` re-exports rollout, trajectory, and lazy learned-policy APIs.
 
 RLlib uses its own collectors for online learning. Checkpoint-backed policies implement `Agent` and reuse the runner for matched evaluation and trajectory export.
@@ -384,113 +409,53 @@ Converts the internal Python `WorldState` into the existing frontend `SimSnapsho
 
 When a field is added to authoritative state, decide explicitly whether the UI needs it. If it does, update this adapter and the matching frontend type together.
 
-## 11. Tests
+### `engine/aresim/integrations/policy.py`
 
-### `engine/tests/test_agents.py`
+Bridges one live `AresEngine` session to a registered baseline, Jev, or checkpoint agent for UI Algorithm mode.
 
-Tests agent registration/contracts, deterministic RNG reset, random legality differences, Wait, and scripted priorities without exposing engine state.
+- Builds policy observations and legal-action masks from the current world state.
+- Decodes the chosen action ID back into an engine command.
+- Caches checkpoint agents in-process; does not start a second environment or duplicate simulator rules.
 
-### `engine/tests/test_components.py`
-
-Tests observation schemas, configurable crops, edge padding, hidden-cell exclusion, action decoding/mask parity, targetless reward profiles, and all terminal reasons.
-
-### `engine/tests/test_envs.py`
-
-Runs Gymnasium and PettingZoo compliance/seed tests, direct-engine parity, adapter parity, lifecycle validation, reward auditing, and all three engine failure paths.
-
-### `engine/tests/test_extensibility.py`
-
-Provides reusable protocol contract checks and deliberately different custom observation, action, reward, and task implementations. It verifies reset-aware state, typed context factories, invalid factory rejection, custom configuration capture, non-`Discrete.n` mask spaces, and direct/Gymnasium/PettingZoo parity.
-
-### `engine/tests/test_rollouts.py`
-
-Tests exact external limits, natural termination precedence, explicit seed behavior, deterministic rollout results, reward auditing, and configuration validation.
-
-### `engine/tests/test_trajectories.py`
-
-Tests plain/gzip JSONL round trips, supported spaces, dtype restoration, deterministic compression, sharding, and corruption rejection.
-
-### `engine/tests/test_rllib_pipeline.py`
-
-Tests checkout experiment YAML, fixed seed splits, model masking, registry name rejection, canonical W&B metric mapping, W&B-backed report inputs, optional-dependency isolation, and the opt-in real PPO/checkpoint smoke path.
-
-### `engine/tests/test_engine.py`
-
-Tests deterministic generation and simulator rules.
-
-Coverage currently includes:
-
-- default validation and isolated configuration overrides;
-- same-seed determinism, different generated worlds, and safe landing pads;
-- identical final checksums for identical command sequences;
-- every public action and invalid transitions;
-- atomic payload-capacity enforcement and unloading;
-- latched build-pad service state;
-- livability failure behavior;
-- pause and resume without time advancement.
-
-Add tests here for changes to `types.py`, configuration, generation, checksums, engine coordination, or gameplay rules.
-
-### `engine/tests/test_gameplay.py`
-
-Tests gameplay recording, validation, compatibility, and reconstruction.
-
-Coverage currently includes:
-
-- step deltas and interval, event, and final checkpoints;
-- exact replay step, jump, and reset reconstruction;
-- checkpoint priority when multiple checkpoint reasons share a step;
-- canonical files, legacy LLM metadata, legacy wrappers, and raw snapshots;
-- rejection of structurally invalid gameplay.
-
-Add tests here whenever the save schema, delta format, checkpoint policy, legacy normalization, or replay navigation changes.
-
-### `engine/tests/test_api.py`
-
-Tests the REST boundary through an in-process FastAPI client.
-
-Coverage currently includes:
-
-- session creation, action, pause, save, replay load, and replay navigation routes;
-- consistent typed error responses;
-- raw snapshot upload normalization;
-- oversized files, unsupported schemas, and malformed gameplay.
-
-Add tests here for route contracts, request validation, error mapping, service/session behavior visible over HTTP, or application construction.
-
-## 12. Where to make common changes
+## 11. Where to make common changes
 
 | Change | Primary file(s) | Also verify |
 |---|---|---|
-| Tune an existing gameplay value | `aresim/defaults.py` | Relevant rule test and behavior documentation |
-| Add a configurable value | `aresim/config.py`, `aresim/defaults.py` | Validation and tests |
-| Add or change authoritative state | `aresim/types.py` | Generation, rules, UI adapter, save/replay compatibility, tests |
-| Change terrain or initial-world generation | `aresim/core/generation.py` | Determinism and landing-pad tests |
-| Change an action or simulator rule | `aresim/core/rules.py` | Engine tests, UI action contract, environment rules |
-| Change reset, step, pause, or resume coordination | `aresim/core/engine.py` | Engine and API tests |
-| Change deterministic fingerprinting | `aresim/core/engine.py` | Determinism tests and stored-manifest expectations |
-| Change the frontend snapshot | `aresim/integrations/ui.py` | Frontend types/store, replay format, API tests |
-| Change saves, checkpoints, or replay | `aresim/gameplay.py` | Gameplay format documentation and replay tests |
-| Change session ownership or a use case | `aresim/service.py` | API and service-facing tests |
-| Add or change an HTTP endpoint | `aresim/api.py` | REST client, API tests, backend documentation |
-| Add a stable public Python import | `aresim/__init__.py` | README example and import tests if needed |
+| Tune an existing gameplay value | `aresim/defaults.py` | Behavior documentation |
+| Add a configurable value | `aresim/config.py`, `aresim/defaults.py` | Validation |
+| Add or change authoritative state | `aresim/types.py` | Generation, rules, UI adapter, save/replay compatibility |
+| Change terrain or initial-world generation | `aresim/core/generation.py` | Determinism and landing-pad behavior |
+| Change an action or simulator rule | `aresim/core/rules.py` | UI action contract, environment rules |
+| Change reset, step, pause, or resume coordination | `aresim/core/engine.py` | API and session behavior |
+| Change deterministic fingerprinting | `aresim/core/engine.py` | Stored-manifest expectations |
+| Change the frontend snapshot | `aresim/integrations/ui.py` | Frontend types/store, replay format |
+| Change saves, checkpoints, or replay | `aresim/gameplay.py` | Gameplay format documentation |
+| Change session ownership or a use case | `aresim/service.py` | API and session behavior |
+| Add or change an HTTP endpoint | `aresim/api.py` | REST client, backend documentation |
+| Add a stable public Python import | `aresim/__init__.py` | README example |
 | Add or change a dependency | `pyproject.toml` | README setup and dependency rationale |
-| Change actor observation or normalization | `components/observations.py`, environment config/defaults | Space, leakage, and adapter-parity tests |
+| Change actor observation or normalization | `components/observations.py`, environment config/defaults | Space, leakage, and adapter parity |
 | Change the RL action mapping or mask | `components/actions.py` | Core validator agreement and PettingZoo sampling |
-| Change RL reward/task projection | `components/rewards.py`, `components/tasks.py` | Engine reward separation and parity tests |
+| Change RL reward/task projection | `components/rewards.py`, `components/tasks.py` | Engine reward separation and adapter parity |
 | Change environment adapter shapes | `envs/` | Gymnasium/PettingZoo compliance and direct parity |
 | Add or change a baseline policy | `algorithms/` | Agent contracts, mask behavior, fixed-seed rollouts |
-| Add or change a learned algorithm | `algorithms/ppo/` (or future `algorithms/<name>/`) | Registry, experiment YAML, RLlib smoke tests |
+| Add or change the Jev rover agent | `algorithms/jev/` | Encoder, fake-client fallbacks, attach, rollout YAML |
+| Add or change a learned algorithm | `algorithms/ppo/` or `algorithms/dqn/` | Registry, experiment YAML |
 | Change rollout or trajectory semantics | `training/` | Alignment, integrity, round-trip, and gameplay-format separation |
 
-## 13. Learned-policy training
+## 12. Learned-policy training
 
-The optional learned-policy code is split between `aresim/algorithms/` (policy implementations and training) and `aresim/training/` (rollouts, trajectories, evaluation harness, CLI). RLlib is an implementation detail inside `algorithms/ppo/train.py`, not the public package name:
+The optional learned-policy code is split between `aresim/algorithms/` (policy implementations and training) and `aresim/training/` (rollouts, trajectories, evaluation harness, CLI). RLlib is an implementation detail inside `algorithms/ppo/train.py` and `algorithms/dqn/train.py`, not the public package name:
 
 ```text
 algorithms/ppo/config.py     masked PPO hyperparameters and model architecture
 algorithms/ppo/train.py      actor-critic, RLModule, RLlib/Ray Tune, W&B metrics
 algorithms/ppo/checkpoint.py native checkpoint sidecar and Agent adapter
+algorithms/dqn/config.py     masked DQN hyperparameters
+algorithms/dqn/train.py      Q-network, RLModule, RLlib DQN factory
+algorithms/dqn/checkpoint.py masked DQN sidecar loader
+algorithms/common/encoder.py shared local CNN encoder and illegal-action masking
+algorithms/common/resume.py  run-directory / sidecar resume resolution
 algorithms/registry.py       algorithms, models, and checkpoint loaders
 training/experiments.py      immutable experiment envelope, safe YAML, hashes
 training/seeds.py            fixed train/validation/test manifest
@@ -499,7 +464,7 @@ training/reports.py          W&B metric plots and exported tables under <run>/re
 training/cli.py              train/evaluate/report/inspect commands
 ```
 
-Single-rover PPO trains through `AresGymEnv`. `AresParallelEnv` remains the canonical future multi-rover boundary. Neither training nor evaluation reimplements simulator rules, observations, rewards, or legality.
+Single-rover PPO and DQN train through `AresGymEnv`. `AresParallelEnv` remains the canonical future multi-rover boundary. Neither training nor evaluation reimplements simulator rules, observations, rewards, or legality.
 
 The public boundary is imported from `aresim.training`:
 
@@ -515,7 +480,7 @@ generate_report(run_directory)
 
 RLlib checkpoints remain native and restore through `Agent` for shared evaluation. New algorithms, models, and checkpoint loaders register under new semantic names rather than adding framework conditionals. W&B is the sole application-level training log; `aresim-rl report` writes local plots from that history. See [RL Algorithms, Training, and Evaluation](../rl/rl_quickstart.md).
 
-## 14. Maintenance checklist
+## 13. Maintenance checklist
 
 Whenever `engine/` changes:
 
@@ -524,5 +489,5 @@ Whenever `engine/` changes:
 3. Add, remove, or revise the affected per-file description.
 4. Update the data-flow or common-change table if ownership moved.
 5. Keep planned code clearly separated from implemented code.
-6. Update the relevant tests and domain/API documents.
+6. Update the relevant domain/API documents.
 7. Confirm generated caches and local environment files are not documented as source files.
