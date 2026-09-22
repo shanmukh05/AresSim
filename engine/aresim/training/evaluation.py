@@ -6,7 +6,7 @@ Compares learned policies against fixed seed splits and optional baselines using
 When trajectory recording is off, validation episodes and baselines run in a
 CPU process pool (not training EnvRunners). Recording stays sequential.
 
-**Last updated:** September 11, 2026
+**Last updated:** September 22, 2026
 
 **Contains:** :func:`evaluate_checkpoint`.
 
@@ -73,17 +73,26 @@ class _EvalRow:
     ending_reason: str | None
 
 
+def _expected_task_id(task_name: str) -> str:
+    from ..components.tasks import RESOURCE_MISSION_ID, TASK_ID
+
+    return {"open_exploration": TASK_ID, "resource_mission": RESOURCE_MISSION_ID}.get(task_name, task_name)
+
+
 def _validate_provenance(spec: ExperimentSpec, seeds: SeedSplitManifest, sidecar: dict[str, object]) -> None:
+    """Seed lists are world-generation seeds. Task may differ (open exploration vs mission)."""
     expected = (
         (seeds.scenario_id, spec.environment.scenario_id, "scenario"),
         (seeds.observation_schema, "aresim.obs.local.v1", "observation schema"),
         (seeds.action_schema, "aresim.action.rover.v1", "action schema"),
-        (seeds.task_id, str(sidecar.get("task_id", "")), "task"),
         (seeds.reward_profile, str(sidecar.get("reward_profile", "")), "reward profile"),
     )
     for actual, configured, label in expected:
         if actual != configured:
             raise ValueError(f"seed manifest {label} is incompatible with the experiment")
+    sidecar_task = str(sidecar.get("task_id", ""))
+    if sidecar_task != _expected_task_id(spec.environment.task):
+        raise ValueError("checkpoint task is incompatible with the experiment")
 
 
 def _sparse_return(episode) -> float:

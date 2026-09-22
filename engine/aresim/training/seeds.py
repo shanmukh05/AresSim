@@ -1,7 +1,8 @@
 """Versioned deterministic seed splits for training and evaluation.
 
-Manifests keep train, validation, and test environment seeds disjoint. Checked-in
-YAML lives in repository ``notebooks/``, not the installable package.
+Manifests keep train, validation, and test environment seeds disjoint. ``task_id``
+names the original split family; ``resource_mission`` reuses the same world seeds.
+Checked-in YAML lives in repository ``notebooks/``, not the installable package.
 
 **Last updated:** September 1, 2026
 
