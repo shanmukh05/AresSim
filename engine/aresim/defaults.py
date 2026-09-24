@@ -4,7 +4,7 @@ Single source of truth for world size, cargo limits, reward coefficients,
 observation scales, and default component names. Import-time validation fails
 fast; copy with ``dataclasses.replace`` and never mutate in place.
 
-**Last updated:** September 11, 2026
+**Last updated:** September 24, 2026
 
 **Contains:** ``DEFAULT_ENGINE_CONFIG``, ``DEFAULT_ENVIRONMENT_CONFIG``.
 
@@ -121,10 +121,10 @@ DEFAULT_ENGINE_CONFIG = EngineConfig(
         dust_generation_floor=0.3,
         deficit_battery_cap=1.6,
         deficit_battery_rate=0.055,
-        wait_charge_per_kw=0.85,
-        wait_max_charge=18,
-        pad_charge_per_kw=0.25,
-        pad_max_charge=4,
+        wait_charge_per_kw=0.35,
+        wait_max_charge=8,
+        pad_charge_per_kw=0.08,
+        pad_max_charge=0.8,
     ),
     service=ServiceConfig(
         dust_threshold=0.78,
@@ -163,7 +163,7 @@ DEFAULT_ENGINE_CONFIG = EngineConfig(
         empty_reserve_penalty=0.5,
         power_deficit_cap=0.3,
         power_deficit_rate=0.019,
-        service_bonus=0.22,
+        service_bonus=0.0,
         build_bonus=1.1,
         low_battery_health_threshold=15,
         critical_battery_health_threshold=5,
@@ -173,13 +173,13 @@ DEFAULT_ENGINE_CONFIG = EngineConfig(
     ),
     action=ActionConfig(
         base_drain=MappingProxyType({
-            ActionType.MOVE: 0.32,
-            ActionType.SCAN: 0.24,
+            ActionType.MOVE: 0.55,
+            ActionType.SCAN: 0.40,
             ActionType.EXTRACT: 0.82,
             ActionType.BUILD: 1.05,
-            ActionType.SERVICE: 0.52,
+            ActionType.SERVICE: 0.70,
             ActionType.UNLOAD: 0.18,
-            ActionType.WAIT: 0.0,
+            ActionType.WAIT: 0.20,
             ActionType.INVALID: 0.16,
             ActionType.EVENT: 0.16,
         }),
@@ -291,13 +291,17 @@ DEFAULT_ENVIRONMENT_CONFIG = EnvironmentConfig(
         mission_success=10,
         terminal_failure=-5,
         objective_progress=2,
-        new_scan=0.20,
-        ice_collected=0.10,
+        new_cell=0.0,
+        approach_pad=0.0,
+        goal_potential=1.0,
+        new_scan=0.0,
+        ice_collected=0.40,
         ice_delivered=1.0,
-        samples_delivered=0.60,
-        build_progress=0.15,
-        service_recovery=0.10,
-        undelivered_cargo=-0.80,
+        samples_delivered=0.80,
+        build_progress=0.0,
+        service_recovery=0.0,
+        wait_on_pad=0.0,
+        undelivered_cargo=-1.0,
         hazard_damage=-1,
         energy_used=-0.05,
         invalid_action=-0.10,
@@ -305,7 +309,7 @@ DEFAULT_ENVIRONMENT_CONFIG = EnvironmentConfig(
         clip_min=-2,
         clip_max=2,
     ),
-    task="open_exploration",
+    task="resource_mission",
 )
 
 DEFAULT_ENVIRONMENT_CONFIG.validate()

@@ -4,7 +4,7 @@ Last updated: 2026-09-20
 
 This is the canonical guide to the reinforcement-learning implementation in AresSim. It explains the implemented policies, action-masked PPO, mask-aware DQN, neural network, online sampling, learner updates, evaluation, metrics, checkpoints, and extension surface.
 
-The current `phase1_open_exploration_v1` task has no victory condition. Reward, survival, exploration, legality, safety, and resource behavior are diagnostics—not evidence of mission completion or grounds for promoting a scientifically “best” checkpoint.
+`phase1_open_exploration_v1` has no victory condition. `phase1_resource_mission_v1` succeeds when the rover delivers 12 kg ice and 4 kg ore samples and the build pad is not latched for service. Sparse eval still uses only success, terminal failure, and invalid-action terms.
 
 ## Current implementation status
 
@@ -345,15 +345,20 @@ PPO trains on `aresim.reward.shaped_train.v1`, not the engine/UI reward. Both ar
 
 | Shaped term | Weight | Raw measurement |
 |---|---:|---|
-| Mission success | +10 | Inactive for open exploration |
+| Mission success | +10 | `resource_mission` success |
 | Terminal failure | -5 | Authoritative failure |
-| Objective progress | +2 | Inactive for open exploration |
-| New scan | +0.20 | Newly scanned terrain |
-| Collected ice | +0.20 | Ice collected on Extract |
-| Delivered ice | +0.80 | Delivered mass divided by payload capacity |
-| Delivered samples | +0.12 | Delivered mass divided by payload capacity |
-| Build progress | +0.25 | Normalized build increase |
-| Service recovery | +0.15 | Infrastructure-health or dust recovery |
+| Objective progress | +2 | Mission completion delta |
+| New cell | 0 | First visit (logged, not trained) |
+| Approach pad | 0 | Disabled |
+| Goal potential | +1.00 | `γΦ(s′) − Φ(s)` toward nearer ice or unscanned ore if empty, pad if loaded |
+| New scan | 0 | Newly scanned terrain (logged, not trained) |
+| Collected ice | +0.40 | Ice collected on Extract |
+| Delivered ice | +1.00 | Delivered mass divided by payload capacity |
+| Delivered samples | +0.80 | Delivered mass divided by payload capacity |
+| Build progress | 0 | Disabled |
+| Service recovery | 0 | Disabled (pad camping) |
+| Wait on pad | 0 | Disabled |
+| Undelivered cargo | −1.00 | Remaining ice+sample cargo at episode end / capacity |
 | Health loss | -1.00 | Normalized rover-health loss |
 | Battery use | -0.05 | Normalized colony-battery decrease |
 | Invalid action | -0.10 | Canonical action resolved as invalid |

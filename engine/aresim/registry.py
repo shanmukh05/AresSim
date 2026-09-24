@@ -10,7 +10,7 @@ No automatic discovery or third-party entry points.
 :func:`create_default_registry`, lazy training registry re-exports.
 
 **Built-in component names:** ``local``, ``discrete``, ``shaped_train``,
-``sparse_eval``, ``open_exploration``; agents ``random``, ``random_valid``,
+``sparse_eval``, ``open_exploration``, ``resource_mission``; agents ``random``, ``random_valid``,
 ``wait``, ``scripted``, ``jev``.
 
 **See also:** :mod:`aresim.algorithms.registry` (learned-policy registration),
@@ -178,7 +178,7 @@ class ComponentRegistry:
 
 def create_default_registry() -> ComponentRegistry:
     """Return a fresh registry populated with all built-in RL components."""
-    from .components import DiscreteActions, LocalObservation, OpenExplorationTask, ShapedTrainReward, SparseEvalReward
+    from .components import DiscreteActions, LocalObservation, OpenExplorationTask, ResourceMissionTask, ShapedTrainReward, SparseEvalReward
     from .algorithms import RandomValidAgent, ScriptedAgent, UniformRandomAgent, WaitAgent
     from .algorithms.jev.agent import build_jev_agent
 
@@ -197,6 +197,7 @@ def create_default_registry() -> ComponentRegistry:
         lambda context: SparseEvalReward(context.environment_config.reward_config),
     )
     registry.register_task("open_exploration", lambda context: OpenExplorationTask())
+    registry.register_task("resource_mission", lambda context: ResourceMissionTask())
     registry.register_agent("random", lambda context: UniformRandomAgent())
     registry.register_agent("random_valid", lambda context: RandomValidAgent())
     registry.register_agent("wait", lambda context: WaitAgent())

@@ -423,7 +423,8 @@ def _write_run_manifest(
 ) -> None:
     resolved_wandb_run_id = resolve_wandb_run_id(run_directory, wandb_run_id)
     payload = {"schema_version": RUN_SCHEMA, "framework_id": "rllib", "status": status, "config_hash": spec.config_hash,
-               "experiment": spec.as_dict(), "result_path": result_path, "open_exploration_has_success": False,
+               "experiment": spec.as_dict(), "result_path": result_path,
+               "open_exploration_has_success": spec.environment.task != "open_exploration",
                "promoted_checkpoint": None, "wandb_run_id": resolved_wandb_run_id, "installed_versions": _installed_versions(),
                "artifacts": _artifact_inventory(run_directory) if status == "completed" else []}
     temporary = run_directory / "manifest.json.partial"

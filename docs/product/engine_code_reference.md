@@ -340,7 +340,7 @@ Keep this module thin. It should translate HTTP requests and responses, not dupl
 - `observations.py` builds the bounded local crop, self/colony vectors, categorical telemetry, and empty targetless objective tensors.
 - `actions.py` maps the ten stable action IDs to explicit current/adjacent canonical commands and derives an `int8[10]` mask from core validation.
 - `rewards.py` calculates shaped-training and sparse-evaluation breakdowns from immutable before/after transitions without changing engine/UI history.
-- `tasks.py` delegates termination to the engine's game status and failed rules; open exploration has no success condition or deadline.
+- `tasks.py` delegates engine failures to `game_status`. `open_exploration` has no success condition. `resource_mission` succeeds after target ice and sample delivery with the pad off the service latch.
 - `__init__.py` re-exports the public protocols and built-in component classes.
 
 ### `engine/aresim/envs/`

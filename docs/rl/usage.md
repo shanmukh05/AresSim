@@ -222,8 +222,8 @@ environment:
   observation: local
   action: discrete
   reward: shaped_train
-  task: open_exploration
-  max_episode_steps: 1200
+  task: resource_mission
+  max_episode_steps: 250
 
 algorithm_config:
   total_environment_steps: 102400

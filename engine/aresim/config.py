@@ -325,12 +325,16 @@ class RewardProfileConfig:
     mission_success: float
     terminal_failure: float
     objective_progress: float
+    new_cell: float
+    approach_pad: float
+    goal_potential: float
     new_scan: float
     ice_collected: float
     ice_delivered: float
     samples_delivered: float
     build_progress: float
     service_recovery: float
+    wait_on_pad: float
     undelivered_cargo: float
     hazard_damage: float
     energy_used: float

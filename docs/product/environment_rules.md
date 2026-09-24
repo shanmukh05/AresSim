@@ -1068,7 +1068,7 @@ Blocked penalty:
 
 ## 19. Reward Objectives
 
-Phase 1 no longer uses a mission checklist or checklist victory. The environment is open-ended:
+Phase 1 no longer uses a mission checklist or checklist victory in the engine. The simulator stays open-ended. The optional RL task `resource_mission` can still terminate an episode as success after configured deliveries; that is a training wrapper, not a core victory rule.
 
 - Explore the 32 x 32 Mars map.
 - Scan each rock/ore outcrop at most once.

@@ -7,7 +7,8 @@ read canonical :class:`~aresim.types.WorldState` without mutating it.
 
 **Contains:** ``ObservationBuilder``, ``ActionAdapter``, ``RewardFunction``,
 ``TaskEvaluator`` protocols; ``LocalObservation``, ``DiscreteActions``,
-``ShapedTrainReward``, ``SparseEvalReward``, ``OpenExplorationTask``.
+``ShapedTrainReward``, ``SparseEvalReward``, ``OpenExplorationTask``,
+``ResourceMissionTask``.
 
 **Registry names:** see :func:`aresim.registry.create_default_registry`.
 
@@ -18,7 +19,7 @@ from .actions import DiscreteActions
 from .base import ActionAdapter, ObservationBuilder, RewardFunction, TaskEvaluator
 from .observations import LocalObservation
 from .rewards import ShapedTrainReward, SparseEvalReward
-from .tasks import OpenExplorationTask
+from .tasks import OpenExplorationTask, ResourceMissionTask
 
 __all__ = [
     "ActionAdapter",
@@ -26,6 +27,7 @@ __all__ = [
     "LocalObservation",
     "ObservationBuilder",
     "OpenExplorationTask",
+    "ResourceMissionTask",
     "RewardFunction",
     "ShapedTrainReward",
     "SparseEvalReward",

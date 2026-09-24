@@ -691,13 +691,17 @@ Recommended initial values, to be tuned only on training/validation scenarios:
 | `mission_success` | `1` on successful terminal step | `+10.0` |
 | `terminal_failure` | `1` on failed terminal step | `-5.0` |
 | `objective_progress` | Increase in normalized required-objective progress | `+2.0` |
-| `new_scan` | `1` for first valid scan of a required site | `+0.20` |
-| `ice_collected` | `1` when ice is collected on Extract | `+0.10` |
-| `ice_delivered` | Delivered ice / task target | `+1.0` |
-| `samples_delivered` | Delivered geological sample mass / task target | `+0.60` |
-| `build_progress` | Positive normalized build delta | `+0.15` |
-| `service_recovery` | Normalized restored service/health | `+0.10` |
-| `undelivered_cargo` | Remaining ice+sample cargo at episode end / capacity | `-0.50` |
+| `new_cell` | First visit this episode, scaled by pad distance | `0.0` |
+| `approach_pad` | Reserved seed_23 return proxy | `0.0` |
+| `goal_potential` | `γΦ(s′) − Φ(s)`; Φ = −min(dist ice, dist unscanned rock)/16 if empty else −dist(pad)/16 | `+1.0` |
+| `new_scan` | `1` for first valid scan of a required site | `0.0` |
+| `ice_collected` | `1` when ice is collected on Extract | `+0.40` |
+| `ice_delivered` | Delivered ice / payload capacity | `+1.0` |
+| `samples_delivered` | Delivered geological sample mass / payload capacity | `+0.80` |
+| `build_progress` | Positive normalized build delta | `0.0` |
+| `service_recovery` | Normalized restored service/health | `0.0` |
+| `wait_on_pad` | Reserved seed_23 Wait penalty | `0.0` |
+| `undelivered_cargo` | Remaining ice+sample cargo at episode end / capacity | `-1.0` |
 | `hazard_damage` | Normalized health loss caused this step | `-1.0` |
 | `energy_used` | Battery used / capacity | `-0.05` |
 | `invalid_action` | `1` for rejected command | `-0.10` |

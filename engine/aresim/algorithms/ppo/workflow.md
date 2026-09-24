@@ -439,16 +439,20 @@ Each step, `_raw_values` measures deltas from the transition; terms are multipli
 
 | Term | Weight | Triggers when |
 |---|---:|---|
-| `mission_success` | +10 | Task success (inactive in open exploration) |
+| `mission_success` | +10 | Task success (`resource_mission` only) |
 | `terminal_failure` | −5 | Authoritative episode failure |
-| `objective_progress` | +2 | Task objective delta (inactive in open exploration) |
-| `new_scan` | +0.20 | `terrain_scanned` increases |
-| `ice_collected` | +0.10 | `ice_collected` increases (Extract) |
+| `objective_progress` | +2 | Mission completion delta (`resource_mission`) |
+| `new_cell` | 0 | First visit (logged, not trained) |
+| `approach_pad` | 0 | Seed_23 return proxy (disabled) |
+| `goal_potential` | +1.00 | `γΦ(s′) − Φ(s)`; Φ = −min(dist ice, dist unscanned rock)/16 if empty else −dist(pad)/16. Zero on Extract/Unload |
+| `new_scan` | 0 | Scan increment (logged, not trained) |
+| `ice_collected` | +0.40 | `ice_collected` increases (Extract) |
 | `ice_delivered` | +1.00 | Ice delivered / payload capacity |
-| `samples_delivered` | +0.60 | Samples delivered / capacity |
-| `build_progress` | +0.15 | Habitat build progress increases |
-| `service_recovery` | +0.10 | SERVICE action improves health or reduces dust |
-| `undelivered_cargo` | −0.50 | Remaining ice+sample cargo at episode end / capacity |
+| `samples_delivered` | +0.80 | Samples delivered / capacity |
+| `build_progress` | 0 | Habitat build (disabled) |
+| `service_recovery` | 0 | SERVICE recovery (disabled; pad camping) |
+| `wait_on_pad` | 0 | Seed_23 Wait penalty (disabled) |
+| `undelivered_cargo` | −1.00 | Remaining ice+sample cargo at episode end / capacity |
 | `hazard_damage` | −1.00 | Rover health decreases |
 | `energy_used` | −0.05 | Colony battery decreases |
 | `invalid_action` | −0.10 | Effective action is INVALID |
@@ -456,7 +460,7 @@ Each step, `_raw_values` measures deltas from the transition; terms are multipli
 
 Non-terminal totals are clipped to **`[-2, 2]`** before being returned as the Gymnasium reward. Terminal success/failure terms are not clipped. Sparse evaluation (`sparse_eval`) zeros most shaping terms and is used for frozen checkpoint comparison, not online PPO training.
 
-Because `build_progress` and `service_recovery` are easy to trigger on the landing pad, short smoke runs can converge to **pad-local policies** that rarely move. Longer training (`reference.yaml`) and exploration-favoring reward balance are needed for movement-heavy behavior.
+`resource_mission` makes `mission_success` and `objective_progress` live: deliver 12 kg ice, 4 kg ore samples, and keep `service_needed` false. Dense shaping is `goal_potential` only: closer to the nearer of unextracted ice or unscanned ore-rock while empty, closer to the pad while carrying. Movement proxies (`new_cell`, `approach_pad`, `wait_on_pad`, `new_scan`, `build_progress`) stay in the breakdown at weight 0. Wait after a haul can still refill (`wait_max_charge` 8, pad only).
 
 ---
 

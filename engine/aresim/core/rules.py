@@ -299,7 +299,7 @@ def _apply_battery_from_margin(state: WorldState, action: ActionType, margin: fl
         drain = min(config.power.deficit_battery_cap, abs(margin) * config.power.deficit_battery_rate)
         state.resources.battery = clamp(state.resources.battery - drain, 0, 100)
         return
-    if action == ActionType.WAIT:
+    if action == ActionType.WAIT and rover_on_build_pad(state):
         state.resources.battery = clamp(state.resources.battery + _wait_recharge(margin, config), 0, 100)
         return
     if rover_on_build_pad(state):
