@@ -14,7 +14,7 @@ import type { TerrainPresentation, WorldPresentation } from "../presentation/typ
 import { useAresStore } from "../state/useAresStore";
 import type { CameraView, OverlayMode, SelectionTarget, TerrainType } from "../types/sim";
 import { ambientTimeFor, type AmbientTimeState } from "../lib/ambientTime";
-import { isInsideRoverObservation, roverObservationBounds, ROVER_OBSERVATION_SIZE } from "../lib/roverObservation";
+import { isInsideRoverObservation, roverObservationBounds } from "../lib/roverObservation";
 
 const TERRAIN_COLORS: Record<TerrainType, string> = {
   regolith: "#a64f2d",
@@ -66,7 +66,8 @@ export function GameViewport() {
   const extractedMarkerCount = world.terrain.filter((cell) => cell.extracted).length;
   const pathArrowCount = Math.max(0, Math.ceil((world.path.length - 1) / 3));
   const roverCenter = rover ? { x: rover.x + 0.5, y: rover.y + 0.5 } : null;
-  const observationBounds = rover ? roverObservationBounds(rover) : null;
+  const windowSize = world.observationWindowSize;
+  const observationBounds = rover && windowSize > 0 ? roverObservationBounds(rover, windowSize) : null;
   const roverHeading = useMemo(() => ({ x: Math.sin(roverYaw), z: -Math.cos(roverYaw) }), [roverYaw]);
   const worldCenter = { x: world.dimensions.width / 2, y: world.dimensions.height / 2 };
   const visibleWidth = zoomMode === "fit" ? world.dimensions.width : Math.min(world.dimensions.width, world.dimensions.width / zoomScale);
@@ -158,8 +159,8 @@ export function GameViewport() {
       data-survey-projection={cameraView === "survey" ? "angled-orthographic-3d" : undefined}
       data-top-projection={cameraView === "top" ? "window-aligned-square" : undefined}
       data-grid-visible={showGrid}
-      data-observation-preview={showRoverVisibility ? "local-8" : "off"}
-      data-observation-window={observationBounds ? `${observationBounds.minX},${observationBounds.minY},${ROVER_OBSERVATION_SIZE},${ROVER_OBSERVATION_SIZE}` : undefined}
+      data-observation-preview={showRoverVisibility && observationBounds ? `local-${observationBounds.windowSize}` : "off"}
+      data-observation-window={observationBounds ? `${observationBounds.minX},${observationBounds.minY},${observationBounds.windowSize},${observationBounds.windowSize}` : undefined}
       data-extracted-markers={extractedMarkerCount}
       data-path-arrows={pathArrowCount}
       data-scanned-markers={scannedMarkerCount}
@@ -440,13 +441,13 @@ function MarsWorld({
       {world.structures.filter((structure) => terrainAt(world, structure.x, structure.y)?.terrain !== "build_pad").map((structure) => (
         <Structure key={structure.id} structure={structure} world={world} selected={selectedTarget?.kind === "structure" && selectedTarget.id === structure.id} onSelect={onSelect} onHover={onHover} />
       ))}
-      {showRoverVisibility && world.rovers[0] ? <RoverVisibilityMask rover={world.rovers[0]} world={world} /> : null}
+      {showRoverVisibility && world.observationWindowSize > 0 && world.rovers[0] ? <RoverVisibilityMask rover={world.rovers[0]} world={world} /> : null}
     </group>
   );
 }
 
 function RoverVisibilityMask({ rover, world }: { rover: WorldPresentation["rovers"][number]; world: WorldPresentation }) {
-  const bounds = roverObservationBounds(rover);
+  const bounds = roverObservationBounds(rover, world.observationWindowSize);
   const worldLeft = -world.dimensions.width / 2;
   const worldRight = world.dimensions.width / 2;
   const worldTop = -world.dimensions.height / 2;
@@ -456,7 +457,7 @@ function RoverVisibilityMask({ rover, world }: { rover: WorldPresentation["rover
   const openingTop = Math.max(worldTop, bounds.minY - world.dimensions.height / 2);
   const openingBottom = Math.min(worldBottom, bounds.maxYExclusive - world.dimensions.height / 2);
   const [roverX, roverZ] = cellToWorld(rover.x, rover.y, world.dimensions);
-  const hiddenCells = world.terrain.filter((cell) => !isInsideRoverObservation(cell.x, cell.y, rover));
+  const hiddenCells = world.terrain.filter((cell) => !isInsideRoverObservation(cell.x, cell.y, rover, world.observationWindowSize));
   const perimeter: Array<[number, number, number]> = [
     [openingLeft, 0.34, openingTop],
     [openingRight, 0.34, openingTop],

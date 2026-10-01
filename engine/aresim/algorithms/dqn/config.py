@@ -30,6 +30,8 @@ class MaskedDQNConfig:
 
     total_environment_steps: int = 4096
     rollout_batch_size: int = 256
+    rollout_fragment_length: int = 32
+    training_intensity: float = 4.0
     train_batch_size: int = 32
     replay_capacity: int = 8192
     learning_starts: int = 512
@@ -59,6 +61,7 @@ class MaskedDQNConfig:
         for name, value in (
             ("total_environment_steps", self.total_environment_steps),
             ("rollout_batch_size", self.rollout_batch_size),
+            ("rollout_fragment_length", self.rollout_fragment_length),
             ("train_batch_size", self.train_batch_size),
             ("replay_capacity", self.replay_capacity),
             ("learning_starts", self.learning_starts),
@@ -69,12 +72,16 @@ class MaskedDQNConfig:
             positive_integer(value, name)
         if self.replay_capacity < self.train_batch_size:
             raise ValueError("replay_capacity must be at least train_batch_size")
+        if self.rollout_fragment_length < self.n_step:
+            raise ValueError("rollout_fragment_length must be at least n_step")
         if self.total_environment_steps < self.learning_starts:
             raise ValueError("total_environment_steps must be at least learning_starts")
         if self.learning_starts > self.replay_capacity:
             raise ValueError("learning_starts cannot exceed replay_capacity")
 
     def _validate_rates(self) -> None:
+        if finite_number(self.training_intensity, "training_intensity") <= 0:
+            raise ValueError("training_intensity must be positive")
         gamma = finite_number(self.gamma, "gamma")
         if not 0 < gamma <= 1:
             raise ValueError("gamma is outside its valid range")

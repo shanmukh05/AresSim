@@ -25,6 +25,7 @@ from pathlib import PurePath
 from typing import Literal
 
 from .config import ReplayConfig
+from .defaults import DEFAULT_ENVIRONMENT_CONFIG
 
 JsonObject = dict[str, object]
 
@@ -397,6 +398,7 @@ def _is_snapshot(value: object) -> bool:
 
 def _hydrate_snapshot(snapshot: JsonObject) -> JsonObject:
     current = deepcopy(snapshot)
+    current.setdefault("observationWindowSize", DEFAULT_ENVIRONMENT_CONFIG.observation_config.window_size)
     rovers = current.get("rovers")
     if isinstance(rovers, list):
         for rover in rovers:

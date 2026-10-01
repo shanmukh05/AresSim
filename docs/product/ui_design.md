@@ -123,7 +123,7 @@ Rover POV is a level first-person perspective just above the rover. Discrete cel
 
 The complete navigation surface is one upper-right Environment cluster. It contains a three-button 3D Survey/Top/Rover POV viewpoint row, camera zoom, angle readout/reset and continuous rotation in 3D Survey, contextual guidance, a dedicated three-icon audio/cell-boundary/rover-visibility row, icon-only analytical layers, and the interactive mini navigation map while manually zoomed. No analytical layer is selected by default; clicking the active layer icon again returns to the unmodified terrain surface. The mini map displays the current visible rectangle and accepts pointer clicks to pan the zoomed camera.
 
-The flashlight icon toggles a diagnostic preview of `aresim.obs.local.v1` in every camera view. When active, an 8×8 square around the rover remains illuminated while four dark volumetric masks suppress the rest of the terrain and structures. A fine pale perimeter and restrained rover-centered light make the boundary legible without adding a checkerboard. The preview follows the rover after every movement and exposes its active bounds through viewport diagnostics. It is off by default and changes no simulator state, observation content, action, reward, or replay. The active policy schema uses `self[10]`, categorical `pad_proximity`, no occupancy/entity tensors, and one flat masked `Discrete(10)` action head; remaining training steps or Sols are not UI or policy telemetry.
+The flashlight icon toggles a diagnostic preview of `aresim.obs.local.v1` in every camera view. When active, the rover-centered crop (`window_size` from `engine/aresim/defaults.py`) remains illuminated while four dark volumetric masks suppress the rest of the terrain and structures. A fine pale perimeter and restrained rover-centered light make the boundary legible without adding a checkerboard. The preview follows the rover after every movement and exposes its active bounds through viewport diagnostics. It is off by default and changes no simulator state, observation content, action, reward, or replay. The active policy schema uses `self[10]`, categorical `pad_proximity`, no occupancy/entity tensors, and one flat masked `Discrete(10)` action head; remaining training steps or Sols are not UI or policy telemetry.
 
 Camera state is UI-only.
 
@@ -394,7 +394,7 @@ UI owned:
 - selected/hovered target;
 - active analytical layer, with `none` as the default;
 - cell-boundary visibility, hidden by default;
-- rover-visibility preview, hidden by default; this visualizes but does not define the always-local 8×8 policy observation;
+- rover-visibility preview, hidden by default; this visualizes but does not define the rover-centered policy observation;
 - audio mute;
 - camera zoom mode and target;
 - continuous camera angle;

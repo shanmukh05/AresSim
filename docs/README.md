@@ -22,7 +22,9 @@ Canonical and planned project docs, grouped by purpose. Historical research note
 | [Algorithm Pipeline Notebook](../notebooks/rl_algorithm_pipeline.ipynb) | Baseline rollout, trajectory, validation, and determinism smoke test |
 | [Evaluation Report Template](../notebooks/evaluation_report_template.ipynb) | Optional manual W&B analysis notebook |
 | [Agent Data, RL, and LLM Proposal](rl/agent_data_rl_llm_proposal.md) | Observations, actions, adapters, datasets, LLM interface |
-| [LLM Agent and Autoresearch Plan](llm/llm_agent_autoresearch_plan.md) | Provider-neutral LLM agents, bounded tools and memory, evaluation, autoresearch, swarms, and UI integration |
+| [Experience-Driven Agent Learning Plan](llm/experience_driven_llm_agent_learning_plan.md) | LLM-designed state views, evidence-gated memory, fast decision actors, providers, UI, and cross-game tests |
+| [LLM Component Research Plan](llm/component_research_plan.md) | Research questions and controlled tests for history, memory, state views, actors, and transfer |
+| [LLM Agent Literature Review](llm/literature_survey.md) | Evidence and limitations for representations, memory, fast actors, search, and transfer |
 | [Algorithm Literature Survey](rl/algorithm_literature_survey.md) | Algorithms worth testing and research priorities |
 
 ## Project — status and contributor rules

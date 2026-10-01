@@ -23,7 +23,7 @@ from ..ppo.checkpoint import (
     _nonempty_text,
     _validate_inventory,
 )
-from ...training.experiments import parse_experiment
+from ...training.experiments import experiment_payload_hash, parse_experiment
 
 
 class BuiltinCheckpointLoader:
@@ -57,8 +57,9 @@ def _validate_sidecar(payload: dict[str, object], loader_id: str) -> None:
     if not all(_nonempty_text(payload.get(key)) for key in ("task_id", "reward_profile")):
         raise ValueError("RLlib checkpoint task/reward provenance is invalid")
     experiment = payload.get("experiment")
-    if not isinstance(experiment, dict) or parse_experiment(experiment).config_hash != payload.get("config_hash"):
+    if not isinstance(experiment, dict) or experiment_payload_hash(experiment) != payload.get("config_hash"):
         raise ValueError("RLlib checkpoint configuration hash is invalid")
+    parse_experiment(experiment)
 
 
 __all__ = ["BuiltinCheckpointLoader"]

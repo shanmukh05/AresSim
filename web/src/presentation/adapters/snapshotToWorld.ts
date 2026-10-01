@@ -36,6 +36,7 @@ export function snapshotToWorld(snapshot: SimSnapshot): WorldPresentation {
   return {
     seed: snapshot.seed,
     dimensions: snapshot.terrainSize,
+    observationWindowSize: snapshot.observationWindowSize,
     terrain,
     rovers: snapshot.rovers.map((rover) => ({ ...rover, kind: "rover" })),
     structures: snapshot.structures.map((structure) => ({ ...structure, kind: "structure" })),

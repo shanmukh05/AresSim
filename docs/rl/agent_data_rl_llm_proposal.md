@@ -405,6 +405,8 @@ Each of at most eight rows represents one declared objective.
 
 All values are normalized to `[0,1]`. `objective_mask[row] = 1` marks a valid row.
 
+Phase 1 fills five live rows from world stats: `extract_ice` (`ice_collected / 12 kg`), `deliver_ice` (`ice_delivered / 12 kg`), `scan` (`samples_delivered / 4 kg`), `service` (1 if the pad is not latched), `survive` (`battery / 100`). Remaining slots stay padding. Rows are progress only; they do not contain bearings or map coordinates.
+
 #### Why Phase 1 omits occupancy and entity tables
 
 The single active rover is always at local `[3,3]`, and its global position and state are already present in `self`. Habitat, solar, battery, storage, and extractor roles belong to the integrated Build Pad; they are not independently navigable obstacles or separate action targets for the Phase 1 policy. Their useful aggregate effects are already represented by `terrain_type = build_pad`, Colony telemetry, habitat progress, and the service-needed bit.

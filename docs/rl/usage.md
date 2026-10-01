@@ -66,7 +66,7 @@ Masked PPO and mask-aware DQN are the implemented learned algorithms. Training i
 | [`configs/masked_ppo/reference.yaml`](../../configs/masked_ppo/reference.yaml) | 2,097,152 | online | Longer reference training (28 env runners + CUDA learner; needs a GPU host such as JarvisLabs L4) |
 | [`configs/masked_dqn/smoke.yaml`](../../configs/masked_dqn/smoke.yaml) | 4,096 | disabled | Masked DQN pipeline smoke (uniform replay, n-step=1) |
 | [`configs/masked_dqn/dev.yaml`](../../configs/masked_dqn/dev.yaml) | 102,400 | online | Local DQN development (2 env runners) |
-| [`configs/masked_dqn/reference.yaml`](../../configs/masked_dqn/reference.yaml) | 2,097,152 | online | DQN reference (4 env runners + CUDA learner; n-step=3) |
+| [`configs/masked_dqn/reference.yaml`](../../configs/masked_dqn/reference.yaml) | 2,097,152 | online | Double Dueling DQN reference (`rllib_masked_double_dueling_dqn_reference`, 4 env runners + CUDA learner; n-step=3) |
 | [`configs/jev/smoke.yaml`](../../configs/jev/smoke.yaml) | 20 (rollout) | n/a | Fake-client Jev pipeline smoke |
 | [`configs/jev/dev.yaml`](../../configs/jev/dev.yaml) | 40 (rollout) | n/a | Live Jev episodes (requires `JEV_API_KEY`) |
 

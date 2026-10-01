@@ -1,6 +1,6 @@
 # AresSim Algorithm Literature Survey and Research Proposals
 
-Last updated: 2026-09-12
+Last updated: 2026-09-27
 
 Status: Short research guide. It does not change the composed environment, single-rover Gymnasium adapter, future PettingZoo multi-agent contract, or RLlib training architecture in [RL Algorithms, Training, and Evaluation](rl_quickstart.md).
 
@@ -55,6 +55,16 @@ recent local observations + action sequence
 ```
 
 Use short and medium prediction distances so the representation must capture both rover movement and slower colony changes. This is closer to Self-Predictive Representations than applying image-only I-JEPA unchanged. Compare a frozen encoder, a fine-tuned encoder, and an identical randomly initialized encoder.
+
+**Which JEPA to test (2023–2026).** AresSim is an 8×8 symbolic crop, Discrete(10), masks, and seed-varying maps. Do **not** download I-JEPA / V-JEPA video weights or reconstruct pixels. Steal the *objective* (predict future latents; EMA or stop-grad target) and, when useful, the *action-conditioned predictor*. Test these three in order:
+
+| Order | What to implement | Paper | Why it fits AresSim | Skip if |
+|---:|---|---|---|---|
+| 1 | **SPR / Mars-JEPA** on the existing local CNN | Schwarzer et al., ICLR 2021 | Action-conditioned multi-step latent prediction as an auxiliary on masked PPO or Double Dueling DQN. Small, discrete-native, matches §3.1 exactly. Teaches “Move East shifts the crop” and “Unload changes cargo/colony” without a decoder. | Encoder already saturates on held-out seeds. |
+| 2 | **V-JEPA 2-AC recipe** on symbolic windows (tiny, not the 1.2B video model) | Assran et al., 2025 | Phase 1: action-free temporal JEPA on observation windows. Phase 2: freeze encoder, train a small action-conditioned predictor. Optional CEM over the 10 actions, scored in latent space. Latest JEPA world-model recipe; planning stays outside engine truth. | Phase 1 SPR encoder does not beat a random encoder (then a fancier predictor will not help). |
+| 3 | **TD-JEPA** on mixed offline trajectories | Bagatella et al., ICLR 2026 | TD latent prediction of *long-horizon* dynamics from reward-free transitions, then reuse the encoder (or latent policies) for ice vs samples vs survive. Closest JEPA to “where is the pad / how far is a haul” without a compass. Needs scripted + PPO/DQN logs. | Not enough diverse offline data, or order-2 predictor already fails one-step crop dynamics. |
+
+**Not first tests:** I-JEPA / V-JEPA (no actions; pixels). DINO-WM (frozen vision encoder). ACT-JEPA (needs expert IL; try later with scripted demos). PLDM (Sobal et al., 2025) is a strong *navigation planner* on JEPA latents—promote it only after order 2 works. Value-guided / Temporal-Distance JEPA (2026) reshape planning cost; they need a working JEPA-WM first.
 
 ### 3.2 Safety-aware latent world model
 
@@ -127,6 +137,12 @@ Use the same observation, action, reward, seed, and episode-limit manifests acro
 - [Decision Transformer](https://proceedings.neurips.cc/paper/2021/hash/7f489f642a0ddb10272b5c31057f0663-Abstract.html)
 - [Data-Efficient Reinforcement Learning with Self-Predictive Representations](https://arxiv.org/abs/2007.05929)
 - [Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture](https://openaccess.thecvf.com/content/CVPR2023/html/Assran_Self-Supervised_Learning_From_Images_With_a_Joint-Embedding_Predictive_Architecture_CVPR_2023_paper.html)
+- [V-JEPA: Latent Video Prediction](https://arxiv.org/abs/2404.08471)
+- [V-JEPA 2: Self-Supervised Video Models Enable Understanding, Prediction and Planning](https://arxiv.org/abs/2506.09985)
+- [TD-JEPA: Latent-predictive Representations for Zero-Shot Reinforcement Learning](https://arxiv.org/abs/2510.00739)
+- [Learning from Reward-Free Offline Data: A Case for Planning with Latent Dynamics Models (PLDM)](https://arxiv.org/abs/2502.14819)
+- [ACT-JEPA: Joint-Embedding Predictive Architecture for Policy Representation Learning](https://arxiv.org/abs/2501.14622)
+- [What Drives Success in Physical Planning with Joint-Embedding Predictive World Models?](https://arxiv.org/abs/2512.24497)
 - [Mastering Diverse Domains through World Models (DreamerV3)](https://arxiv.org/abs/2301.04104)
 - [TD-MPC2: Scalable, Robust World Models for Continuous Control](https://arxiv.org/abs/2310.16828)
 - [MuZero: Planning with a Learned Model](https://www.nature.com/articles/s41586-020-03051-4)

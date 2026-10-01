@@ -4,8 +4,17 @@ import * as Dialog from "@radix-ui/react-dialog";
 import * as Tabs from "@radix-ui/react-tabs";
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
+import { useAresStore } from "../state/useAresStore";
 
 export function GameInfoModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const snapshot = useAresStore((state) => state.snapshot);
+  const crop = snapshot?.observationWindowSize;
+  const mapWidth = snapshot?.terrainSize.width;
+  const mapHeight = snapshot?.terrainSize.height;
+  const anchor = crop == null ? null : Math.floor((crop - 1) / 2);
+  const cropCopy = crop == null || mapWidth == null || mapHeight == null || anchor == null
+    ? "Policies see a rover-centered local crop, not the complete world. The rover sits near the crop center; world-edge slots are unknown padding. Use the flashlight icon beside Sound and Cell Boundaries to preview this crop in 3D Survey, Top, or Rover POV. The preview is visual only and does not alter actions or rewards."
+    : `Policies see a rover-centered ${crop}x${crop} crop, not the complete ${mapWidth}x${mapHeight} world. The rover is local cell [${anchor},${anchor}], covering offsets -${anchor} through +${crop - 1 - anchor}; world-edge slots are unknown padding. Use the flashlight icon beside Sound and Cell Boundaries to preview this exact crop in 3D Survey, Top, or Rover POV. The preview is visual only and does not alter actions or rewards.`;
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -43,7 +52,7 @@ export function GameInfoModal({ open, onOpenChange }: { open: boolean; onOpenCha
                   The empty space behind the world also reflects local Sol time: an illustrated Sun and corona cross the background during daylight, the horizon warms at dawn and dusk, and a restrained Mars-sky guide appears at night. Phobos is the larger, faster irregular moon; Deimos is smaller and smoother. Earth, Venus, Jupiter, and Saturn use compact recognizable illustrations for orientation, not live astronomical positions. This ambient clock never overlays or recolors gameplay terrain.
                 </GuideSection>
                 <GuideSection title="Rover Visibility">
-                  Policies see a fixed 8x8 square, not the complete 32x32 world. The rover is local cell [3,3], covering offsets -3 through +4; world-edge slots are unknown padding. Use the flashlight icon beside Sound and Cell Boundaries to preview this exact crop in 3D Survey, Top, or Rover POV. The preview is visual only and does not alter actions or rewards.
+                  {cropCopy}
                 </GuideSection>
                 <GuideSection title="Determinism And Seeds">
                   Every seed reproduces the same terrain channels, landing build pad, rover start, starter infrastructure, weather, colony resources, and initial events. Different seeds usually produce visibly different maps while still satisfying landing-zone validity. Randomize creates a new deterministic world; Set starts the entered seed.

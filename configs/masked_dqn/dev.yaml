@@ -7,6 +7,8 @@ learner_seed: 7
 algorithm_config:
   total_environment_steps: 102400
   rollout_batch_size: 1024
+  rollout_fragment_length: 32
+  training_intensity: 2.0
   train_batch_size: 256
   replay_capacity: 100000
   learning_starts: 5000
@@ -32,7 +34,7 @@ checkpoint:
 tracking:
   mode: online
   project: aresim
-  tags: [dev, dqn]
+  tags: [dev, double_dueling_dqn]
 artifacts:
   root: results
   reject_existing: true

@@ -4,7 +4,7 @@ Owns the CNN + telemetry trunk for ``aresim.obs.local.v1``. Masked PPO and
 masked DQN attach different heads; neither this module nor those heads may
 read ``WorldState`` or rebuild legality.
 
-**Last updated:** September 12, 2026
+**Last updated:** September 26, 2026
 
 **See also:** :mod:`aresim.algorithms.ppo.train`, :mod:`aresim.algorithms.dqn.train`.
 """
@@ -16,20 +16,23 @@ from collections.abc import Mapping
 import torch
 from torch import Tensor, nn
 
+from ...defaults import DEFAULT_ENVIRONMENT_CONFIG
 from ..ppo.config import ModelConfig
 
 
 class LocalObservationEncoder(nn.Module):
-    """Encode an 8×8 local crop plus rover/colony telemetry into a fused vector.
+    """Encode a rover-centered crop plus rover/colony telemetry into a fused vector.
 
-    Illegal-action masking is applied by the policy or Q head, not here.
+    Crop size comes from ``window_size`` or ``defaults.py``. Illegal-action masking
+    is applied by the policy or Q head, not here.
     """
 
-    def __init__(self, config: ModelConfig, window_size: int = 8) -> None:
+    def __init__(self, config: ModelConfig, window_size: int | None = None) -> None:
         """Build spatial and telemetry branches from ``config``."""
         super().__init__()
         config.validate()
-        if window_size <= 0:
+        size = DEFAULT_ENVIRONMENT_CONFIG.observation_config.window_size if window_size is None else window_size
+        if size <= 0:
             raise ValueError("local encoder requires a positive crop")
         self.config = config
         self.terrain_embedding = nn.Embedding(8, config.terrain_embedding)
@@ -38,7 +41,7 @@ class LocalObservationEncoder(nn.Module):
             nn.Conv2d(in_channels, config.conv_channels[0], 3, padding=1), nn.Tanh(),
             nn.Conv2d(config.conv_channels[0], config.conv_channels[1], 3, padding=1), nn.Tanh(), nn.Flatten(),
         )
-        spatial_width = config.conv_channels[1] * window_size * window_size
+        spatial_width = config.conv_channels[1] * size * size
         self.pad_embedding = nn.Embedding(3, 4)
         self.weather_embedding = nn.Embedding(6, 4)
         self.objective_embedding = nn.Embedding(9, config.objective_embedding)

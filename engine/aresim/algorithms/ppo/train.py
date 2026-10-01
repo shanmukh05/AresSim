@@ -82,15 +82,16 @@ class LocalMaskedActorCritic(nn.Module):
     non-finite or no legal action exists in the mask.
     """
 
-    def __init__(self, config: ModelConfig, window_size: int = 8, action_count: int = 10) -> None:
+    def __init__(self, config: ModelConfig, window_size: int | None = None, action_count: int = 10) -> None:
         """Build layers from ``config``; ``action_count`` must be ``10`` for Phase 1."""
         super().__init__()
         config.validate()
-        if window_size <= 0 or action_count != 10:
+        size = DEFAULT_ENVIRONMENT_CONFIG.observation_config.window_size if window_size is None else window_size
+        if size <= 0 or action_count != 10:
             raise ValueError("local actor-critic requires a positive crop and Discrete(10)")
         self.config = config
         self.action_count = action_count
-        self.encoder = LocalObservationEncoder(config, window_size)
+        self.encoder = LocalObservationEncoder(config, size)
         self.policy = nn.Linear(config.fused_width, action_count)
         self.value = nn.Linear(config.fused_width, 1)
         nn.init.orthogonal_(self.policy.weight, gain=0.01)
@@ -328,6 +329,7 @@ def _environment(env_config: Mapping[str, object]):
         config,
         registry=env_config.get("component_registry"),
         max_episode_steps=int(values["max_episode_steps"]),
+        audit=False,
     )
     seeds = tuple(int(seed) for seed in env_config["training_seeds"])
     worker_index = int(getattr(env_config, "worker_index", 0))

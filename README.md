@@ -36,7 +36,7 @@ Phase 1 is open exploration: there is no mission-complete victory. Reward, survi
 
 - **Deterministic world** — seeded terrain (height, roughness, ice, ore, dust), weather, landing pad, and rover start; SHA-256 state checksums after every reset and step
 - **Survival rules** — 10 discrete actions (Wait, N/E/S/W, Scan, Extract, Build, Service, Unload), 12 kg cargo, battery/power/health/livability, and terminal failure conditions
-- **Local policy crop** — `aresim.obs.local.v1` is a fixed `8×8` window with an authoritative legal-action mask; Wait is always legal
+- **Local policy crop** — `aresim.obs.local.v1` is a rover-centered window (`window_size` in `engine/aresim/defaults.py`) with an authoritative legal-action mask; Wait is always legal
 - **3D shell** — orthographic Survey, north-up Top, and Rover POV; zoom, follow, mini-map, visibility flashlight, layers, and Martian day/night
 - **HUD and analytics** — grouped status, mission/warning chips, inspector, guide, and run charts without duplicating engine math
 - **Training stack** — RLlib masked PPO and mask-aware DQN, shared local CNN encoder, mid-run UI-loadable checkpoints, W&B as the sole app-level log

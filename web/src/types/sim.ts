@@ -199,6 +199,7 @@ export interface SimSnapshot {
   gameStatus: GameStatus;
   statusReason: string;
   terrainSize: { width: number; height: number };
+  observationWindowSize: number;
   weather: WeatherState;
   dustIntensity: number;
   resources: {

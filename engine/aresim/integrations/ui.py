@@ -3,7 +3,7 @@
 Field names must stay aligned with ``web/src/types/sim.ts``. This is a projection,
 not a second simulator.
 
-**Last updated:** September 1, 2026
+**Last updated:** September 26, 2026
 
 **Contains:** :func:`snapshot_from_state`.
 
@@ -14,6 +14,7 @@ not a second simulator.
 
 from __future__ import annotations
 
+from ..defaults import DEFAULT_ENVIRONMENT_CONFIG
 from ..types import (
     GameRule,
     HistoryEntry,
@@ -162,6 +163,7 @@ def snapshot_from_state(state: WorldState) -> dict[str, object]:
         "gameStatus": state.game_status.value,
         "statusReason": state.status_reason,
         "terrainSize": {"width": state.terrain_width, "height": state.terrain_height},
+        "observationWindowSize": DEFAULT_ENVIRONMENT_CONFIG.observation_config.window_size,
         "weather": state.weather.value,
         "dustIntensity": state.dust_intensity,
         "resources": _resources(state.resources),

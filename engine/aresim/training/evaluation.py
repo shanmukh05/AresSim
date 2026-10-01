@@ -24,6 +24,7 @@ import csv
 import json
 import multiprocessing
 import os
+from copy import deepcopy
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -31,8 +32,8 @@ from statistics import fmean
 from typing import Any
 
 from ..defaults import DEFAULT_ENVIRONMENT_CONFIG
-from ..factory import make_env
-from .experiments import ExperimentSpec, parse_experiment
+from ..factory import make_agent, make_env
+from .experiments import ExperimentSpec, experiment_payload_hash, parse_experiment
 from .runner import EpisodeSpec, RolloutConfig, RolloutResult, RolloutRunner
 from .seeds import SeedSplitManifest, load_seed_manifest
 from .trajectories import TrajectoryWriter, validate_trajectory_dataset
@@ -165,7 +166,7 @@ def _load_evaluation(checkpoint: Path, split: str) -> tuple[ExperimentSpec, tupl
     if not isinstance(experiment, dict):
         raise ValueError("checkpoint sidecar is missing its resolved experiment")
     spec = parse_experiment(experiment)
-    if sidecar.get("config_hash") != spec.config_hash:
+    if sidecar.get("config_hash") != experiment_payload_hash(experiment):
         raise ValueError("checkpoint configuration hash does not match its experiment")
     seeds = load_seed_manifest(spec.evaluation.seed_manifest)
     _validate_provenance(spec, seeds, sidecar)
@@ -226,12 +227,56 @@ def _eval_episode_job(job: _EvalJob) -> _EvalRow:
             agent = make_checkpoint_agent(job.checkpoint)
     else:
         agent = job.agent_name
-    result = RolloutRunner(
-        RolloutConfig((job.episode,), max_episode_steps=job.max_episode_steps),
-        agent,
-        environment_config=_job_environment_config(job),
-    ).run()
-    return _rows_from_result(result)[0]
+    return _summary_episode(
+        agent, job.episode, _job_environment_config(job), job.max_episode_steps
+    )
+
+
+def _summary_episode(agent, episode: EpisodeSpec, config, max_steps: int, registry=None) -> _EvalRow:
+    """Evaluate one episode without constructing replay snapshots or trajectories."""
+    policy = make_agent(agent, config, registry) if isinstance(agent, str) else agent
+    environment = make_env(config, registry=registry, max_episode_steps=max_steps, audit=False)
+    reset = environment.reset(seed=episode.environment_seed)
+    if policy.action_schema != reset.info["action_schema"]:
+        raise ValueError("evaluation agent action schema is incompatible")
+    if policy.observation_schema is not None and policy.observation_schema != reset.info["observation_schema"]:
+        raise ValueError("evaluation agent observation schema is incompatible")
+    policy.reset(episode.agent_seed)
+    observation, mask = reset.observation, reset.action_mask
+    length = 0
+    shaped_rewards: list[float] = []
+    engine_rewards: list[float] = []
+    sparse_return = 0.0
+    while True:
+        action = policy.act(deepcopy(observation), mask.copy())
+        if not environment.action_space.contains(action):
+            raise ValueError("agent returned an action outside the environment action space")
+        result = environment.step(action)
+        length += 1
+        shaped_rewards.append(float(result.reward))
+        engine_rewards.append(float(result.transition.reward))
+        for name in {"mission_success", "terminal_failure", "invalid_action"}:
+            sparse_return += result.reward_breakdown.terms[name].value
+        if result.terminated or result.truncated:
+            return _EvalRow(
+                policy_id=policy.policy_id,
+                episode_id=episode.episode_id,
+                environment_seed=episode.environment_seed,
+                agent_seed=episode.agent_seed,
+                length=length,
+                shaped_return=float(sum(shaped_rewards)),
+                sparse_return=sparse_return,
+                engine_return=float(sum(engine_rewards)),
+                terminated=result.terminated,
+                truncated=result.truncated,
+                ending_reason=result.info.get("terminal_reason") or result.info.get("truncation_reason"),
+            )
+        observation, mask = result.observation, result.action_mask
+
+
+def _summary_episodes(agent, episodes: tuple[EpisodeSpec, ...], config, max_steps: int, registry=None) -> list[_EvalRow]:
+    policy = make_agent(agent, config, registry) if isinstance(agent, str) else agent
+    return [_summary_episode(policy, episode, config, max_steps, registry) for episode in episodes]
 
 
 def _eval_worker_count(job_count: int) -> int:
@@ -291,24 +336,22 @@ def _evaluate_sequential(
         if record
         else None
     )
-    result = RolloutRunner(
-        RolloutConfig(episodes=episodes, max_episode_steps=spec.environment.max_episode_steps),
-        agent,
-        environment_config=environment_config,
-        registry=component_registry,
-    ).run(writer)
-    if writer is not None:
-        validate_trajectory_dataset(destination / "trajectories")
-    baselines = []
-    for policy in ("random_valid", "scripted"):
-        baseline = RolloutRunner(
+    if writer is None:
+        rows = _summary_episodes(agent, episodes, environment_config, spec.environment.max_episode_steps, component_registry)
+    else:
+        result = RolloutRunner(
             RolloutConfig(episodes=episodes, max_episode_steps=spec.environment.max_episode_steps),
-            policy,
+            agent,
             environment_config=environment_config,
             registry=component_registry,
-        ).run()
-        baselines.append(_baseline_payload(_rows_from_result(baseline)))
-    return _rows_from_result(result), baselines
+        ).run(writer)
+        validate_trajectory_dataset(destination / "trajectories")
+        rows = _rows_from_result(result)
+    baselines = []
+    for policy in ("random_valid", "scripted"):
+        baseline_rows = _summary_episodes(policy, episodes, environment_config, spec.environment.max_episode_steps, component_registry)
+        baselines.append(_baseline_payload(baseline_rows))
+    return rows, baselines
 
 
 def _evaluate_parallel(

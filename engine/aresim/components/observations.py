@@ -1,9 +1,11 @@
 """Builds the bounded rover-centered ``aresim.obs.local.v1`` policy observation.
 
 Projects canonical world state into a fixed local crop plus telemetry vectors.
-Does not mutate state or leak full-map UI camera memory.
+Does not mutate state or leak full-map UI camera memory. Objective slots are a
+mission progress table (how far ice/samples/pad/battery are); they do not
+encode bearings or off-crop locations.
 
-**Last updated:** September 1, 2026
+**Last updated:** September 26, 2026
 
 **Contains:** ``LocalObservation``, ``OBSERVATION_SCHEMA``, terrain/weather ID tables.
 
@@ -23,6 +25,7 @@ from gymnasium import spaces
 from ..config import EngineConfig, ObservationConfig
 from ..core.rules import near_build_pad, rover_on_build_pad
 from ..types import Position, TerrainType, WeatherState, WorldState
+from .tasks import ICE_DELIVERY_TARGET_KG, SAMPLE_DELIVERY_TARGET_KG
 
 
 OBSERVATION_SCHEMA = "aresim.obs.local.v1"
@@ -45,9 +48,41 @@ WEATHER_IDS = {
     WeatherState.COLD_NIGHT: 5,
 }
 
+# Declared ``aresim.obs.local.v1`` type IDs. Rows are progress only.
+OBJECTIVE_TYPE_SCAN = 2
+OBJECTIVE_TYPE_EXTRACT_ICE = 3
+OBJECTIVE_TYPE_DELIVER_ICE = 4
+OBJECTIVE_TYPE_SERVICE = 6
+OBJECTIVE_TYPE_SURVIVE = 7
+
 
 def _bounded(value: float, low: float = 0, high: float = 1) -> float:
     return min(high, max(low, value))
+
+
+def _progress_row(current: float) -> np.ndarray:
+    done = _bounded(current)
+    return np.array((done, 1.0, 1.0 - done, 1.0), dtype=np.float32)
+
+
+def _objective_progress_table(state: WorldState, slot_count: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fill live slots with mission progress. No coordinates or bearings."""
+    types = np.zeros(slot_count, dtype=np.uint8)
+    rows = np.zeros((slot_count, 4), dtype=np.float32)
+    mask = np.zeros(slot_count, dtype=np.uint8)
+    stats = state.objective_stats
+    slots = (
+        (OBJECTIVE_TYPE_EXTRACT_ICE, stats.ice_collected / ICE_DELIVERY_TARGET_KG),
+        (OBJECTIVE_TYPE_DELIVER_ICE, stats.ice_delivered / ICE_DELIVERY_TARGET_KG),
+        (OBJECTIVE_TYPE_SCAN, stats.samples_delivered / SAMPLE_DELIVERY_TARGET_KG),
+        (OBJECTIVE_TYPE_SERVICE, 0.0 if state.build_pad_state.service_needed else 1.0),
+        (OBJECTIVE_TYPE_SURVIVE, state.rovers[0].battery / 100),
+    )
+    for index, (kind, current) in enumerate(slots[:slot_count]):
+        types[index] = kind
+        rows[index] = _progress_row(current)
+        mask[index] = 1
+    return types, rows, mask
 
 
 class LocalObservation:
@@ -152,7 +187,9 @@ class LocalObservation:
         else:
             pad_proximity = 0
 
-        objective_count = self.config.max_objectives
+        objective_type, objectives, objective_mask = _objective_progress_table(
+            state, self.config.max_objectives,
+        )
         return {
             "terrain_type": terrain_type,
             "spatial": spatial,
@@ -161,7 +198,7 @@ class LocalObservation:
             "pad_proximity": pad_proximity,
             "colony": colony,
             "weather_type": WEATHER_IDS[state.weather],
-            "objective_type": np.zeros(objective_count, dtype=np.uint8),
-            "objectives": np.zeros((objective_count, 4), dtype=np.float32),
-            "objective_mask": np.zeros(objective_count, dtype=np.uint8),
+            "objective_type": objective_type,
+            "objectives": objectives,
+            "objective_mask": objective_mask,
         }

@@ -168,8 +168,13 @@ class ExperimentSpec(Generic[AlgorithmConfigT]):
     @property
     def config_hash(self) -> str:
         """Return a deterministic SHA-256 over resolved configuration."""
-        encoded = json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False)
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        return experiment_payload_hash(self.as_dict())
+
+
+def experiment_payload_hash(payload: Mapping[str, object]) -> str:
+    """Hash the serialized experiment, preserving older resolved sidecar schemas."""
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _require_identifiers(*values: object) -> None:

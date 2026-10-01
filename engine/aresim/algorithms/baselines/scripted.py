@@ -4,7 +4,7 @@ Implements a partial-observation scripted rover policy for reward diagnosis and
 masked-PPO comparison. Reads only ``aresim.obs.local.v1`` fields plus the action
 mask; never accesses canonical engine state.
 
-**Last updated:** September 5, 2026
+**Last updated:** September 26, 2026
 
 **Contains:** ``ScriptedAgent`` and private navigation helpers.
 
@@ -67,10 +67,11 @@ class ScriptedAgent:
             raise ValueError("scripted agent requires self float[10]")
         if not isinstance(colony, np.ndarray) or colony.shape != (14,):
             raise ValueError("scripted agent requires colony float[14]")
-        if not isinstance(terrain, np.ndarray) or terrain.shape != (8, 8):
-            raise ValueError("scripted agent requires terrain_type uint8[8,8]")
-        if not isinstance(flags, np.ndarray) or flags.shape != (4, 8, 8):
-            raise ValueError("scripted agent requires cell_flags uint8[4,8,8]")
+        if not isinstance(terrain, np.ndarray) or terrain.ndim != 2 or terrain.shape[0] != terrain.shape[1]:
+            raise ValueError("scripted agent requires square terrain_type")
+        size = int(terrain.shape[0])
+        if not isinstance(flags, np.ndarray) or flags.shape != (4, size, size):
+            raise ValueError("scripted agent requires cell_flags matching the terrain crop")
         return self_vector, colony, terrain, flags
 
     def _choose_move(self, candidates: list[int], mask: np.ndarray) -> int | None:
@@ -98,9 +99,10 @@ class ScriptedAgent:
 
     def _visible_resource_targets(self, terrain: np.ndarray, flags: np.ndarray) -> list[tuple[int, int, int, int]]:
         targets: list[tuple[int, int, int, int]] = []
-        anchor = 3
-        for local_y in range(8):
-            for local_x in range(8):
+        size = terrain.shape[0]
+        anchor = (size - 1) // 2
+        for local_y in range(size):
+            for local_x in range(size):
                 terrain_id = int(terrain[local_y, local_x])
                 is_ice = terrain_id == 3
                 is_unscanned_rock = terrain_id == 2 and flags[2, local_y, local_x] == 0
@@ -119,8 +121,9 @@ class ScriptedAgent:
         if not targets:
             return None
         _, _, target_y, target_x = min(targets)
-        delta_x = target_x - 3
-        delta_y = target_y - 3
+        anchor = (terrain.shape[0] - 1) // 2
+        delta_x = target_x - anchor
+        delta_y = target_y - anchor
         axes = [(abs(delta_x), 2 if delta_x > 0 else 4), (abs(delta_y), 3 if delta_y > 0 else 1)]
         candidates = [action for distance, action in sorted(axes, reverse=True) if distance > 0]
         return self._choose_move(candidates, mask)

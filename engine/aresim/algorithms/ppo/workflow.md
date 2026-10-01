@@ -19,6 +19,8 @@ For the broader RL guide (baselines, seeds, scaling, literature), see [RL Algori
 
 ## End-to-end training flow
 
+RLlib collection uses the non-audit simulator path: it preserves policy observations, masks, tasks, and rewards but omits per-step full-world checksums and the post-step defensive state copy. Frozen summary evaluation also avoids UI replay snapshots; explicit trajectory recording and the ordinary simulator/API continue to use the audited path.
+
 ```mermaid
 flowchart TB
     YAML[Experiment YAML<br/>configs/masked_ppo/*.yaml] --> Parse[parse_experiment<br/>training/experiments.py]
@@ -84,9 +86,9 @@ Default window size is **8×8** (rover-centered crop). Phase 1 uses **10** discr
 | `colony` | `(14,)` | `float32` | Colony power, water, oxygen, livability, dust, build progress, service flag, … |
 | `pad_proximity` | scalar | `int` | `0` far, `1` near build pad, `2` on pad |
 | `weather_type` | scalar | `int` | Weather enum ID (1–5) |
-| `objective_type` | `(8,)` | `uint8` | Objective type per slot (Phase 1 open exploration often all zero) |
-| `objectives` | `(8, 4)` | `float32` | Objective feature rows |
-| `objective_mask` | `(8,)` | `uint8` | `1` = active objective slot for pooling |
+| `objective_type` | `(8,)` | `uint8` | Slot kind: extract_ice, deliver_ice, scan, service, survive (rest padding) |
+| `objectives` | `(8, 4)` | `float32` | `[current, target=1, remaining, required=1]` from mission stats. No bearings |
+| `objective_mask` | `(8,)` | `uint8` | `1` on the five live progress rows |
 
 Terrain IDs and weather IDs are defined in `components/observations.py` (`TERRAIN_IDS`, `WEATHER_IDS`).
 

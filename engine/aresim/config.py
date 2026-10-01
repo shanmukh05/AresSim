@@ -300,7 +300,10 @@ class EngineConfig:
 
 @dataclass(frozen=True)
 class ObservationConfig:
-    """Shape and normalization scales for the local numerical observation."""
+    """Shape and normalization scales for the local numerical observation.
+
+    ``window_size`` is the rover-centered crop (set in ``defaults.py``).
+    """
 
     window_size: int
     max_objectives: int

@@ -45,10 +45,14 @@ def make_env(
     config: EnvironmentConfig = DEFAULT_ENVIRONMENT_CONFIG,
     registry: ComponentRegistry | None = None,
     max_episode_steps: int | None = None,
+    *,
+    audit: bool = True,
 ) -> Environment[object, object]:
     """Build a framework-neutral composed environment from registered components.
 
     When ``max_episode_steps`` is set, wraps the result in :class:`~aresim.envs.environment.AresTimeLimit`.
+    ``audit=False`` is for transient RL rollouts only: transitions then omit
+    checksums and borrow the post-step world state until the next step.
     """
     config.validate()
     components = create_default_registry() if registry is None else registry
@@ -64,6 +68,7 @@ def make_env(
         reward,
         task,
         scenario_id=config.scenario_id,
+        audit=audit,
     )
     if max_episode_steps is None:
         return environment
@@ -74,9 +79,11 @@ def make_gym_env(
     config: EnvironmentConfig = DEFAULT_ENVIRONMENT_CONFIG,
     registry: ComponentRegistry | None = None,
     max_episode_steps: int | None = None,
+    *,
+    audit: bool = True,
 ) -> AresGymEnv:
     """Construct the exactly-one-rover Gymnasium adapter over :func:`make_env`."""
-    return AresGymEnv(make_env(config, registry=registry, max_episode_steps=max_episode_steps))
+    return AresGymEnv(make_env(config, registry=registry, max_episode_steps=max_episode_steps, audit=audit))
 
 
 def make_parallel_env(

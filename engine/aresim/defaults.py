@@ -4,12 +4,14 @@ Single source of truth for world size, cargo limits, reward coefficients,
 observation scales, and default component names. Import-time validation fails
 fast; copy with ``dataclasses.replace`` and never mutate in place.
 
-**Last updated:** September 24, 2026
+**Last updated:** September 26, 2026
 
 **Contains:** ``DEFAULT_ENGINE_CONFIG``, ``DEFAULT_ENVIRONMENT_CONFIG``.
 
-**Defaults include:** 32×32 map, 12 kg cargo, 0.5 kg scan samples, 2 kg ice
-extract, shaped/sparse reward weights, ``local`` observation + ``discrete`` action.
+**Defaults include:** 32×32 map, rover-centered observation crop (``window_size``),
+12 kg cargo, 0.5 kg scan samples, 2 kg ice extract, shaped/sparse reward
+weights, ``local`` observation + ``discrete`` action. Change ``window_size``
+here to resize the policy crop; do not hardcode the crop elsewhere.
 
 **See also:** :mod:`aresim.config` (config shapes),
 :mod:`aresim.registry.create_default_registry` (built-in component names).
@@ -279,6 +281,7 @@ DEFAULT_ENVIRONMENT_CONFIG = EnvironmentConfig(
     scenario_id="phase1_default_v1",
     observation="local",
     observation_config=ObservationConfig(
+        # Rover-centered crop. Single knob for policy / scripted / UI flashlight.
         window_size=8,
         max_objectives=8,
         power_scale=50,

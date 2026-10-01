@@ -90,7 +90,11 @@ def policy_input(observation: ObservationT, action_mask: np.ndarray) -> dict[str
 
 
 class AresEnvironment(Generic[ObservationT, ActionT]):
-    """Run one rover through the registered framework-neutral RL composition."""
+    """Run one rover through the registered framework-neutral RL composition.
+
+    Auditing remains on by default; non-audit mode is for immediate-consumption
+    training/evaluation rollouts, never saved transitions or UI replay.
+    """
 
     possible_agents = ("rover_0",)
 
@@ -103,12 +107,14 @@ class AresEnvironment(Generic[ObservationT, ActionT]):
         task: TaskEvaluator,
         *,
         scenario_id: str = "phase1_default_v1",
+        audit: bool = True,
     ) -> None:
         engine_config.validate()
         if not scenario_id:
             raise ValueError("scenario identifier cannot be empty")
         self.engine_config = engine_config
         self.scenario_id = scenario_id
+        self.audit = audit
         self.observation_builder = observation
         self.action_adapter = actions
         self.reward_profile = reward
@@ -183,7 +189,7 @@ class AresEnvironment(Generic[ObservationT, ActionT]):
             raise RuntimeError("episode has ended; reset before stepping again")
         before = self.engine.state
         command = self.action_adapter.decode(before, action_id)
-        transition = self.engine.step(command, Actor.AGENT)
+        transition = self.engine.step(command, Actor.AGENT, audit=self.audit)
         outcome = self.task.evaluate(before, transition)
         self._last_step = (before, transition, outcome)
         breakdown = self.reward_profile.calculate(

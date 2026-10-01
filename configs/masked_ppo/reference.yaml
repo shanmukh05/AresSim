@@ -1,9 +1,9 @@
 schema_version: aresim.experiment.v1
 experiment_id: rllib_masked_ppo_reference
-trial_id: seed_25
+trial_id: seed_29
 algorithm: masked_ppo
 model: local_cnn_actor_critic
-learner_seed: 25
+learner_seed: 29
 environment:
   scenario_id: phase1_default_v1
   observation: local
@@ -36,7 +36,7 @@ tracking:
   mode: online
   project: aresim
   group: reference
-  tags: [reference, explore, gpu, goal_potential]
+  tags: [reference, explore, gpu, goal_potential, objective_progress_table]
 artifacts:
   root: results
   reject_existing: true

@@ -102,7 +102,7 @@ The local observation contains:
 - categorical pad proximity and weather;
 - fixed-capacity objective fields.
 
-The rover is anchored at local index `[3,3]`; the crop covers world offsets `-3..+4` and is zero-padded without shifting at map edges. Open exploration has no objectives, so its objective tensors remain zero-padded.
+The rover is anchored at local index `[3,3]`; the crop covers world offsets `-3..+4` and is zero-padded without shifting at map edges. Objective slots are a five-row mission progress table (ice collected/delivered, samples delivered, pad service, battery). They do not encode directions or off-crop locations.
 
 Action IDs are stable:
 
@@ -223,7 +223,7 @@ target = r + γ^n (1 - terminated) Q_target(s', a*)
 
 `rollout_batch_size` is environment steps per Tune iteration. `train_batch_size` is the replay minibatch (typically 32–256). DQN uses a few env runners and a large replay; it does not copy PPO's 28-runner reference layout. n-step is 1 in smoke/dev and 3 in `configs/masked_dqn/reference.yaml`. Prioritized replay, C51, and recurrence are later.
 
-Compare PPO and DQN on held-out seeds at equal environment steps. Open exploration still has no victory condition.
+Compare PPO and Double Dueling DQN on held-out seeds at equal environment steps. The reference trial is `resource_mission` (same as current masked PPO). Registry name stays `masked_dqn`.
 
 Sources: [`dqn/config.py`](../../engine/aresim/algorithms/dqn/config.py), [`dqn/train.py`](../../engine/aresim/algorithms/dqn/train.py), [`dqn/workflow.md`](../../engine/aresim/algorithms/dqn/workflow.md).
 

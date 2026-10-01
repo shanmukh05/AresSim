@@ -63,17 +63,18 @@ class AresEngine:
         self._state = state
         return deepcopy(state)
 
-    def step(self, command: ActionCommand, actor: Actor) -> EngineTransition:
-        """Apply one command and return checksums, reward, events, and a state copy.
+    def step(self, command: ActionCommand, actor: Actor, *, audit: bool = True) -> EngineTransition:
+        """Apply one command; omit checksums and the state copy only in non-audit mode.
 
         Invalid commands still advance time and record history; they do not move
-        the rover or spend resources. The world is mutated in place internally.
+        the rover or spend resources. Non-audit transitions contain empty checksum
+        strings and a borrowed state reference, valid only until the next step.
         """
         if self._state is None:
             raise RuntimeError("engine has not been reset")
-        before_checksum = state_checksum(self._state)
+        before_checksum = state_checksum(self._state) if audit else ""
         effective_action, reward, reward_terms, events = apply_action(self._state, command, actor, self.config)
-        after_checksum = state_checksum(self._state)
+        after_checksum = state_checksum(self._state) if audit else ""
         return EngineTransition(
             command=command,
             effective_action=effective_action,
@@ -83,7 +84,7 @@ class AresEngine:
             reward=reward,
             reward_terms=reward_terms,
             events=tuple(events),
-            state=deepcopy(self._state),
+            state=deepcopy(self._state) if audit else self._state,
         )
 
     def pause(self) -> WorldState:

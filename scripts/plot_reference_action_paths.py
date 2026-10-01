@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Roll out reference checkpoints on validation seeds and plot action paths.
 
-Writes heatmaps and action-mix-over-time figures under
-``results/rllib_masked_ppo_reference/reports/``. Caches per-trial action
-sequences as JSON so plots can be regenerated without reloading RLlib.
+Default writes combined PPO + DQN figures under ``results/reports/``. Caches
+per-trial action sequences as JSON so plots can be regenerated without RLlib.
 
 Usage::
 
     engine/.venv/bin/python scripts/plot_reference_action_paths.py
-    engine/.venv/bin/python scripts/plot_reference_action_paths.py --trials seed_7 seed_13
+    engine/.venv/bin/python scripts/plot_reference_action_paths.py --plot-only
+    engine/.venv/bin/python scripts/plot_reference_action_paths.py --trials seed_27 seed_29 dqn_seed_1
 """
 
 from __future__ import annotations
@@ -41,13 +41,28 @@ ACTION_LABELS = (
     "unload",
 )
 ROOT = Path(__file__).resolve().parents[1]
-REFERENCE = ROOT / "results" / "rllib_masked_ppo_reference"
-REPORTS = REFERENCE / "reports"
-CACHE = REPORTS / "action_path_cache"
-DEFAULT_TRIALS = ("seed_7", "seed_11", "seed_13", "seed_14", "seed_17", "seed_19", "seed_21", "seed_23")
+PPO_EXPERIMENT = ROOT / "results" / "rllib_masked_ppo_reference"
+DQN_EXPERIMENT = ROOT / "results" / "rllib_masked_double_dueling_dqn_reference"
+DEFAULT_OUTPUT = ROOT / "results" / "reports"
+PPO_TRIALS = ("seed_7", "seed_11", "seed_13", "seed_14", "seed_17", "seed_19", "seed_21", "seed_23", "seed_25", "seed_27", "seed_29")
+DEFAULT_TRIALS = (*PPO_TRIALS, "dqn_seed_1")
 VAL_SEEDS = tuple(range(2000, 2032))
 NORMALIZED_STEPS = 100
 PAD_VALUE = -1
+GRID_COLUMNS = 4
+
+
+def _experiment_for(label: str) -> Path:
+    return DQN_EXPERIMENT if label.startswith("dqn_") else PPO_EXPERIMENT
+
+
+def _checkpoint_trial_id(label: str) -> str:
+    return label.removeprefix("dqn_")
+
+
+def _legacy_cache_path(label: str) -> Path:
+    experiment = _experiment_for(label)
+    return experiment / "reports" / "action_path_cache" / f"{_checkpoint_trial_id(label)}.json"
 
 
 def _rollout_episode(env, agent, seed: int) -> dict[str, object]:
@@ -80,29 +95,43 @@ def _rollout_episode(env, agent, seed: int) -> dict[str, object]:
     }
 
 
-def _collect_trial(trial_id: str, seeds: tuple[int, ...]) -> list[dict[str, object]]:
-    cache_path = CACHE / f"{trial_id}.json"
-    if cache_path.exists():
-        return json.loads(cache_path.read_text(encoding="utf-8"))
+def _collect_trial(label: str, seeds: tuple[int, ...], cache: Path) -> list[dict[str, object]]:
+    cache_path = cache / f"{label}.json"
+    for candidate in (cache_path, _legacy_cache_path(label)):
+        if candidate.is_file():
+            episodes = json.loads(candidate.read_text(encoding="utf-8"))
+            if candidate != cache_path:
+                cache.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps(episodes), encoding="utf-8")
+            return episodes
 
-    checkpoint = REFERENCE / trial_id / "checkpoints" / "final" / "checkpoint.json"
+    trial_id = _checkpoint_trial_id(label)
+    experiment = _experiment_for(label)
+    checkpoint = experiment / trial_id / "checkpoints" / "final" / "checkpoint.json"
     if not checkpoint.exists():
-        raise FileNotFoundError(f"missing final checkpoint for {trial_id}")
-    spec = load_experiment(REFERENCE / trial_id / "resolved_config.yaml")
+        raise FileNotFoundError(f"missing final checkpoint for {label}")
+    spec = load_experiment(experiment / trial_id / "resolved_config.yaml")
     env = make_gym_env(_environment_config(spec))
     agent = load_checkpoint_agent(str(checkpoint.resolve()))
     episodes = [_rollout_episode(env, agent, seed) for seed in seeds]
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(episodes, indent=2), encoding="utf-8")
     return episodes
 
 
-def _collect_scripted(seeds: tuple[int, ...]) -> list[dict[str, object]]:
-    cache_path = CACHE / "scripted.json"
-    if cache_path.exists():
-        return json.loads(cache_path.read_text(encoding="utf-8"))
+def _collect_scripted(seeds: tuple[int, ...], cache: Path) -> list[dict[str, object]]:
+    cache_path = cache / "scripted.json"
+    legacy = PPO_EXPERIMENT / "reports" / "action_path_cache" / "scripted.json"
+    for candidate in (cache_path, legacy, DQN_EXPERIMENT / "reports" / "action_path_cache" / "scripted.json"):
+        if candidate.is_file():
+            episodes = json.loads(candidate.read_text(encoding="utf-8"))
+            if candidate != cache_path:
+                cache.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps(episodes), encoding="utf-8")
+            return episodes
 
-    spec = load_experiment(REFERENCE / "seed_13" / "resolved_config.yaml")
+    config = PPO_EXPERIMENT / "seed_29" / "resolved_config.yaml"
+    spec = load_experiment(config)
     env = make_gym_env(_environment_config(spec))
     agent = ScriptedAgent()
     episodes = [_rollout_episode(env, agent, seed) for seed in seeds]
@@ -135,38 +164,73 @@ def _normalized_mix(episodes: list[dict[str, object]], bins: int) -> np.ndarray:
     return counts / totals
 
 
+def _subplot_grid(count: int, panel_width: float, panel_height: float):
+    columns = min(GRID_COLUMNS, count)
+    rows = (count + columns - 1) // columns
+    fig, axes = plt.subplots(
+        rows,
+        columns,
+        figsize=(panel_width * columns, panel_height * rows),
+        squeeze=False,
+    )
+    return fig, axes
+
+
+def _iter_grid_panels(axes, series: dict[str, list[dict[str, object]]]):
+    panels = list(series.items())
+    used = len(panels)
+    for index, ax in enumerate(axes.flat):
+        if index >= used:
+            ax.axis("off")
+            continue
+        yield ax, panels[index]
+
+
+def _save_grid_figure(fig, output: Path, title: str, handles: list[Patch]) -> None:
+    fig.suptitle(title, y=0.995)
+    fig.legend(
+        handles,
+        list(ACTION_LABELS),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.97),
+        ncol=5,
+        fontsize=8,
+        frameon=False,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.90))
+    fig.savefig(output, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _action_legend(cmap) -> list[Patch]:
+    return [Patch(facecolor=cmap(i), label=ACTION_LABELS[i]) for i in range(len(ACTION_LABELS))]
+
+
 def _plot_heatmaps(series: dict[str, list[dict[str, object]]], output: Path) -> None:
     cmap = ListedColormap(plt.cm.tab10(np.linspace(0, 1, len(ACTION_LABELS))))
-    fig, axes = plt.subplots(len(series), 1, figsize=(14, 2.8 * len(series)), squeeze=False)
-    for ax, (label, episodes) in zip(axes[:, 0], series.items(), strict=True):
+    fig, axes = _subplot_grid(len(series), 4.2, 2.6)
+    for ax, (label, episodes) in _iter_grid_panels(axes, series):
         matrix = _pad_matrix(episodes)
         masked = np.ma.masked_where(matrix == PAD_VALUE, matrix)
-        im = ax.imshow(masked, aspect="auto", interpolation="nearest", cmap=cmap, vmin=0, vmax=9)
-        ax.set_title(f"{label} — action path per episode (rows=sorted by seed)")
+        ax.imshow(masked, aspect="auto", interpolation="nearest", cmap=cmap, vmin=0, vmax=9)
+        ax.set_title(label)
         ax.set_xlabel("step")
         ax.set_ylabel("episode")
         episode_labels = [str(ep["environment_seed"]) for ep in episodes]
         if len(episode_labels) <= 16:
             ax.set_yticks(range(len(episode_labels)))
             ax.set_yticklabels(episode_labels, fontsize=7)
-        fig.colorbar(im, ax=ax, ticks=range(len(ACTION_LABELS)), label="action id")
-    handles = [Patch(facecolor=cmap(i), label=ACTION_LABELS[i]) for i in range(len(ACTION_LABELS))]
-    fig.legend(handles=handles, loc="upper center", ncol=5, fontsize=8, frameon=False)
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
-    fig.savefig(output, dpi=160, bbox_inches="tight")
-    plt.close(fig)
+    _save_grid_figure(fig, output, "Action path per episode (rows sorted by seed)", _action_legend(cmap))
 
 
 def _plot_mix_over_time(series: dict[str, list[dict[str, object]]], output: Path) -> None:
-    from matplotlib.patches import Patch
-
-    fig, axes = plt.subplots(1, len(series), figsize=(4.2 * len(series), 4), squeeze=False)
+    fig, axes = _subplot_grid(len(series), 4.2, 3.4)
     x = np.linspace(0, 100, NORMALIZED_STEPS)
     colors = plt.cm.tab10(np.linspace(0, 1, len(ACTION_LABELS)))
-    for ax, (label, episodes) in zip(axes[0], series.items(), strict=True):
+    for ax, (label, episodes) in _iter_grid_panels(axes, series):
         mix = _normalized_mix(episodes, NORMALIZED_STEPS)
         bottom = np.zeros(NORMALIZED_STEPS)
-        for action_id, name in enumerate(ACTION_LABELS):
+        for action_id, _name in enumerate(ACTION_LABELS):
             values = mix[:, action_id]
             ax.fill_between(x, bottom, bottom + values, color=colors[action_id], alpha=0.85)
             bottom += values
@@ -175,39 +239,23 @@ def _plot_mix_over_time(series: dict[str, list[dict[str, object]]], output: Path
         ax.set_xlabel("episode progress (%)")
         ax.set_ylabel("action fraction")
     handles = [Patch(facecolor=colors[i], label=name) for i, name in enumerate(ACTION_LABELS)]
-    labels = list(ACTION_LABELS)
-    fig.suptitle("Action mix over normalized episode timeline", y=0.98)
-    fig.legend(
-        handles,
-        labels,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 0.90),
-        ncol=5,
-        fontsize=8,
-        frameon=False,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.82))
-    fig.savefig(output, dpi=160, bbox_inches="tight")
-    plt.close(fig)
+    _save_grid_figure(fig, output, "Action mix over normalized episode timeline", handles)
 
 
 def _plot_early_window(series: dict[str, list[dict[str, object]]], output: Path, window: int = 120) -> None:
     cmap = ListedColormap(plt.cm.tab10(np.linspace(0, 1, len(ACTION_LABELS))))
-    fig, axes = plt.subplots(len(series), 1, figsize=(14, 2.4 * len(series)), squeeze=False)
-    for ax, (label, episodes) in zip(axes[:, 0], series.items(), strict=True):
+    fig, axes = _subplot_grid(len(series), 4.2, 2.4)
+    for ax, (label, episodes) in _iter_grid_panels(axes, series):
         matrix = np.full((len(episodes), window), PAD_VALUE, dtype=np.int16)
         for row, episode in enumerate(episodes):
             actions = episode["actions"][:window]
             matrix[row, : len(actions)] = actions
         masked = np.ma.masked_where(matrix == PAD_VALUE, matrix)
         ax.imshow(masked, aspect="auto", interpolation="nearest", cmap=cmap, vmin=0, vmax=9)
-        ax.set_title(f"{label} — first {window} steps")
+        ax.set_title(label)
         ax.set_xlabel("step")
         ax.set_ylabel("episode")
-    fig.suptitle("Early-episode action paths (loop detection)", y=1.01)
-    fig.tight_layout()
-    fig.savefig(output, dpi=160, bbox_inches="tight")
-    plt.close(fig)
+    _save_grid_figure(fig, output, f"Early-episode action paths (first {window} steps)", _action_legend(cmap))
 
 
 def _write_summary(series: dict[str, list[dict[str, object]]], output: Path) -> None:
@@ -232,23 +280,30 @@ def _write_summary(series: dict[str, list[dict[str, object]]], output: Path) -> 
     output.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 
-def _load_cached_series(trial_ids: tuple[str, ...], include_scripted: bool) -> dict[str, list[dict[str, object]]]:
+def _load_cached_series(cache: Path, trial_ids: tuple[str, ...], include_scripted: bool) -> dict[str, list[dict[str, object]]]:
     series: dict[str, list[dict[str, object]]] = {}
     for trial_id in trial_ids:
-        cache_path = CACHE / f"{trial_id}.json"
-        if not cache_path.exists():
+        candidates = (cache / f"{trial_id}.json", _legacy_cache_path(trial_id))
+        path = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if path is None:
             raise FileNotFoundError(f"missing cache for {trial_id}: run collection first")
-        series[trial_id] = json.loads(cache_path.read_text(encoding="utf-8"))
+        series[trial_id] = json.loads(path.read_text(encoding="utf-8"))
     if include_scripted:
-        scripted_path = CACHE / "scripted.json"
-        if not scripted_path.exists():
+        scripted_candidates = (
+            cache / "scripted.json",
+            PPO_EXPERIMENT / "reports" / "action_path_cache" / "scripted.json",
+            DQN_EXPERIMENT / "reports" / "action_path_cache" / "scripted.json",
+        )
+        scripted = next((candidate for candidate in scripted_candidates if candidate.is_file()), None)
+        if scripted is None:
             raise FileNotFoundError("missing scripted cache: run collection first")
-        series["scripted"] = json.loads(scripted_path.read_text(encoding="utf-8"))
+        series["scripted"] = json.loads(scripted.read_text(encoding="utf-8"))
     return series
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="directory for figures and cache (default: results/reports)")
     parser.add_argument("--trials", nargs="+", default=list(DEFAULT_TRIALS))
     parser.add_argument("--seeds", nargs="+", type=int, default=list(VAL_SEEDS))
     parser.add_argument("--include-scripted", action="store_true", default=True)
@@ -259,25 +314,27 @@ def main() -> None:
         help="regenerate figures from cached JSON without loading checkpoints",
     )
     args = parser.parse_args()
+    reports = args.output if args.output.is_absolute() else ROOT / args.output
+    cache = reports / "action_path_cache"
     seeds = tuple(args.seeds)
-    REPORTS.mkdir(parents=True, exist_ok=True)
+    reports.mkdir(parents=True, exist_ok=True)
 
     if args.plot_only:
-        series = _load_cached_series(tuple(args.trials), args.include_scripted)
+        series = _load_cached_series(cache, tuple(args.trials), args.include_scripted)
     else:
         series: dict[str, list[dict[str, object]]] = {}
         for trial_id in args.trials:
             print(f"collecting {trial_id}...")
-            series[trial_id] = _collect_trial(trial_id, seeds)
+            series[trial_id] = _collect_trial(trial_id, seeds, cache)
         if args.include_scripted:
             print("collecting scripted...")
-            series["scripted"] = _collect_scripted(seeds)
+            series["scripted"] = _collect_scripted(seeds, cache)
 
-    _plot_heatmaps(series, REPORTS / "action_path_heatmaps.png")
-    _plot_mix_over_time(series, REPORTS / "action_mix_over_time.png")
-    _plot_early_window(series, REPORTS / "action_path_early_120.png")
-    _write_summary(series, REPORTS / "action_paths_summary.json")
-    print(f"wrote figures and summary under {REPORTS}")
+    _plot_heatmaps(series, reports / "action_path_heatmaps.png")
+    _plot_mix_over_time(series, reports / "action_mix_over_time.png")
+    _plot_early_window(series, reports / "action_path_early_120.png")
+    _write_summary(series, reports / "action_paths_summary.json")
+    print(f"wrote figures and summary under {reports}")
 
 
 if __name__ == "__main__":

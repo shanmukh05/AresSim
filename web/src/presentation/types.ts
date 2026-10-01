@@ -30,6 +30,7 @@ export interface StructurePresentation extends StructureEntity {
 export interface WorldPresentation {
   seed: number;
   dimensions: { width: number; height: number };
+  observationWindowSize: number;
   terrain: TerrainPresentation[];
   rovers: RoverPresentation[];
   structures: StructurePresentation[];

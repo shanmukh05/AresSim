@@ -26,6 +26,7 @@ from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 from ray.rllib.utils.schedules.scheduler import Scheduler
 from torch import Tensor, nn
 
+from ...defaults import DEFAULT_ENVIRONMENT_CONFIG
 from ...training.experiments import ExperimentSpec
 from ...training.seeds import load_seed_manifest
 from ..common.encoder import LocalObservationEncoder, combine_q_values
@@ -43,16 +44,17 @@ class LocalMaskedQNetwork(nn.Module):
     def __init__(
         self,
         config: ModelConfig,
-        window_size: int = 8,
+        window_size: int | None = None,
         action_count: int = 10,
         *,
         dueling: bool = True,
     ) -> None:
         """Build the shared encoder plus Q / dueling heads."""
         super().__init__()
-        if window_size <= 0 or action_count != 10:
+        size = DEFAULT_ENVIRONMENT_CONFIG.observation_config.window_size if window_size is None else window_size
+        if size <= 0 or action_count != 10:
             raise ValueError("local Q-network requires a positive crop and Discrete(10)")
-        self.encoder = LocalObservationEncoder(config, window_size)
+        self.encoder = LocalObservationEncoder(config, size)
         self.advantage, self.value = _q_heads(config.fused_width, action_count, dueling)
 
     def forward(self, observation: Mapping[str, Tensor], action_mask: Tensor) -> Tensor:
@@ -166,7 +168,7 @@ class MaskedDQNFactory:
                 num_env_runners=resources.num_env_runners,
                 num_envs_per_env_runner=resources.num_envs_per_env_runner,
                 num_cpus_per_env_runner=resources.cpus_per_env_runner,
-                rollout_fragment_length="auto",
+                rollout_fragment_length=dqn.rollout_fragment_length,
                 batch_mode="truncate_episodes",
             )
             .learners(num_learners=resources.num_learners, num_gpus_per_learner=resources.gpus_per_learner)
@@ -183,6 +185,7 @@ def _training_kwargs(dqn: MaskedDQNConfig) -> dict[str, Any]:
         "lr": dqn.learning_rate,
         "grad_clip": dqn.max_gradient_norm,
         "train_batch_size_per_learner": dqn.train_batch_size,
+        "training_intensity": dqn.training_intensity,
         "double_q": dqn.double_q,
         "dueling": dqn.dueling,
         "n_step": dqn.n_step,

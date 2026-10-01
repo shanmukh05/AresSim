@@ -54,7 +54,7 @@ const ALGORITHMS: Array<{ value: AlgorithmId; label: string }> = [
   { value: "scripted", label: "Scripted" },
   { value: "jev", label: "Jev" },
   { value: "masked_ppo", label: "Masked PPO" },
-  { value: "masked_dqn", label: "Masked DQN" },
+  { value: "masked_dqn", label: "Double Dueling DQN" },
 ];
 
 const PLAY_INTERVAL_MS = 700;

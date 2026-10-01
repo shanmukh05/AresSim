@@ -46,7 +46,7 @@ POLICY_CATALOG: list[dict[str, object]] = [
     {"id": "scripted", "label": "Scripted", "kind": "baseline", "requiresPath": False},
     {"id": "jev", "label": "Jev", "kind": "llm", "requiresPath": False},
     {"id": "masked_ppo", "label": "Masked PPO", "kind": "checkpoint", "requiresPath": True},
-    {"id": "masked_dqn", "label": "Masked DQN", "kind": "checkpoint", "requiresPath": True},
+    {"id": "masked_dqn", "label": "Double Dueling DQN", "kind": "checkpoint", "requiresPath": True},
 ]
 
 # ponytail: max 4 cached RLModules; single-user local API; bump for multi-session prod
