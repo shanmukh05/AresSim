@@ -131,7 +131,7 @@ def encode_ops_state(
     rover["wait_recharges"] = wait_recharges
     cargo = rover["cargo"]
     free_kg = float(cargo["free_kg"]) if isinstance(cargo, dict) else 0.0
-    rover["should_unload"] = _cargo_mass_kg(rover) > 0 and (rover["pad"] == "on_build_pad" or free_kg <= 0)
+    rover["should_unload"] = cargo_mass_kg(rover) > 0 and (rover["pad"] == "on_build_pad" or free_kg <= 0)
     prospects = _prospects(cells)
     state: dict[str, object] = {
         "schema_version": OPS_SCHEMA,
@@ -143,7 +143,7 @@ def encode_ops_state(
         "grid": {"size": resolved.neighborhood_size, "rover": {"dx": 0, "dy": 0}, "cells": cells},
         "adjacent": _adjacent(mask),
         "recent_actions": list(recent_actions),
-        "recent_repeating": _recent_repeating(recent_actions),
+        "recent_repeating": bool(repeating_actions(recent_actions)),
         "prospects": prospects,
     }
     return state, _legal_criteria(mask, here, cells, wait_recharges, prospects)
@@ -292,17 +292,23 @@ def _objectives(observation: PolicyObservation) -> list[dict[str, object]]:
     return encoded
 
 
-def _cargo_mass_kg(rover: dict[str, object]) -> float:
+def cargo_mass_kg(rover: object) -> float:
+    """Total physical cargo represented by one named Jev rover payload."""
+    if not isinstance(rover, dict):
+        return 0.0
     cargo = rover.get("cargo")
     if not isinstance(cargo, dict):
         return 0.0
-    return float(cargo.get("ice_kg") or 0) + float(cargo.get("ore_kg") or 0) + float(cargo.get("samples_kg") or 0)
+    return sum(float(cargo.get(name) or 0) for name in ("ice_kg", "ore_kg", "samples_kg"))
 
 
-def _recent_repeating(recent_actions: tuple[str, ...]) -> bool:
+def repeating_actions(recent_actions: tuple[str, ...] | list[str]) -> frozenset[str]:
+    """Actions that would continue an established three-repeat or two-action cycle."""
     if len(recent_actions) >= 3 and recent_actions[-1] == recent_actions[-2] == recent_actions[-3]:
-        return True
-    return len(recent_actions) >= 4 and recent_actions[-4:-2] == recent_actions[-2:]
+        return frozenset({recent_actions[-1]})
+    if len(recent_actions) >= 4 and recent_actions[-4:-2] == recent_actions[-2:]:
+        return frozenset(recent_actions[-2:])
+    return frozenset()
 
 
 def _adjacent(mask: np.ndarray) -> dict[str, object]:
@@ -419,6 +425,8 @@ __all__ = [
     "DEFAULT_NEIGHBORHOOD_SIZE",
     "OPS_SCHEMA",
     "OpsScales",
+    "cargo_mass_kg",
+    "repeating_actions",
     "default_ops_scales",
     "encode_ops_state",
 ]

@@ -1,4 +1,12 @@
-# Jev rover agent workflow
+# Jev rover agent details
+
+## Inference at a glance
+
+![JSON state, legal Choice, and action execution](inference.drawio.png)
+
+The input is structured JSON rather than a neural tensor API: an 8×8 policy observation is cropped to 25 named cells in a 5×5 rover-relative grid, plus telemetry, objectives, recent actions and a separate Choice question with 1–10 legal options. The output becomes one integer action in `Discrete(10)`. The model is pretrained externally; this integration has no training step or optimizer. The figure includes the local action guards that can override the returned Choice.
+
+The PNG figures contain editable draw.io XML: open the PNG directly in draw.io to revise the illustration. Shapes and numbers are grounded in the adjacent model/configuration files and `../common/encoder.py`.
 
 Jev is TypeSafe's System One model. AresSim uses it as an inference-only rover policy: one Choice per environment step over already-legal Discrete(10) actions. It is not trained and does not replace masked PPO/DQN. Simulator rules stay in `aresim.core`. Jev is not an RLlib trainable.
 

@@ -2,7 +2,7 @@
 
 Each module implements one registered :class:`~aresim.algorithms.base.Agent`.
 Registry names: ``random``, ``random_valid``, ``wait``, ``scripted``.
-See ``workflow.md`` for what each policy does.
+See ``DETAILS.md`` for what each policy does.
 
 **Last updated:** September 5, 2026
 """

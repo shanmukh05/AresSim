@@ -32,6 +32,8 @@ from .gameplay import (
 )
 from .integrations.policy import (
     PolicyBridge,
+    CHECKPOINT_ALGORITHMS,
+    resolve_action_mode,
     PolicyError,
     policy_meta_from_result,
     resolve_agent,
@@ -58,6 +60,7 @@ class AttachedPolicy:
     agent: object
     policy_id: str
     checkpoint_path: str | None
+    action_mode: str | None = None
 
 
 @dataclass
@@ -86,7 +89,7 @@ class AresService:
             if selected_seed < self.config.world.seed_min or selected_seed > self.config.world.seed_max:
                 raise ServiceError("INVALID_SEED", f"Seed must be between {self.config.world.seed_min} and {self.config.world.seed_max}.", 400)
             engine = AresEngine(self.config)
-            snapshot = snapshot_from_state(engine.reset(selected_seed))
+            snapshot = snapshot_from_state(engine.reset(selected_seed), self.config)
             self._live = LiveSession(
                 engine,
                 TrajectoryRecorder.create(self.config.replay, snapshot),
@@ -103,15 +106,15 @@ class AresService:
     def get_snapshot(self, session_id: str) -> JsonObject:
         """Return the current UI snapshot, or raise if this is not the active session."""
         with self._lock:
-            return snapshot_from_state(self._session(session_id).engine.state)
+            return snapshot_from_state(self._session(session_id).engine.state, self.config)
 
     def apply_action(self, session_id: str, command: ActionCommand, actor: Actor) -> JsonObject:
         """Step the engine and record a delta when the world clock actually advanced."""
         with self._lock:
             session = self._session(session_id)
-            before = snapshot_from_state(session.engine.state)
+            before = snapshot_from_state(session.engine.state, self.config)
             transition = session.engine.step(command, actor)
-            after = snapshot_from_state(transition.state)
+            after = snapshot_from_state(transition.state, self.config)
             if after["step"] != before["step"]:
                 session.recorder.record(before, after)
             return after
@@ -121,7 +124,7 @@ class AresService:
         with self._lock:
             session = self._session(session_id)
             state = session.engine.pause()
-            snapshot = snapshot_from_state(state)
+            snapshot = snapshot_from_state(state, self.config)
             session.recorder.current_snapshot = snapshot
             return snapshot
 
@@ -130,7 +133,7 @@ class AresService:
         with self._lock:
             session = self._session(session_id)
             state = session.engine.resume()
-            snapshot = snapshot_from_state(state)
+            snapshot = snapshot_from_state(state, self.config)
             session.recorder.current_snapshot = snapshot
             return snapshot
 
@@ -155,33 +158,43 @@ class AresService:
 
     def list_policies(self) -> JsonObject:
         """Return the built-in policy catalog and optional RLlib capability."""
-        from .integrations.policy import POLICY_CATALOG, jev_available, rllib_available
+        from .integrations.policy import POLICY_CATALOG, jev_available, rllib_available, muzero_available, world_models_available
 
-        return {"policies": POLICY_CATALOG, "capabilities": {"rllib": rllib_available(), "jev": jev_available()}}
+        return {"policies": POLICY_CATALOG, "capabilities": {"rllib": rllib_available(), "muzero": muzero_available(), "jev": jev_available(), "world_models": world_models_available()}}
 
     def validate_checkpoint(self, checkpoint_path: str) -> JsonObject:
         """Validate one checkpoint sidecar without attaching it."""
         return validate_checkpoint_path(checkpoint_path)
 
-    def attach_policy(self, session_id: str, algorithm_id: str, checkpoint_path: str | None = None) -> JsonObject:
+    def attach_policy(self, session_id: str, algorithm_id: str, checkpoint_path: str | None = None, *, action_mode: str | None = None) -> JsonObject:
         """Bind one baseline or checkpoint policy to the active session."""
         with self._lock:
             session = self._session(session_id)
             try:
-                agent, policy_id, resolved_path = resolve_agent(algorithm_id, checkpoint_path)
+                mode = resolve_action_mode(algorithm_id, action_mode) if algorithm_id in CHECKPOINT_ALGORITHMS else None
+                agent, policy_id, resolved_path = resolve_agent(algorithm_id, checkpoint_path, action_mode=mode)
             except PolicyError as error:
                 raise _policy_service_error(error) from error
+            current = session.policy
+            if (current is not None and current.algorithm_id == algorithm_id
+                    and current.checkpoint_path == resolved_path and current.action_mode != mode):
+                # Changing action selection must preserve discovered-cell memory,
+                # MuZero history and the live agent's sampling RNG.
+                current.agent.deterministic = mode == "deterministic"
+                current.action_mode = mode
+                return {"algorithmId": algorithm_id, "policyId": current.policy_id,
+                        "checkpointPath": resolved_path, "actionMode": mode}
             agent.reset(session.engine.state.seed)
             session.policy = AttachedPolicy(
                 algorithm_id=algorithm_id,
                 agent=agent,
                 policy_id=policy_id,
                 checkpoint_path=resolved_path,
+                action_mode=mode,
             )
             session.policy_events.clear()
-            if session.policy_bridge is None:
-                session.policy_bridge = PolicyBridge.for_engine(self.config)
-            return {"algorithmId": algorithm_id, "policyId": policy_id, "checkpointPath": resolved_path}
+            session.policy_bridge = PolicyBridge.for_engine(self.config)
+            return {"algorithmId": algorithm_id, "policyId": policy_id, "checkpointPath": resolved_path, "actionMode": mode}
 
     def detach_policy(self, session_id: str) -> JsonObject:
         """Remove any policy bound to the active session."""
@@ -198,20 +211,23 @@ class AresService:
                 raise ServiceError("POLICY_NOT_ATTACHED", "Attach a policy before running agent steps.", 400)
             if session.policy_bridge is None:
                 session.policy_bridge = PolicyBridge.for_engine(self.config)
-            before = snapshot_from_state(session.engine.state)
-            result = session.policy_bridge.step(
-                session.engine,
-                session.policy.agent,
-                algorithm_id=session.policy.algorithm_id,
-            )
-            after = snapshot_from_state(result.transition.state)
+            before = snapshot_from_state(session.engine.state, self.config)
+            try:
+                result = session.policy_bridge.step(
+                    session.engine, session.policy.agent, algorithm_id=session.policy.algorithm_id)
+            except PolicyError as error:
+                raise _policy_service_error(error) from error
+            after = snapshot_from_state(result.transition.state, self.config)
             summary = result.info.get("summary") if result.info else None
             if isinstance(summary, str) and summary:
                 session.policy_events[int(after["step"])] = summary
             _merge_policy_events(after, session.policy_events)
             if after["step"] != before["step"]:
                 session.recorder.record(before, after)
-            return {"snapshot": after, "policyMeta": policy_meta_from_result(result)}
+            meta = policy_meta_from_result(result)
+            if session.policy.action_mode is not None:
+                meta["actionMode"] = session.policy.action_mode
+            return {"snapshot": after, "policyMeta": meta}
 
     def load_replay(self, file_name: str, content: str) -> ReplayCursor:
         """Parse, normalize, and replace the in-memory replay. Rejects oversized uploads."""
@@ -284,6 +300,9 @@ def _policy_service_error(error: PolicyError) -> ServiceError:
         "CHECKPOINT_NOT_FOUND": 400,
         "CHECKPOINT_INCOMPATIBLE": 400,
         "RLLIB_UNAVAILABLE": 503,
+        "MUZERO_UNAVAILABLE": 503,
+        "WORLD_MODELS_UNAVAILABLE": 503,
+        "POLICY_NOT_RUNNING": 400,
         "JEV_UNAVAILABLE": 503,
         "UNKNOWN_ALGORITHM": 400,
     }.get(error.code, 400)

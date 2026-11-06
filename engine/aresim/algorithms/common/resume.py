@@ -1,10 +1,7 @@
-"""Resolve training resume targets from run directories and checkpoint sidecars.
+"""Resolve native RLlib training continuation from run directories and sidecars.
 
-Owns path classification and experiment-compatibility checks used by
-:func:`aresim.algorithms.ppo.train.run_experiment`. Does not start Ray or load
-weights; native RLlib restoration happens later in the training path.
-
-**See also:** :mod:`aresim.algorithms.ppo.checkpoint` for sidecar schema and frozen inference.
+Experiment compatibility is shared with native trainers via training.resume.
+This module classifies paths; it does not start Ray or restore weights.
 """
 
 from __future__ import annotations
@@ -16,17 +13,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ...training.resume import require_resume_compatible
+from ...training.checkpoints import RLLIB_CHECKPOINT_SCHEMA
+from ...training.experiments import EXPERIMENT_SCHEMA, parse_experiment
+
 if TYPE_CHECKING:
     from ...training.experiments import ExperimentSpec
 
-CHECKPOINT_SCHEMA = "aresim.checkpoint.rllib.v1"
-EXPERIMENT_SCHEMA = "aresim.experiment.v1"
+CHECKPOINT_SCHEMA = RLLIB_CHECKPOINT_SCHEMA
 _STEP_LABEL = re.compile(r"^step_(\d+)$")
 
 
 @dataclass(frozen=True)
 class ResolvedResume:
-    """One validated resume target for :func:`aresim.algorithms.ppo.train.run_experiment`."""
+    """Validated run ownership, native path and completed-step information."""
 
     run_directory: Path
     ray_directory: Path
@@ -41,42 +41,6 @@ def _native_from_sidecar(sidecar: Path) -> Path:
     return native if native.is_absolute() else (sidecar.parent / native).resolve()
 
 
-def _parse_experiment(payload: dict[str, object]) -> ExperimentSpec:
-    from ...training.experiments import parse_experiment
-
-    return parse_experiment(payload)
-
-
-def _resume_compatible(stored: ExperimentSpec, current: ExperimentSpec) -> None:
-    """Reject resume when anything besides the training budget changed."""
-    stored_dict = stored.as_dict()
-    current_dict = current.as_dict()
-    for key in (
-        "schema_version",
-        "experiment_id",
-        "trial_id",
-        "algorithm",
-        "model",
-        "learner_seed",
-        "environment",
-        "model_config",
-        "resources",
-        "evaluation",
-        "checkpoint",
-        "tracking",
-    ):
-        if stored_dict[key] != current_dict[key]:
-            raise ValueError(f"resume experiment mismatch: {key}")
-    stored_algo = dict(stored_dict["algorithm_config"])
-    current_algo = dict(current_dict["algorithm_config"])
-    stored_steps = stored_algo.pop("total_environment_steps")
-    current_steps = current_algo.pop("total_environment_steps")
-    if stored_algo != current_algo:
-        raise ValueError("resume algorithm_config mismatch")
-    if current_steps < stored_steps:
-        raise ValueError("total_environment_steps cannot be reduced on resume")
-
-
 def _validate_resume_sidecar(sidecar: Path, spec: ExperimentSpec) -> dict[str, object]:
     payload = json.loads(sidecar.read_text(encoding="utf-8"))
     if payload.get("schema_version") != CHECKPOINT_SCHEMA:
@@ -84,8 +48,8 @@ def _validate_resume_sidecar(sidecar: Path, spec: ExperimentSpec) -> dict[str, o
     experiment = payload.get("experiment")
     if not isinstance(experiment, dict) or experiment.get("schema_version") != EXPERIMENT_SCHEMA:
         raise ValueError(f"checkpoint experiment envelope is invalid: {sidecar}")
-    stored = _parse_experiment(experiment)
-    _resume_compatible(stored, spec)
+    stored = parse_experiment(experiment)
+    require_resume_compatible(stored, spec)
     return payload
 
 
@@ -124,17 +88,22 @@ def _locate_resume_files(path: Path) -> tuple[Path | None, Path | None]:
 
 
 def _resume_from_sidecar(sidecar: Path, native: Path | None, spec: ExperimentSpec) -> ResolvedResume:
-    _validate_resume_sidecar(sidecar, spec)
+    payload = _validate_resume_sidecar(sidecar, spec)
     native = native or _native_from_sidecar(sidecar)
     if not native.is_dir() or not (native / "rllib_checkpoint.json").is_file():
         raise FileNotFoundError(f"native RLlib checkpoint does not exist: {native}")
-    return _resolved(
+    resolved = _resolved(
         sidecar.parents[2],
         native,
         spec.algorithm_config.rollout_batch_size,
         sidecar.parent.name,
         explicit_checkpoint=True,
     )
+    actual_steps = payload.get("environment_steps")
+    if isinstance(actual_steps, int) and not isinstance(actual_steps, bool):
+        from dataclasses import replace
+        resolved = replace(resolved, completed_environment_steps=actual_steps)
+    return resolved
 
 
 def _resume_from_run(run_directory: Path, spec: ExperimentSpec) -> ResolvedResume:
@@ -142,7 +111,7 @@ def _resume_from_run(run_directory: Path, spec: ExperimentSpec) -> ResolvedResum
     experiment = manifest.get("experiment")
     if not isinstance(experiment, dict):
         raise ValueError("run manifest is missing experiment provenance")
-    _resume_compatible(_parse_experiment(experiment), spec)
+    require_resume_compatible(parse_experiment(experiment), spec)
     return _resolved(run_directory, None, spec.algorithm_config.rollout_batch_size, None, explicit_checkpoint=False)
 
 

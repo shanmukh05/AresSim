@@ -1296,9 +1296,9 @@ The implemented `engine/` provides:
 - one serialized in-memory live session and one loaded replay through `AresService`;
 - a local FastAPI transport with one typed error envelope.
 - a framework-neutral `AresEnvironment` composition over the same canonical engine;
-- the full rover-centered `aresim.obs.local.v1` numerical observation with fixed edge padding;
+- the rover-centered numerical observation with fixed edge padding, plus `local_memory` v2 bearings/visited cells derived only from previously observed crops;
 - the fixed `aresim.action.rover.v1` ten-action adapter and validation-derived legal mask;
-- open-exploration shaped-training and sparse-evaluation reward projections;
+- version 2 mission-shaped and sparse reward projections with capped deliveries, consistent potential shaping and external cutoff semantics;
 - exactly-one-rover Gymnasium and PettingZoo Parallel adapters with transition parity.
 
 Active REST routes:
@@ -1315,7 +1315,7 @@ Active REST routes:
 - `POST /api/replays/{replayId}/jump`
 - `POST /api/replays/{replayId}/reset`
 
-The Gymnasium and PettingZoo adapters are optional in-process Python APIs; they do not add REST routes or alter frontend snapshot/save contracts. Their policy input is always local and their RL-facing shaped/sparse rewards remain separate from engine/UI rewards. External truncation, seeded baseline rollouts, unified UI-loadable trajectories, fixed evaluation splits, and RLlib masked-PPO training are implemented through the same environment boundary. W&B owns training metrics, while checkpoints, fixed-seed evaluation, trajectories, and Jupyter analysis remain reproducibility artifacts. The project still has no model-serving endpoint, database, authentication, WebSocket, server-side save library, multi-rover mechanics, or additional learned algorithm. Future additions must reuse the canonical environment instead of duplicating its rules and are described in [Agent Data, RL, and LLM Architecture Proposal](../rl/agent_data_rl_llm_proposal.md) and [RL Algorithms, Training, and Evaluation](../rl/rl_quickstart.md).
+The Gymnasium and PettingZoo adapters are optional in-process Python APIs; they do not add REST routes or alter frontend snapshot/save contracts. Their policy input is always local and their RL-facing shaped/sparse rewards remain separate from engine/UI rewards. External truncation, seeded baseline rollouts, unified UI-loadable trajectories, fixed evaluation splits, and RLlib PPO/DQN and dedicated MuZero training are implemented through the same environment boundary. W&B owns training metrics, while checkpoints, fixed-seed evaluation, trajectories, and Jupyter analysis remain reproducibility artifacts. The project still has no model-serving endpoint, database, authentication, WebSocket, server-side save library, multi-rover mechanics, or further learned algorithms beyond PPO, DQN and MuZero. Future additions must reuse the canonical environment instead of duplicating its rules and are described in [Agent Data, RL, and LLM Architecture Proposal](../rl/agent_data_rl_llm_proposal.md) and [RL Algorithms, Training, and Evaluation](../rl/rl_quickstart.md).
 
 ## 26. Update Checklist
 
@@ -1339,3 +1339,8 @@ When environment behavior changes, update this document and the implementation t
 - Replay/history schema.
 - Analytics series shape (`AnalyticsSeriesPoint`) and live/loaded parity.
 - Gameplay save/checkpoint schema.
+
+
+### RL corrections, October 6, 2026
+
+The simulator rules above remain authoritative for real actions. The RL wrapper now uses `phase1_resource_mission_v2` and reward profiles v2. Pad safety gates mission success and earns no repeatable progress. Learner gamma, task quotas and numerical configuration are frozen per run. Learned-policy presets use observed navigation memory; external truncation does not change task reward. See [pipeline corrections](../rl/pipeline_fixes_2026-10-06.md) for the maintained training/evaluation contracts and verification.

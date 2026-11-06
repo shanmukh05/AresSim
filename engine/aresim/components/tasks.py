@@ -14,14 +14,13 @@ service. Engine ``game_status`` still owns battery/health/livability failure.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ..config import TaskConfig
 
 from ..types import EngineTransition, GameStatus, RuleStatus, WorldState
 
 
 TASK_ID = "phase1_open_exploration_v1"
-RESOURCE_MISSION_ID = "phase1_resource_mission_v1"
-ICE_DELIVERY_TARGET_KG = 12.0
-SAMPLE_DELIVERY_TARGET_KG = 4.0
+RESOURCE_MISSION_ID = "phase1_resource_mission_v2"
 NEW_CELL_DISTANCE_NORMALIZER = 12.0
 
 
@@ -46,18 +45,19 @@ def _failure_reason(state: WorldState) -> str:
     }.get(failed_rule, "environment_failure")
 
 
-def _mission_progress(state: WorldState) -> float:
-    ice = min(1.0, state.objective_stats.ice_delivered / ICE_DELIVERY_TARGET_KG)
-    samples = min(1.0, state.objective_stats.samples_delivered / SAMPLE_DELIVERY_TARGET_KG)
-    pad_safe = 0.0 if state.build_pad_state.service_needed else 1.0
-    return (ice + samples + pad_safe) / 3.0
+def _mission_progress(state: WorldState, config: TaskConfig = TaskConfig()) -> float:
+    fractions = [min(1.0, delivered / target) for delivered, target in (
+        (state.objective_stats.ice_delivered, config.ice_target_kg),
+        (state.objective_stats.samples_delivered, config.sample_target_kg),
+    ) if target > 0]
+    return sum(fractions) / len(fractions)
 
 
-def _mission_complete(state: WorldState) -> bool:
+def _mission_complete(state: WorldState, config: TaskConfig = TaskConfig()) -> bool:
     return (
-        state.objective_stats.ice_delivered >= ICE_DELIVERY_TARGET_KG
-        and state.objective_stats.samples_delivered >= SAMPLE_DELIVERY_TARGET_KG
-        and not state.build_pad_state.service_needed
+        state.objective_stats.ice_delivered >= config.ice_target_kg
+        and state.objective_stats.samples_delivered >= config.sample_target_kg
+        and (not config.require_pad_safe or not state.build_pad_state.service_needed)
     )
 
 
@@ -71,6 +71,10 @@ class OpenExplorationTask:
 
     def evaluate(self, before: WorldState, transition: EngineTransition) -> TaskOutcome:
         """Return failure evidence already calculated by the deterministic core."""
+        return self.evaluate_transition(transition)
+
+    def evaluate_transition(self, transition: EngineTransition) -> TaskOutcome:
+        """Evaluate a built-in task without needing a pre-action world copy."""
         state = transition.state
         if state.game_status != GameStatus.GAME_OVER:
             return TaskOutcome(False, False, None)
@@ -82,16 +86,18 @@ class ResourceMissionTask:
 
     task_id = RESOURCE_MISSION_ID
 
-    def __init__(self) -> None:
+    def __init__(self, config: TaskConfig = TaskConfig()) -> None:
+        config.validate()
+        self.config = config
         self._progress = 0.0
         self._visited: set[tuple[int, int]] = set()
         self._pad_cells: tuple[tuple[int, int], ...] = ()
 
     def reset(self, state: WorldState) -> None:
-        """Remember starting pad occupancy so the first step is not free progress."""
+        """Reset delivery progress, visited cells and pad-distance bookkeeping."""
         rover = state.rovers[0]
         self._visited = {(rover.x, rover.y)}
-        self._progress = _mission_progress(state)
+        self._progress = _mission_progress(state, self.config)
         self._pad_cells = tuple(
             (cell.x, cell.y)
             for row in state.terrain
@@ -100,7 +106,11 @@ class ResourceMissionTask:
         )
 
     def evaluate(self, before: WorldState, transition: EngineTransition) -> TaskOutcome:
-        """Score delivery/pad progress and terminate on success or engine failure."""
+        """Score capped delivery progress and terminate on success or engine failure."""
+        return self.evaluate_transition(transition)
+
+    def evaluate_transition(self, transition: EngineTransition) -> TaskOutcome:
+        """Score the transition using episode-local progress and the new state."""
         state = transition.state
         rover = state.rovers[0]
         cell = (rover.x, rover.y)
@@ -113,15 +123,15 @@ class ResourceMissionTask:
                 for pad_x, pad_y in self._pad_cells
             )
             new_cell_distance = min(1.0, distance / NEW_CELL_DISTANCE_NORMALIZER)
-        progress = _mission_progress(state)
+        progress = _mission_progress(state, self.config)
         delta = max(0.0, progress - self._progress)
-        self._progress = progress
+        self._progress = max(self._progress, progress)
         if state.game_status == GameStatus.GAME_OVER:
             return TaskOutcome(
                 True, False, _failure_reason(state), progress=delta,
                 new_cell=new_cell, new_cell_distance=new_cell_distance,
             )
-        if _mission_complete(state):
+        if _mission_complete(state, self.config):
             return TaskOutcome(
                 True, True, "mission_complete", progress=delta,
                 new_cell=new_cell, new_cell_distance=new_cell_distance,

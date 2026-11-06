@@ -21,6 +21,7 @@ import {
   RotateCcw,
   Route,
   Save,
+  SlidersHorizontal,
   Shuffle,
   StepForward,
   Upload,
@@ -29,7 +30,7 @@ import {
 } from "lucide-react";
 import { useAresStore } from "../state/useAresStore";
 import type { ActionType, AlgorithmId, LoadedReplay, RunMode, SimAction } from "../types/sim";
-import { usesCheckpoint, usesJev } from "../types/sim";
+import { ALGORITHMS, ALGORITHM_CATALOG, CAPABILITY_REQUIREMENTS, supportsActionSampling, usesCheckpoint } from "../lib/algorithms";
 
 const MODE_STYLE: Record<RunMode, { label: string; icon: ReactNode; accent: string; active: string }> = {
   manual: { label: "Manual", icon: <Gamepad2 size={13} />, accent: "#39d5e8", active: "border-cyan-500/40 bg-cyan-500/10 text-cyan-200 shadow-[0_0_12px_rgba(57,213,232,0.15)]" },
@@ -45,16 +46,6 @@ const ACTIONS: Array<{ id: ActionType; label: string; icon: ReactNode }> = [
   { id: "service", label: "Service", icon: <Wrench size={16} /> },
   { id: "unload", label: "Unload payload", icon: <PackageOpen size={16} /> },
   { id: "wait", label: "Wait", icon: <BatteryCharging size={16} /> },
-];
-
-const ALGORITHMS: Array<{ value: AlgorithmId; label: string }> = [
-  { value: "random", label: "Random" },
-  { value: "random_valid", label: "Random (valid)" },
-  { value: "wait", label: "Wait" },
-  { value: "scripted", label: "Scripted" },
-  { value: "jev", label: "Jev" },
-  { value: "masked_ppo", label: "Masked PPO" },
-  { value: "masked_dqn", label: "Double Dueling DQN" },
 ];
 
 const PLAY_INTERVAL_MS = 700;
@@ -84,6 +75,8 @@ export function ActionBar() {
   const [seed, setSeed] = useState(String(snapshotSeed));
   const [playing, setPlaying] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(true);
+  const agentSettingsToggleRef = useRef<HTMLButtonElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const terminal = gameStatus === "game_over";
   const replayEnded = !!loadedReplay && loadedReplay.cursor >= loadedReplay.totalSteps;
@@ -132,38 +125,58 @@ export function ActionBar() {
     await loadGameplay(await readFile(file), file.name);
     if (uploadRef.current) uploadRef.current.value = "";
   };
+  const closeAgentSettings = () => {
+    setAgentSettingsOpen(false);
+    agentSettingsToggleRef.current?.focus();
+  };
 
   return (
-    <footer className="relative flex h-[60px] shrink-0 items-center justify-center border-t border-white/10 bg-[#07090b] px-4 shadow-[0_-12px_34px_rgba(0,0,0,0.34),inset_0_1px_rgba(255,255,255,0.025)]" data-mode={runMode} data-testid="action-bar">
-      <span className="absolute inset-x-0 top-0 h-px opacity-90" style={{ background: `linear-gradient(90deg, transparent 22%, ${modeStyle.accent} 50%, transparent 78%)` }} />
-      <div className="grid h-12 w-full max-w-[1180px] grid-cols-[1fr_auto_1fr] items-center gap-4" aria-label="Gameplay controls" data-testid="action-bar-controls">
-        <section className="relative flex h-12 w-fit justify-self-start items-center gap-2 rounded-lg border border-white/[0.07] bg-[#090b11]/80 px-3 pt-1 shadow-[0_4px_20px_rgba(0,0,0,0.4),inset_0_1px_rgba(255,255,255,0.03)]" aria-label="Mode and source controls" data-testid="action-bar-left">
-          <ZoneLabel color={modeStyle.accent}>Mode</ZoneLabel>
-          <ModeSwitch active={runMode} onChange={(mode) => void changeMode(mode)} />
-          {runMode === "algorithm" ? <><Divider /><AlgorithmSetup /></> : null}
-          {runMode === "load" ? <><Divider /><ReplaySource loadedReplay={loadedReplay} uploadRef={uploadRef} onUpload={uploadReplay} /></> : null}
-        </section>
+      <footer className="relative flex min-h-[60px] shrink-0 items-center justify-center border-t border-white/10 bg-[#07090b] px-4 py-1.5 max-[899px]:py-3 shadow-[0_-12px_34px_rgba(0,0,0,0.34),inset_0_1px_rgba(255,255,255,0.025)]" data-mode={runMode} data-testid="action-bar">
+        {runMode === "algorithm" && agentSettingsOpen ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-full z-40 flex justify-center px-4 pb-3">
+            <AlgorithmSetup onClose={closeAgentSettings} />
+          </div>
+        ) : null}
+        <span className="absolute inset-x-0 top-0 h-px opacity-90" style={{ background: `linear-gradient(90deg, transparent 22%, ${modeStyle.accent} 50%, transparent 78%)` }} />
+        <div className="grid w-full max-w-[1180px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 max-[899px]:flex max-[899px]:flex-wrap max-[899px]:gap-x-2 max-[899px]:gap-y-3" aria-label="Gameplay controls" data-testid="action-bar-controls">
+          <section className="relative flex min-h-12 w-fit max-w-full flex-wrap justify-self-start items-center gap-2 rounded-lg border border-white/[0.07] bg-[#090b11]/80 px-3 pt-1 pb-1 shadow-[0_4px_20px_rgba(0,0,0,0.4),inset_0_1px_rgba(255,255,255,0.03)]" aria-label="Mode and source controls" data-testid="action-bar-left">
+            <ZoneLabel color={modeStyle.accent}>Mode</ZoneLabel>
+            <ModeSwitch active={runMode} onChange={(mode) => void changeMode(mode)} />
+            {runMode === "algorithm" ? (
+              <TooltipButton
+                label="Agent settings"
+                buttonRef={agentSettingsToggleRef}
+                ariaExpanded={agentSettingsOpen}
+                ariaControls="agent-settings-panel"
+                className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg border transition ${agentSettingsOpen ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/[0.06] bg-white/[0.02] text-stone-400 hover:bg-white/[0.06] hover:text-white"}`}
+                onClick={() => setAgentSettingsOpen((open) => !open)}
+              >
+                <SlidersHorizontal size={15} />
+              </TooltipButton>
+            ) : null}
+            {runMode === "load" ? <><Divider /><ReplaySource loadedReplay={loadedReplay} uploadRef={uploadRef} onUpload={uploadReplay} /></> : null}
+          </section>
 
-        <section className="relative flex h-12 w-fit justify-self-center items-center justify-center gap-2 rounded-lg border border-white/[0.1] bg-[#0c0f16]/95 px-4 pt-1 shadow-[0_4px_20px_rgba(0,0,0,0.5),inset_0_1px_rgba(255,255,255,0.04)]" aria-label="Active game controls" data-testid="action-bar-center" style={{ borderColor: `${modeStyle.accent}30`, boxShadow: `0_4px_20px_rgba(0,0,0,0.5), inset_0_1px_rgba(255,255,255,0.04), 0_0_16px_${modeStyle.accent}08` }}>
-          <ZoneLabel color={modeStyle.accent}>{runMode === "manual" ? "Rover commands" : runMode === "algorithm" ? "Run controls" : "Replay controls"}</ZoneLabel>
-          {runMode === "manual" ? <><div className="flex gap-1.5" aria-label="Environment actions">{ACTIONS.map((action) => <CommandButton key={action.id} label={action.label} active={selectedTool === action.id} accent={modeStyle.accent} disabled={controlsDisabled} onClick={() => void dispatchAction({ type: action.id })}>{action.icon}</CommandButton>)}</div><Divider /><RunUtilities onReset={() => void resetCurrentRun()} onSave={() => setSaveOpen(true)} /></> : null}
-          {runMode === "algorithm" ? <><Transport playing={playing} paused={paused} disabled={controlsDisabled} stepDisabled={controlsDisabled || (playing && !paused)} onToggle={() => void togglePlay()} onStep={() => void step()} /><SpeedControl speed={speed} onChange={setSpeed} accent={modeStyle.accent} /><Divider /><RunUtilities onReset={() => void resetCurrentRun()} onSave={() => setSaveOpen(true)} /></> : null}
-          {runMode === "load" ? <ReplayControls loadedReplay={loadedReplay} playing={playing} paused={paused} ended={replayEnded} speed={speed} onToggle={() => void togglePlay()} onStep={() => void step()} onSpeed={setSpeed} onRepeat={() => { setPlaying(false); void resetReplay(); }} onJump={(target) => void jumpToReplayStep(target)} accent={modeStyle.accent} /> : null}
-        </section>
+          <section className="relative flex min-h-12 w-fit max-w-full flex-wrap justify-self-center items-center justify-center gap-2 rounded-lg border border-white/[0.1] bg-[#0c0f16]/95 px-4 pt-1 pb-1 max-[899px]:order-3 max-[899px]:mx-auto shadow-[0_4px_20px_rgba(0,0,0,0.5),inset_0_1px_rgba(255,255,255,0.04)]" aria-label="Active game controls" data-testid="action-bar-center" style={{ borderColor: `${modeStyle.accent}30`, boxShadow: `0_4px_20px_rgba(0,0,0,0.5), inset_0_1px_rgba(255,255,255,0.04), 0_0_16px_${modeStyle.accent}08` }}>
+            <ZoneLabel color={modeStyle.accent}>{runMode === "manual" ? "Rover commands" : runMode === "algorithm" ? "Run controls" : "Replay controls"}</ZoneLabel>
+            {runMode === "manual" ? <><div className="flex gap-1.5" aria-label="Environment actions">{ACTIONS.map((action) => <CommandButton key={action.id} label={action.label} active={selectedTool === action.id} accent={modeStyle.accent} disabled={controlsDisabled} onClick={() => void dispatchAction({ type: action.id })}>{action.icon}</CommandButton>)}</div><Divider /><RunUtilities onReset={() => void resetCurrentRun()} onSave={() => setSaveOpen(true)} /></> : null}
+            {runMode === "algorithm" ? <><Transport playing={playing} paused={paused} disabled={controlsDisabled} stepDisabled={controlsDisabled || (playing && !paused)} onToggle={() => void togglePlay()} onStep={() => void step()} /><SpeedControl speed={speed} onChange={setSpeed} accent={modeStyle.accent} /><Divider /><RunUtilities onReset={() => void resetCurrentRun()} onSave={() => setSaveOpen(true)} /></> : null}
+            {runMode === "load" ? <ReplayControls loadedReplay={loadedReplay} playing={playing} paused={paused} ended={replayEnded} speed={speed} onToggle={() => void togglePlay()} onStep={() => void step()} onSpeed={setSpeed} onRepeat={() => { setPlaying(false); void resetReplay(); }} onJump={(target) => void jumpToReplayStep(target)} accent={modeStyle.accent} /> : null}
+          </section>
 
-        <section className="relative flex h-12 w-fit justify-self-end items-center justify-end rounded-lg border border-white/[0.07] bg-[#090b11]/80 px-3 pt-1 shadow-[0_4px_20px_rgba(0,0,0,0.4),inset_0_1px_rgba(255,255,255,0.03)]" aria-label="Environment controls" data-testid="action-bar-right">
-          <ZoneLabel color={runMode === "load" && loadedReplay ? "#78716c" : modeStyle.accent}>World setup</ZoneLabel>
-          <EnvironmentTools
-            seed={runMode === "load" && loadedReplay ? String(loadedReplay.seed) : seed}
-            setSeed={setSeed}
-            applySeed={applySeed}
-            randomize={randomize}
-            disabled={runMode === "load" && loadedReplay !== null}
-          />
-        </section>
-      </div>
-      <SaveDialog open={saveOpen} sessionId={sessionId} onClose={() => setSaveOpen(false)} onSave={(name) => { void saveRun(name); setSaveOpen(false); }} />
-    </footer>
+          <section className="relative flex h-12 w-fit justify-self-end items-center justify-end rounded-lg border border-white/[0.07] bg-[#090b11]/80 px-3 pt-1 max-[899px]:order-2 max-[899px]:ml-auto shadow-[0_4px_20px_rgba(0,0,0,0.4),inset_0_1px_rgba(255,255,255,0.03)]" aria-label="Environment controls" data-testid="action-bar-right">
+            <ZoneLabel color={runMode === "load" && loadedReplay ? "#78716c" : modeStyle.accent}>World setup</ZoneLabel>
+            <EnvironmentTools
+              seed={runMode === "load" && loadedReplay ? String(loadedReplay.seed) : seed}
+              setSeed={setSeed}
+              applySeed={applySeed}
+              randomize={randomize}
+              disabled={runMode === "load" && loadedReplay !== null}
+            />
+          </section>
+        </div>
+        <SaveDialog open={saveOpen} sessionId={sessionId} onClose={() => setSaveOpen(false)} onSave={(name) => { void saveRun(name); setSaveOpen(false); }} />
+      </footer>
   );
 }
 
@@ -224,12 +237,19 @@ function Transport({ playing, paused, disabled, stepDisabled, onToggle, onStep }
   );
 }
 
-function AlgorithmSetup() {
+function AlgorithmSetup({ onClose }: { onClose: () => void }) {
   const algorithmId = useAresStore((state) => state.algorithmId);
   const checkpointPath = useAresStore((state) => state.checkpointPath);
+  const policyActionMode = useAresStore((state) => state.policyActionMode);
+  const setPolicyActionMode = useAresStore((state) => state.setPolicyActionMode);
+  const backendBusy = useAresStore((state) => state.backendBusy);
   const rllibAvailable = useAresStore((state) => state.rllibAvailable);
+  const muzeroAvailable = useAresStore((state) => state.muzeroAvailable);
+  const worldModelsAvailable = useAresStore((state) => state.worldModelsAvailable);
   const jevAvailable = useAresStore((state) => state.jevAvailable);
   const policyCapabilitiesLoaded = useAresStore((state) => state.policyCapabilitiesLoaded);
+  const capabilities = { rllib: rllibAvailable, muzero: muzeroAvailable, world_models: worldModelsAvailable, jev: jevAvailable };
+  const actionSelection = ALGORITHM_CATALOG[algorithmId].actionSelection;
   const setAlgorithmId = useAresStore((state) => state.setAlgorithmId);
   const setCheckpointPath = useAresStore((state) => state.setCheckpointPath);
   const attachCurrentPolicy = useAresStore((state) => state.attachCurrentPolicy);
@@ -240,45 +260,82 @@ function AlgorithmSetup() {
   }, [refreshPolicyCapabilities]);
 
   return (
-    <div className="flex items-center gap-1.5">
-      <label className="flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-[#0c0f16]/90 px-2.5 text-xs text-stone-300 focus-within:border-violet-500/40 transition">
-        <Cpu size={13} className="text-violet-300" />
-        <select aria-label="Algorithm policy" className="max-w-[108px] bg-transparent font-semibold text-white outline-none cursor-pointer text-[11px]" value={algorithmId} onChange={(event) => setAlgorithmId(event.target.value as AlgorithmId)}>
-          {ALGORITHMS.map((option) => {
-            const blockedCheckpoint = usesCheckpoint(option.value) && policyCapabilitiesLoaded && !rllibAvailable;
-            const blockedJev = usesJev(option.value) && policyCapabilitiesLoaded && !jevAvailable;
-            const blocked = blockedCheckpoint || blockedJev;
-            const suffix = blockedCheckpoint ? " (rllib required)" : blockedJev ? " (API key required)" : "";
-            return (
-              <option key={option.value} value={option.value} disabled={blocked} className="bg-[#0b0e14] text-white">
-                {option.label}{suffix}
-              </option>
-            );
-          })}
-        </select>
-      </label>
-      {usesCheckpoint(algorithmId) ? (
-        <label className="flex h-9 min-w-[180px] items-center gap-2 rounded-lg border border-white/[0.08] bg-[#0c0f16]/90 px-2.5 text-xs text-stone-300 focus-within:border-violet-500/40 transition">
-          <input
-            aria-label="Checkpoint path"
-            className="w-full bg-transparent font-mono text-[10px] text-white outline-none placeholder:text-stone-500"
-            placeholder="/absolute/path/to/checkpoint.json"
-            value={checkpointPath}
-            onChange={(event) => setCheckpointPath(event.target.value)}
-            onBlur={() => void attachCurrentPolicy()}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void attachCurrentPolicy();
-              }
-            }}
-          />
+    <section
+      id="agent-settings-panel"
+      className="pointer-events-auto w-fit max-w-full shrink-0 rounded-lg border border-violet-400/20 bg-[#0c0f16]/95 p-3 shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
+      aria-label="Agent settings"
+      data-testid="agent-settings-panel"
+      onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }}
+    >
+      <div className="mb-2 flex items-center justify-between gap-6">
+        <span className="flex items-center gap-2 text-[10px] font-semibold text-violet-200"><SlidersHorizontal size={13} />Agent settings</span>
+        <button type="button" aria-label="Close agent settings" className="grid h-6 w-6 place-items-center rounded text-stone-400 transition hover:bg-white/10 hover:text-white" onClick={onClose}><X size={14} /></button>
+      </div>
+      <div className="flex min-w-0 flex-wrap items-end gap-3">
+        <label className="flex min-w-0 flex-col gap-1 text-[9px] font-semibold text-stone-400 max-[767px]:w-full">
+          <span>Agent</span>
+          <span className="flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-[#090b11] px-2.5 focus-within:border-violet-500/40 transition">
+            <Cpu size={13} className="text-violet-300" />
+            <select aria-label="Algorithm policy" className="w-[200px] min-w-0 bg-transparent font-semibold text-white outline-none cursor-pointer text-[11px] max-[767px]:w-full" value={algorithmId} onChange={(event) => setAlgorithmId(event.target.value as AlgorithmId)}>
+              {ALGORITHMS.map((option) => {
+                const blocked = option.capability !== null && policyCapabilitiesLoaded && !capabilities[option.capability];
+                const suffix = blocked && option.capability !== null ? ` (${CAPABILITY_REQUIREMENTS[option.capability]})` : "";
+                return (
+                  <option key={option.value} value={option.value} disabled={blocked} className="bg-[#0b0e14] text-white">
+                    {option.label}{suffix}
+                  </option>
+                );
+              })}
+            </select>
+          </span>
         </label>
-      ) : null}
-      <CommandButton label="Apply checkpoint path" disabled={!usesCheckpoint(algorithmId)} onClick={() => void attachCurrentPolicy()}>
-        <Check size={15} />
-      </CommandButton>
-    </div>
+        {usesCheckpoint(algorithmId) ? (
+          <div className="flex w-[320px] min-w-0 max-w-full flex-col gap-1 text-[9px] font-semibold text-stone-400 max-[767px]:w-full">
+            <label htmlFor="policy-checkpoint-path">Checkpoint</label>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="flex h-9 min-w-0 flex-1 items-center rounded-lg border border-white/[0.08] bg-[#090b11] px-2.5 focus-within:border-violet-500/40 transition">
+                <input
+                  id="policy-checkpoint-path"
+                  aria-label="Checkpoint path"
+                  className="w-full min-w-0 bg-transparent font-mono text-[11px] font-normal text-white outline-none placeholder:text-stone-500"
+                  placeholder="/absolute/path/to/checkpoint.json"
+                  value={checkpointPath}
+                  onChange={(event) => setCheckpointPath(event.target.value)}
+                  onBlur={() => void attachCurrentPolicy()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void attachCurrentPolicy();
+                    }
+                  }}
+                />
+              </span>
+              <CommandButton label="Apply checkpoint path" onClick={() => void attachCurrentPolicy()}>
+                <Check size={15} />
+              </CommandButton>
+            </span>
+          </div>
+        ) : null}
+        {supportsActionSampling(algorithmId) ? (
+          <label className="flex min-w-0 flex-col gap-1 text-[9px] font-semibold text-stone-400 max-[767px]:w-full">
+            <span>Action selection</span>
+            <select
+              aria-label="Policy action selection"
+              className="h-9 w-[180px] max-w-full rounded-lg border border-white/[0.08] bg-[#090b11] px-2.5 text-[11px] font-semibold text-white outline-none focus:border-violet-500/40 cursor-pointer disabled:opacity-50 max-[767px]:w-full"
+              value={policyActionMode}
+              disabled={backendBusy}
+              onChange={(event) => {
+                setPolicyActionMode(event.target.value as "stochastic" | "deterministic");
+                void attachCurrentPolicy();
+              }}
+            >
+              <option value="stochastic" className="bg-[#0b0e14]">{(actionSelection === "q") ? "Sampling (ε-greedy)" : "Sampling"}</option>
+              <option value="deterministic" className="bg-[#0b0e14]">{(actionSelection === "q") ? "Highest Q-value" : "Highest probability"}</option>
+            </select>
+          </label>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -295,7 +352,7 @@ function ReplaySource({ loadedReplay, uploadRef, onUpload }: { loadedReplay: Loa
 function ReplayControls({ loadedReplay, playing, paused, ended, speed, onToggle, onStep, onSpeed, onRepeat, onJump, accent }: { loadedReplay: LoadedReplay | null; playing: boolean; paused: boolean; ended: boolean; speed: number; onToggle: () => void; onStep: () => void; onSpeed: (speed: number) => void; onRepeat: () => void; onJump: (step: number) => void; accent: string }) {
   const loaded = !!loadedReplay;
   return (
-    <div className="flex items-center gap-2" aria-label="Replay controls">
+    <div className="flex flex-wrap items-center justify-center gap-2" aria-label="Replay controls">
       <div className="flex gap-1.5">
         <CommandButton label={!playing ? "Play replay" : paused ? "Resume replay" : "Pause replay"} disabled={!loaded || ended} onClick={onToggle}>
           {playing && !paused ? <Pause size={15} /> : <Play size={15} />}
@@ -347,11 +404,11 @@ function CommandButton({ label, children, onClick, disabled = false, active = fa
   );
 }
 
-function TooltipButton({ label, children, className, onClick, disabled = false, ariaPressed, style }: { label: string; children: ReactNode; className: string; onClick?: () => void; disabled?: boolean; ariaPressed?: boolean; style?: React.CSSProperties }) {
+function TooltipButton({ label, children, className, onClick, disabled = false, ariaPressed, ariaExpanded, ariaControls, buttonRef, style }: { label: string; children: ReactNode; className: string; onClick?: () => void; disabled?: boolean; ariaPressed?: boolean; ariaExpanded?: boolean; ariaControls?: string; buttonRef?: React.Ref<HTMLButtonElement>; style?: React.CSSProperties }) {
   return (
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
-        <button aria-label={label} aria-pressed={ariaPressed} className={className} disabled={disabled} onClick={onClick} style={style} type="button">
+        <button ref={buttonRef} aria-label={label} aria-pressed={ariaPressed} aria-expanded={ariaExpanded} aria-controls={ariaControls} className={className} disabled={disabled} onClick={onClick} style={style} type="button">
           {children}
         </button>
       </Tooltip.Trigger>

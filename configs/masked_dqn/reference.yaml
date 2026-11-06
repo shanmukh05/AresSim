@@ -1,16 +1,19 @@
 schema_version: aresim.experiment.v1
 experiment_id: rllib_masked_double_dueling_dqn_reference
-trial_id: seed_1
+trial_id: seed_3_sample_credit_030
 algorithm: masked_dqn
 model: local_cnn_q
-learner_seed: 1
+learner_seed: 3
 environment:
   scenario_id: phase1_default_v1
-  observation: local
+  observation: local_memory
   action: discrete
   reward: shaped_train
   task: resource_mission
   max_episode_steps: 800
+  reward_overrides:
+    time_cost: -0.025
+    samples_collected: 0.30
 algorithm_config:
   total_environment_steps: 2097152
   rollout_batch_size: 4096
@@ -37,8 +40,7 @@ model_config:
   telemetry_layers: [128, 128]
   fused_width: 256
 evaluation:
-  seed_manifest: notebooks/phase1_open_exploration_split_v1.yaml
-  interval_environment_steps: 81920
+  seed_manifest: configs/seeds/phase1_open_exploration_split_v1.yaml
   split: validation
   record_trajectories: false
 checkpoint:
@@ -48,12 +50,12 @@ tracking:
   mode: online
   project: aresim
   group: double_dueling_dqn
-  tags: [reference, double_dueling_dqn, n_step_3, gpu]
+  tags: [reference, double_dueling_dqn, n_step_3, gpu, sample_credit_030]
 artifacts:
   root: results
-  reject_existing: false
+  reject_existing: true
 resources:
-  num_env_runners: 4
+  num_env_runners: 28
   num_envs_per_env_runner: 1
   num_learners: 0
   cpus_per_env_runner: 1

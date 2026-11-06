@@ -8,8 +8,8 @@ import { create } from "zustand";
 import { AresApiClient, AresApiError, type ReplayResponse } from "../api/aresClient";
 import { downloadTrajectoryFile } from "../lib/trajectoryFile";
 import { payloadUsedKg } from "../lib/payload";
-import type { ActionType, AresReplayProjectionV1, AlgorithmId, AnalyticsSeriesPoint, CameraView, LoadedReplay, OverlayMode, RunMode, SelectionTarget, SimAction, SimSnapshot, SimWarning, ViewportZoomMode } from "../types/sim";
-import { usesCheckpoint, usesJev } from "../types/sim";
+import type { ActionType, AresReplayProjectionV1, AlgorithmId, AnalyticsSeriesPoint, CameraView, LoadedReplay, OverlayMode, PolicyActionMode, RunMode, SelectionTarget, SimAction, SimSnapshot, SimWarning, ViewportZoomMode } from "../types/sim";
+import { supportsActionSampling, usesCheckpoint, usesJev } from "../types/sim";
 
 const client = new AresApiClient();
 
@@ -129,7 +129,10 @@ interface AresStore {
   runMode: RunMode;
   algorithmId: AlgorithmId;
   checkpointPath: string;
+  policyActionMode: PolicyActionMode;
   rllibAvailable: boolean;
+  muzeroAvailable: boolean;
+  worldModelsAvailable: boolean;
   jevAvailable: boolean;
   policyCapabilitiesLoaded: boolean;
   policyAttachKey: string | null;
@@ -170,6 +173,7 @@ interface AresStore {
   setRunMode: (mode: RunMode) => void;
   setAlgorithmId: (id: AlgorithmId) => void;
   setCheckpointPath: (path: string) => void;
+  setPolicyActionMode: (mode: PolicyActionMode) => void;
   refreshPolicyCapabilities: () => Promise<void>;
   attachCurrentPolicy: () => Promise<void>;
   setSpeed: (speed: number) => void;
@@ -235,7 +239,10 @@ export const useAresStore = create<AresStore>((set, get) => {
   runMode: "manual",
   algorithmId: "random",
   checkpointPath: "",
+  policyActionMode: "stochastic",
   rllibAvailable: false,
+  muzeroAvailable: false,
+  worldModelsAvailable: false,
   jevAvailable: false,
   policyCapabilitiesLoaded: false,
   policyAttachKey: null,
@@ -396,6 +403,7 @@ export const useAresStore = create<AresStore>((set, get) => {
     }
     if (state.runMode === "algorithm") {
       await get().attachCurrentPolicy();
+      if (!get().policyAttachKey) return;
       await runBackend(
         () => client.agentStep(),
         (response) => set((current) => ({
@@ -463,11 +471,14 @@ export const useAresStore = create<AresStore>((set, get) => {
   },
   setAlgorithmId: (id) => set({ algorithmId: id, policyAttachKey: null }),
   setCheckpointPath: (path) => set({ checkpointPath: path, policyAttachKey: null }),
+  setPolicyActionMode: (mode) => set({ policyActionMode: mode, policyAttachKey: null }),
   refreshPolicyCapabilities: async () => {
     try {
       const policies = await client.listPolicies();
       set({
         rllibAvailable: policies.capabilities.rllib,
+        muzeroAvailable: policies.capabilities.muzero === true,
+        worldModelsAvailable: policies.capabilities.world_models === true,
         jevAvailable: policies.capabilities.jev === true,
         policyCapabilitiesLoaded: true,
       });
@@ -476,6 +487,8 @@ export const useAresStore = create<AresStore>((set, get) => {
         const health = await client.fetchHealth();
         set({
           rllibAvailable: health.rllibAvailable,
+          muzeroAvailable: health.muzeroAvailable,
+          worldModelsAvailable: health.worldModelsAvailable,
           jevAvailable: health.jevAvailable,
           policyCapabilitiesLoaded: true,
         });
@@ -485,9 +498,10 @@ export const useAresStore = create<AresStore>((set, get) => {
     }
   },
   attachCurrentPolicy: async () => {
-    const { algorithmId, checkpointPath, snapshot, runMode } = get();
+    const { algorithmId, checkpointPath, policyActionMode, snapshot, runMode } = get();
     if (!snapshot || runMode !== "algorithm") return;
-    const key = `${algorithmId}:${usesCheckpoint(algorithmId) ? checkpointPath.trim() : ""}`;
+    const actionMode = supportsActionSampling(algorithmId) ? policyActionMode : undefined;
+    const key = `${algorithmId}:${usesCheckpoint(algorithmId) ? checkpointPath.trim() : ""}:${actionMode ?? ""}`;
     if (get().policyAttachKey === key) return;
     if (usesCheckpoint(algorithmId) && !checkpointPath.trim()) {
       set({
@@ -517,6 +531,7 @@ export const useAresStore = create<AresStore>((set, get) => {
       () => client.attachPolicy({
         algorithmId,
         checkpointPath: usesCheckpoint(algorithmId) ? checkpointPath.trim() : undefined,
+        actionMode,
       }),
       () => set({ policyAttachKey: key, actionWarning: null }),
       "Policy attach failed",

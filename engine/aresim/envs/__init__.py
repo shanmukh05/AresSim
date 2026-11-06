@@ -1,7 +1,8 @@
 """RL environment boundaries built over one composed :class:`~aresim.envs.environment.AresEnvironment`.
 
-Re-exports framework-neutral, Gymnasium, and PettingZoo adapters. Gameplay rules
-always remain in :mod:`aresim.core`.
+Re-exports framework-neutral and Gymnasium adapters. The PettingZoo adapter
+(`AresParallelEnv`) loads on first use so MuZero and other Gym-only extras do
+not need that dependency. Gameplay rules always remain in :mod:`aresim.core`.
 
 **Last updated:** September 1, 2026
 
@@ -11,7 +12,6 @@ always remain in :mod:`aresim.core`.
 
 from .environment import AresEnvironment, AresTimeLimit, Environment, EnvironmentReset, EnvironmentStep
 from .gymnasium import AresGymEnv
-from .pettingzoo import AresParallelEnv
 
 __all__ = [
     "AresEnvironment",
@@ -22,3 +22,11 @@ __all__ = [
     "EnvironmentReset",
     "EnvironmentStep",
 ]
+
+
+def __getattr__(name: str):
+    if name == "AresParallelEnv":
+        from .pettingzoo import AresParallelEnv
+
+        return AresParallelEnv
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

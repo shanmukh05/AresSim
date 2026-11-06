@@ -1,20 +1,11 @@
-"""Rollout, trajectory, and optional learned-policy training public API.
+"""Framework-neutral rollouts, evaluation and lazy registered training entry points.
 
-Orchestration layer: does not implement simulator rules or algorithm training
-internals. Learned PPO lives in :mod:`aresim.algorithms.ppo`; baselines in
-:mod:`aresim.algorithms`.
-
-**Last updated:** September 1, 2026
-
-**Contains:** lazy exports for ``run_experiment``, ``make_checkpoint_agent``,
-rollout/trajectory types, and training registry symbols.
-
-**CLI entry:** ``aresim-rl`` → :mod:`aresim.training.cli`.
-
-**Dependencies:** core rollouts need ``env`` extra; PPO paths need ``rllib`` extra.
+Algorithms own networks/objectives; training.rllib and training.world_models own their
+respective collection/lifecycle integrations. Importing this surface does not load Torch or Ray.
 """
 
-from .experiments import ExperimentSpec, load_experiment_with_overrides
+from .experiments import ExperimentSpec, load_experiment, load_experiment_with_overrides
+from .checkpoints import make_checkpoint_agent
 from .runner import DEFAULT_MAX_EPISODE_STEPS, EpisodeSpec, EpisodeSummary, RolloutConfig, RolloutResult, RolloutRunner
 from .seeds import SeedSplitManifest, load_seed_manifest
 from .trajectories import (
@@ -33,31 +24,12 @@ def create_training_registry():
     return create()
 
 
-def load_experiment(path, registry=None):
-    """Load YAML using the selected algorithm factory's typed decoder."""
-    import yaml
-
-    from .experiments import parse_experiment
-    from .seeds import resolve_checkout_file
-
-    payload = yaml.safe_load(resolve_checkout_file(path, kind="experiment config").read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or not isinstance(payload.get("algorithm"), str):
-        raise ValueError("experiment must select a registered algorithm")
+def run_experiment(spec, registry=None, **kwargs):
+    """Resolve once and dispatch through the explicitly registered training runner."""
+    from pathlib import Path
     selected = create_training_registry() if registry is None else registry
-    decoder = lambda raw: selected.decode_algorithm_config(payload["algorithm"], raw)
-    return parse_experiment(payload, algorithm_config_decoder=decoder)
-
-
-def run_experiment(*args, **kwargs):
-    from ..algorithms.ppo.train import run_experiment as run
-
-    return run(*args, **kwargs)
-
-
-def make_checkpoint_agent(*args, **kwargs):
-    from ..algorithms.ppo.checkpoint import make_checkpoint_agent as make
-
-    return make(*args, **kwargs)
+    resolved = load_experiment(spec, registry=selected) if isinstance(spec, (str, Path)) else spec
+    return selected.run(resolved, **kwargs)
 
 
 def evaluate_checkpoint(*args, **kwargs):
@@ -73,12 +45,13 @@ def generate_report(*args, **kwargs):
 
 
 def __getattr__(name: str):
-    if name in {"AlgorithmFactory", "CheckpointLoader", "ModelFactory", "TrainingContext", "TrainingRegistry"}:
+    if name in {"AlgorithmFactory", "CheckpointLoader", "ModelFactory", "TrainingContext", "TrainingRunner", "TrainingRegistry"}:
         from ..algorithms.registry import (
             AlgorithmFactory,
             CheckpointLoader,
             ModelFactory,
             TrainingContext,
+            TrainingRunner,
             TrainingRegistry,
         )
 
@@ -103,6 +76,7 @@ __all__ = [
     "TrajectoryValidationError",
     "TrajectoryWriter",
     "TrainingContext",
+    "TrainingRunner",
     "TrainingRegistry",
     "create_training_registry",
     "evaluate_checkpoint",

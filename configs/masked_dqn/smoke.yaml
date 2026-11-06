@@ -1,12 +1,12 @@
 schema_version: aresim.experiment.v1
-experiment_id: rllib_masked_dqn_smoke
+experiment_id: rllib_masked_dqn_smoke_v2
 trial_id: seed_7
 algorithm: masked_dqn
 model: local_cnn_q
 learner_seed: 7
 environment:
   scenario_id: phase1_default_v1
-  observation: local
+  observation: local_memory
   action: discrete
   reward: shaped_train
   task: open_exploration
@@ -43,8 +43,7 @@ resources:
   cpus_per_env_runner: 1
   gpus_per_learner: 0.0
 evaluation:
-  seed_manifest: notebooks/phase1_smoke_eval_v1.yaml
-  interval_environment_steps: 2048
+  seed_manifest: configs/seeds/phase1_smoke_eval_v1.yaml
   split: validation
   record_trajectories: false
 checkpoint:

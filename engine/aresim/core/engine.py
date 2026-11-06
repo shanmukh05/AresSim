@@ -56,6 +56,12 @@ class AresEngine:
             raise RuntimeError("engine has not been reset")
         return deepcopy(self._state)
 
+    def _borrow_state(self) -> WorldState:
+        """Internal read-only view for immediate-consumption RL projections."""
+        if self._state is None:
+            raise RuntimeError("engine has not been reset")
+        return self._state
+
     def reset(self, seed: int) -> WorldState:
         """Build a new world from `seed` and return a copy of the initial state."""
         state = create_world(seed, self.config)

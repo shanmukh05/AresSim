@@ -22,10 +22,9 @@ import math
 import numpy as np
 from gymnasium import spaces
 
-from ..config import EngineConfig, ObservationConfig
+from ..config import EngineConfig, ObservationConfig, TaskConfig
 from ..core.rules import near_build_pad, rover_on_build_pad
 from ..types import Position, TerrainType, WeatherState, WorldState
-from .tasks import ICE_DELIVERY_TARGET_KG, SAMPLE_DELIVERY_TARGET_KG
 
 
 OBSERVATION_SCHEMA = "aresim.obs.local.v1"
@@ -65,16 +64,19 @@ def _progress_row(current: float) -> np.ndarray:
     return np.array((done, 1.0, 1.0 - done, 1.0), dtype=np.float32)
 
 
-def _objective_progress_table(state: WorldState, slot_count: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _objective_progress_table(state: WorldState, slot_count: int, task: TaskConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Fill live slots with mission progress. No coordinates or bearings."""
     types = np.zeros(slot_count, dtype=np.uint8)
     rows = np.zeros((slot_count, 4), dtype=np.float32)
     mask = np.zeros(slot_count, dtype=np.uint8)
     stats = state.objective_stats
+    def progress(delivered: float, target: float) -> float:
+        return delivered / target if target else 1.0
+
     slots = (
-        (OBJECTIVE_TYPE_EXTRACT_ICE, stats.ice_collected / ICE_DELIVERY_TARGET_KG),
-        (OBJECTIVE_TYPE_DELIVER_ICE, stats.ice_delivered / ICE_DELIVERY_TARGET_KG),
-        (OBJECTIVE_TYPE_SCAN, stats.samples_delivered / SAMPLE_DELIVERY_TARGET_KG),
+        (OBJECTIVE_TYPE_EXTRACT_ICE, progress(stats.ice_collected, task.ice_target_kg)),
+        (OBJECTIVE_TYPE_DELIVER_ICE, progress(stats.ice_delivered, task.ice_target_kg)),
+        (OBJECTIVE_TYPE_SCAN, progress(stats.samples_delivered, task.sample_target_kg)),
         (OBJECTIVE_TYPE_SERVICE, 0.0 if state.build_pad_state.service_needed else 1.0),
         (OBJECTIVE_TYPE_SURVIVE, state.rovers[0].battery / 100),
     )
@@ -90,9 +92,11 @@ class LocalObservation:
 
     schema = OBSERVATION_SCHEMA
 
-    def __init__(self, config: ObservationConfig) -> None:
+    def __init__(self, config: ObservationConfig, task: TaskConfig = TaskConfig()) -> None:
         config.validate()
+        task.validate()
         self.config = config
+        self.task_config = task
         size = config.window_size
         objectives = config.max_objectives
         self.space = spaces.Dict({
@@ -188,7 +192,7 @@ class LocalObservation:
             pad_proximity = 0
 
         objective_type, objectives, objective_mask = _objective_progress_table(
-            state, self.config.max_objectives,
+            state, self.config.max_objectives, self.task_config,
         )
         return {
             "terrain_type": terrain_type,
@@ -202,3 +206,83 @@ class LocalObservation:
             "objectives": objectives,
             "objective_mask": objective_mask,
         }
+
+
+MEMORY_OBSERVATION_SCHEMA = "aresim.obs.local_memory.v2"
+
+
+class LocalMemoryObservation(LocalObservation):
+    """Remember only cells seen in the local crop, with explicit home bearings.
+
+    Navigation: home dx/dy/valid, previous displacement dx/dy, remembered ice
+    dx/dy/valid, remembered unscanned rock dx/dy/valid, home absolute x/y.
+    Distances are divided by map width/height minus one. No hidden-map lookup.
+    """
+
+    schema = MEMORY_OBSERVATION_SCHEMA
+
+    def __init__(self, config: ObservationConfig, task: TaskConfig = TaskConfig()) -> None:
+        super().__init__(config, task)
+        self.space = spaces.Dict({**self.space.spaces,
+            "navigation": spaces.Box(-1, 1, shape=(13,), dtype=np.float32),
+            "visited": spaces.Box(0, 1, shape=(1, config.window_size, config.window_size), dtype=np.float32),
+        })
+        self._clear()
+
+    def _clear(self) -> None:
+        self._home = None
+        self._previous = None
+        self._visited = set()
+        self._ice = set()
+        self._rock = set()
+        self._identity = None
+
+    def reset(self, state: WorldState, engine_config: EngineConfig):
+        self._clear()
+        return self.build(state, engine_config)
+
+    def build(self, state: WorldState, engine_config: EngineConfig):
+        if self._identity is not None and (state.seed != self._identity[0] or state.step < self._identity[1]):
+            self._clear()
+        observation = super().build(state, engine_config)
+        rover = state.rovers[0]
+        position = (rover.x, rover.y)
+        width, height = max(1, state.terrain_width - 1), max(1, state.terrain_height - 1)
+        size = self.config.window_size
+        visited = np.zeros((1, size, size), dtype=np.float32)
+        pads = []
+        for y in range(size):
+            for x in range(size):
+                point = (rover.x + x - self.anchor, rover.y + y - self.anchor)
+                visited[0, y, x] = float(point in self._visited)
+                if not observation["cell_flags"][0, y, x]:
+                    continue
+                kind = observation["terrain_type"][y, x]
+                self._ice.discard(point)
+                self._rock.discard(point)
+                if kind == TERRAIN_IDS[TerrainType.ICE] and not observation["cell_flags"][3, y, x]:
+                    self._ice.add(point)
+                if kind == TERRAIN_IDS[TerrainType.ROCK] and not observation["cell_flags"][2, y, x]:
+                    self._rock.add(point)
+                if kind == TERRAIN_IDS[TerrainType.BUILD_PAD]:
+                    pads.append(point)
+        self._visited.add(position)
+        visited[0, self.anchor, self.anchor] = 1
+        if self._home is None and pads:
+            self._home = min(pads, key=lambda p: (abs(p[0] - rover.x) + abs(p[1] - rover.y), p))
+        def bearing(points):
+            if not points:
+                return (0., 0., 0.)
+            point = min(points, key=lambda p: (abs(p[0] - rover.x) + abs(p[1] - rover.y), p))
+            return ((point[0] - rover.x) / width, (point[1] - rover.y) / height, 1.)
+        previous = self._previous or position
+        if self._identity == (state.seed, state.step):
+            displacement = self._displacement
+        else:
+            displacement = ((rover.x - previous[0]) / width, (rover.y - previous[1]) / height)
+        home = (self._home[0] / width, self._home[1] / height) if self._home else (0., 0.)
+        observation["navigation"] = np.asarray((*bearing([self._home] if self._home else []),
+            *displacement, *bearing(self._ice), *bearing(self._rock), *home), dtype=np.float32)
+        observation["visited"] = visited
+        self._previous, self._identity, self._displacement = position, (state.seed, state.step), displacement
+        return observation

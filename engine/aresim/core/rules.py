@@ -203,7 +203,8 @@ def resolve_command(state: WorldState, command: ActionCommand, config: EngineCon
     return ActionCommand(command.type, _suggest_target(state, command.type, config))
 
 
-def _wait_recharge(margin: float, config: EngineConfig) -> float:
+def wait_recharge(margin: float, config: EngineConfig) -> float:
+    """Wait charging contribution for the current power margin and configuration."""
     return round(max(0, min(config.power.wait_max_charge, margin * config.power.wait_charge_per_kw)), 2)
 
 
@@ -300,7 +301,7 @@ def _apply_battery_from_margin(state: WorldState, action: ActionType, margin: fl
         state.resources.battery = clamp(state.resources.battery - drain, 0, 100)
         return
     if action == ActionType.WAIT and rover_on_build_pad(state):
-        state.resources.battery = clamp(state.resources.battery + _wait_recharge(margin, config), 0, 100)
+        state.resources.battery = clamp(state.resources.battery + wait_recharge(margin, config), 0, 100)
         return
     if rover_on_build_pad(state):
         state.resources.battery = clamp(state.resources.battery + _pad_recharge(margin, config), 0, 100)
@@ -487,7 +488,7 @@ def _action_label(action: ActionType) -> str:
 def _wait_events(state: WorldState, action: ActionType, config: EngineConfig) -> list[str]:
     if action != ActionType.WAIT:
         return []
-    recharge = _wait_recharge(state.resources.power_generated - state.resources.power_consumed, config)
+    recharge = wait_recharge(state.resources.power_generated - state.resources.power_consumed, config)
     if recharge > 0:
         return [f"System: Wait charging cycle restored {recharge:.2f}% battery from surplus power"]
     return ["System: Wait could not recharge because power margin is not positive"]

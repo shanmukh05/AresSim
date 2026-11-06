@@ -1,5 +1,5 @@
 schema_version: aresim.experiment.v1
-experiment_id: rllib_masked_dqn_dev
+experiment_id: rllib_masked_dqn_dev_v2
 trial_id: seed_7
 algorithm: masked_dqn
 model: local_cnn_q
@@ -24,10 +24,9 @@ algorithm_config:
   target_network_update_freq: 1000
   tau: 1.0
 evaluation:
-  seed_manifest: notebooks/phase1_open_exploration_split_v1.yaml
-  interval_environment_steps: 20480
+  seed_manifest: configs/seeds/phase1_open_exploration_split_v1.yaml
   split: validation
-  record_trajectories: true
+  record_trajectories: false
 checkpoint:
   interval_environment_steps: 20480
   keep: 5

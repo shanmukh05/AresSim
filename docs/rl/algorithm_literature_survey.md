@@ -1,8 +1,10 @@
 # AresSim Algorithm Literature Survey and Research Proposals
 
-Last updated: 2026-09-27
+Last updated: 2026-10-16
 
 Status: Short research guide. It does not change the composed environment, single-rover Gymnasium adapter, future PettingZoo multi-agent contract, or RLlib training architecture in [RL Algorithms, Training, and Evaluation](rl_quickstart.md).
+
+October 16 implementation status: Recurrent DQN, symbolic DreamerV3 and disagreement-based Plan2Explore are now implemented and CPU smoke-verified. Their [implementation guide](../../engine/aresim/algorithms/README.md) distinguishes the ports, phase protocol, verified behavior and pending multi-seed learning comparisons. The research priorities below remain questions about performance, not a list of unavailable algorithms.
 
 ## 1. What makes AresSim different
 

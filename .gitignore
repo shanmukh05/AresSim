@@ -29,6 +29,7 @@ playwright/.cache/
 # Training / notebooks (generated)
 datasets/
 results/
+results/cloud/
 wandb/
 .wandb/
 ray_results/

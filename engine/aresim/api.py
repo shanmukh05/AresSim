@@ -23,15 +23,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from .algorithms.catalog import AlgorithmId
 from .config import EngineConfig
 from .defaults import DEFAULT_ENGINE_CONFIG
 from .gameplay import CHECKPOINT_REASON_PRIORITY, TRAJECTORY_EPISODE_SCHEMA, TRAJECTORY_REPLAY_SCHEMA, JsonObject, ReplayCursor
-from .integrations.policy import jev_available, rllib_available
+from .integrations.policy import jev_available, rllib_available, muzero_available, world_models_available
 from .service import AresService, ServiceError
 from .types import ActionCommand, ActionType, Actor, Position
-
-AlgorithmId = Literal["random", "random_valid", "wait", "scripted", "jev", "masked_ppo", "masked_dqn"]
-
 
 class StrictModel(BaseModel):
     """Reject unknown JSON fields so typos fail at the HTTP boundary."""
@@ -71,6 +69,7 @@ class AttachPolicyRequest(StrictModel):
     """`POST /api/sessions/{id}/attach-policy`."""
     algorithm_id: AlgorithmId = Field(alias="algorithmId")
     checkpoint_path: str | None = Field(default=None, alias="checkpointPath", max_length=500)
+    action_mode: Literal["stochastic", "deterministic"] | None = Field(default=None, alias="actionMode")
 
 
 class ValidateCheckpointRequest(StrictModel):
@@ -139,6 +138,8 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
             "trajectoryReplaySchemaVersion": TRAJECTORY_REPLAY_SCHEMA,
             "gameplaySchemaVersion": config.replay.schema_version,
             "rllibAvailable": rllib_available(),
+            "muzeroAvailable": muzero_available(),
+            "worldModelsAvailable": world_models_available(),
             "jevAvailable": jev_available(),
         }
 
@@ -184,7 +185,7 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
 
     @app.post("/api/sessions/{session_id}/attach-policy")
     def attach_policy(session_id: str, request: AttachPolicyRequest) -> JsonObject:
-        return service.attach_policy(session_id, request.algorithm_id, request.checkpoint_path)
+        return service.attach_policy(session_id, request.algorithm_id, request.checkpoint_path, action_mode=request.action_mode)
 
     @app.post("/api/sessions/{session_id}/detach-policy")
     def detach_policy(session_id: str) -> JsonObject:

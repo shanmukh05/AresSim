@@ -2,7 +2,8 @@
 
 Resolves registered component and agent names through :mod:`aresim.registry` and
 wires them into :class:`~aresim.envs.environment.AresEnvironment` or thin framework
-adapters. Requires the optional ``env`` extra (NumPy, Gymnasium, PettingZoo).
+adapters. Requires the optional ``env`` extra (NumPy, Gymnasium). PettingZoo is imported
+only by :func:`make_parallel_env`.
 
 **Last updated:** September 1, 2026
 
@@ -15,14 +16,17 @@ adapters. Requires the optional ``env`` extra (NumPy, Gymnasium, PettingZoo).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .algorithms import Agent
 from .config import EngineConfig, EnvironmentConfig
 from .core.engine import AresEngine
 from .defaults import DEFAULT_ENGINE_CONFIG, DEFAULT_ENVIRONMENT_CONFIG
-from .envs import AresEnvironment, AresGymEnv, AresParallelEnv, AresTimeLimit, Environment
+from .envs import AresEnvironment, AresGymEnv, AresTimeLimit, Environment
 from .registry import ComponentBuildContext, ComponentRegistry, create_default_registry
+
+if TYPE_CHECKING:
+    from .envs.pettingzoo import AresParallelEnv
 
 
 def make_engine(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> AresEngine:
@@ -92,4 +96,6 @@ def make_parallel_env(
     max_episode_steps: int | None = None,
 ) -> AresParallelEnv:
     """Construct the canonical one-rover PettingZoo Parallel adapter over :func:`make_env`."""
+    from .envs.pettingzoo import AresParallelEnv
+
     return AresParallelEnv(make_env(config, registry=registry, max_episode_steps=max_episode_steps))

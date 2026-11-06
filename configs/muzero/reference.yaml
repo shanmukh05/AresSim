@@ -1,0 +1,62 @@
+schema_version: aresim.experiment.v1
+experiment_id: muzero_reference
+trial_id: seed_7_sample_credit_030_learning_v3
+algorithm: muzero
+model: local_muzero
+learner_seed: 7
+environment:
+  scenario_id: phase1_default_v1
+  observation: local_memory
+  action: discrete
+  reward: shaped_train
+  task: resource_mission
+  max_episode_steps: 800
+  reward_overrides:
+    time_cost: -0.025
+    samples_collected: 0.30
+algorithm_config:
+  total_environment_steps: 2097152
+  rollout_batch_size: 256
+  simulations: 50
+  evaluation_simulations: 50
+  unroll_steps: 5
+  td_steps: 10
+  batch_size: 32
+  replay_capacity: 50000
+  learning_starts: 2048
+  updates_per_environment_step: 0.1
+  reanalysis_interval_updates: 100
+  reanalysis_positions: 64
+  reanalysis_fraction: 0.25
+  reanalysis_batch_size: 128
+  reanalysis_bootstrap_search: false
+  legality_positive_weights: [1, 1, 1, 1, 1, 2, 4, 1, 1, 8]
+  consistency_loss_weight: 0.2
+  gamma: 0.995
+model_config:
+  predict_constraints: true
+  consistency_projection_width: 128
+  latent_width: 256
+resources:
+  device: cuda
+  torch_threads: 4
+  num_collectors: 8
+  num_envs_per_collector: 4
+  collection_steps_per_env: 32
+  collector_torch_threads: 1
+  max_policy_lag_updates: 32
+evaluation:
+  seed_manifest: configs/seeds/phase1_open_exploration_split_v1.yaml
+  split: validation
+  record_trajectories: false
+checkpoint:
+  interval_environment_steps: 81920
+  keep: 3
+tracking:
+  mode: online
+  project: aresim
+  group: muzero_reference
+  tags: [reference, muzero, cuda, time_cost_025, sample_credit_030, batched_search, normalized_loss, full_unroll_reanalysis, balanced_legality, temporal_consistency]
+artifacts:
+  root: results
+  reject_existing: true

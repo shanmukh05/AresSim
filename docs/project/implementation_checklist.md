@@ -1,6 +1,6 @@
 # AresSim Implementation Checklist
 
-**Last updated:** September 20, 2026  
+**Last updated:** October 16, 2026
 **Status:** Living project checklist
 
 This document gives a high-level view of what is implemented and what remains. Detailed behavior and architecture stay in the linked reference documents.
@@ -33,7 +33,7 @@ This document gives a high-level view of what is implemented and what remains. D
 - [x] Compact three-section Action Bar for Manual, Algorithm, and Replay modes.
 - [x] Build-pad status visualization, rover path direction markers, action feedback, and sound cues.
 - [x] Ambient Martian day/night backdrop with Sun, moons, planets, and reduced-motion handling.
-- [x] Manual play, server-driven Algorithm autoplay (baselines + masked PPO/DQN checkpoints), and backend-owned Replay flow.
+- [x] Manual play, server-driven Algorithm autoplay (baselines + all six learned checkpoint algorithms), and backend-owned Replay flow.
 
 Algorithm mode attaches registered baselines, Jev, or a masked PPO/DQN checkpoint sidecar through `POST /api/sessions/{id}/attach-policy` and steps with `POST /api/sessions/{id}/agent-step`. Inference stays on the API host; the UI sends algorithm selection and an optional dev-time checkpoint path. Jev requires `aresim[jev]` and an API key.
 
@@ -43,6 +43,7 @@ Algorithm mode attaches registered baselines, Jev, or a masked PPO/DQN checkpoin
 - [x] Add the configurable local 8×8 rover observation and edge padding.
 - [x] Add the flat 10-action RL adapter and legal-action mask.
 - [x] Add task/termination and reward components without duplicating core rules.
+- [x] Add configurable, quota-capped sample acquisition credit; verify Scan/Unload, partial quotas, disabled targets and sparse/default compatibility. DQN and MuZero references enable +0.30 credit; DQN seed_3 shows mission improvement, while MuZero learning remains unverified.
 - [x] Add the single-rover `AresGymEnv` adapter and pass Gymnasium checks.
 - [x] Add the one-rover PettingZoo Parallel environment and contract tests.
 - [x] Verify direct engine, Gymnasium, and PettingZoo transition parity.
@@ -58,17 +59,34 @@ Algorithm mode attaches registered baselines, Jev, or a masked PPO/DQN checkpoin
 
 ## 5. RLlib training and analysis — implementation present, reference acceptance run pending
 
+- [x] Consolidate existing PPO, DQN and MuZero reference runs into one results directory per algorithm; update reference configs, plotting defaults, learnings and evaluation paths while preserving frozen experiment identities and native checkpoint contents. See [results layout](../../results/README.md).
+
 - [ ] Verify the implemented RLlib/Ray Tune experiment registry and strict configuration with the full dev acceptance run.
 - [ ] Verify the implemented action-masked PPO RLModule, learner update, and frozen evaluation with the full dev acceptance run.
 - [ ] Verify the implemented canonical W&B logging, local report plots, and reproducibility artifacts with the full dev acceptance run.
 - [x] Verify native RLlib checkpoint loading through the shared `Agent` interface with the full dev acceptance run.
 - [x] Wire UI Algorithm mode to server-side policy attach and agent-step (baselines, Jev, masked PPO/DQN checkpoint path).
 - [x] Add mask-aware DQN through RLlib (selection, epsilon-greedy, and TD-target masking).
-- [ ] Add recurrent-policy experiments primarily through RLlib.
+- [x] Verify corrected-reward MuZero reference wiring on CPU with the reference architecture and 50 simulations/action: collection, learner updates, checkpoint reload and legal sampled inference; long-budget CUDA mission learning remains pending.
+- [x] Collate MuZero replay histories on CPU before batched device transfer; local pipeline checks and CUDA tensor/update equivalence pass. An idle A30 batch-256 learner improved from 140 to 68 ms; bounded CUDA training completed 4,208 steps/420 updates and legal sampled checkpoint reload. See [world-model scaling analysis](../rl/world_model_scaling_2026-10-11.md); parallel search is implemented below, while long-budget learning acceptance remains pending.
+- [x] Reassess Ray/RLlib and native model-based backends for MuZero, DreamerV3, Plan2Explore and JEPA; inspect installed RLlib 2.58 and verify Dreamer structured-observation/curiosity integration limits.
+- [x] Make Ray Core the sole MuZero collection path (no backend selector or serial/local fallback), with batched MCTS/reanalysis, bounded policy age and preserved update credit, with partial-episode CPU/Ray/CUDA resume verification. A bounded same-A30 comparison measured 13.52 → 111.26 steps/s (8.2×), exceeding the 5× diagnostic promotion gate; long-budget throughput and held-out learning remain unverified. See [implementation and evidence](../rl/muzero_parallel_2026-10-11.md).
+- [x] Correct MuZero checkpoint rotation/resume by numeric step and use self-normalized importance-weighted loss with unweighted loss, weight statistics and effective-sample-size reporting. Existing checks and real-replay gradient/ordering diagnostics pass; task-learning improvement remains unverified. See [October 13 corrections](../rl/muzero_learning_fixes_2026-10-13.md).
+- [x] Implement actual-minibatch full-unroll MuZero reanalysis, positive rare-action legality weighting and stopped-target temporal consistency with target age/coverage/legality diagnostics. Existing checks and tiny Ray partial resume pass; no GPU benchmark/training launched. See [learning-path settings and verification](../rl/muzero_learning_v3_2026-10-13.md).
+- [ ] Complete MuZero reference acceptance: the dedicated PyTorch model/search/replay path, smoke run, resume, frozen evaluation, and UI attach are implemented; long-budget held-out comparison remains.
+- [x] Extract shared RLlib environment/metrics/Tune plumbing, common encoder dimensions/inventories, and registered config/runner dispatch; preserve existing public aliases and sidecar formats.
+- [x] Add masked Recurrent DQN through RLlib with LSTM sequence replay/burn-in, seeded replay checkpoint state, native budget-extension resume and frozen/UI inference; CPU smoke verified.
+- [x] Add symbolic DreamerV3 through PyTorch/Ray with sequence replay, categorical RSSM, imagined actor-critic, learned imagined legality and exact same-source CPU partial-episode resume diagnostics.
+- [x] Add Plan2Explore reward-free disagreement pretraining, separate task adaptation, frozen parent lineage, phase-local resume and matched-budget reference presets; both CPU smoke phases verified.
+- [x] Verify new CPU smoke/inference, manual evaluation/recorded trajectories, optional imports and frontend build; publish permanent workflows and usage.
+- [ ] Complete multi-seed held-out mission-learning and same-hardware CUDA throughput comparisons for Recurrent DQN, DreamerV3 and Plan2Explore.
+
+The [recurrent and world-model guide](../../engine/aresim/algorithms/README.md) records implementation details, shared ownership, phase commands, local verification and pending research acceptance. The temporary planning document has been retired.
 
 ## 6. Advanced research — later
 
-- [ ] Add discovered-map memory and compare it with local observations and recurrence.
+- [x] Add crop-derived resource/home memory and visited-cell observations.
+- [ ] Complete controlled comparisons of memory, stateless observations and recurrence.
 - [ ] Add JEPA representation learning and reusable encoder artifacts.
 - [ ] Add learned world-model experiments without replacing authoritative simulator transitions.
 - [ ] Add offline learning and behavior-cloning experiments where useful.
@@ -110,3 +128,29 @@ Algorithm mode attaches registered baselines, Jev, or a masked PPO/DQN checkpoin
 - [RL Algorithms, Training, and Evaluation](../rl/rl_quickstart.md)
 - [Agent Data, RL, and LLM Architecture Proposal](../rl/agent_data_rl_llm_proposal.md)
 - [Algorithm Literature Survey](../rl/algorithm_literature_survey.md)
+
+
+## October 6 pipeline corrections
+
+- [x] Remove repeatable pad-progress rewards and enforce discounted potential/cutoff invariants.
+- [x] Freeze numerical environment and seed/source provenance per run.
+- [x] Provide held-out validation with labeled action modes and best-checkpoint preservation for separate manual analysis (automatic training evaluations removed October 7).
+- [x] Report success, deliveries, action counts and Extract opportunities by episode.
+- [x] Correct zero-Q DQN exploration and add MuZero learned constraints/reanalysis.
+- [x] Cover small delivery diagnostics and validation targets in regression fixtures; temporary runnable presets removed.
+- [x] Keep training fast: checkpoint saving only, no periodic/final evaluation or automatic reports; retain manual evaluation commands.
+- [ ] Demonstrate robust full-mission learning across multiple learner seeds under the frozen v2 contracts.
+
+Details and local verification: [pipeline corrections](../rl/pipeline_fixes_2026-10-06.md).
+
+## November 7, 2026 cleanup and GPU tooling
+
+- [x] Consolidate policy catalog metadata, configurable recharge projection and task-goal observation ownership across the environment/API/UI.
+- [x] Consolidate shared checkpoint transport, provenance validation, loader dispatch, experiment decoding, numeric checkpoint ordering and public resume checks.
+- [x] Recover the original fixed seed manifests under `configs/seeds/` and use their durable paths in active presets and guides.
+- [x] Share source payload allowlists and remote dependency setup across GPU providers; add bounded Vast.ai SSH training, scoped self-stop and verified artifact recovery scripts under `scripts/vastai/`.
+- [x] Rename all eight algorithm workflow documents to `DETAILS.md`; add fourteen editable draw.io PNGs showing architecture dimensions and training/inference steps beside their algorithms.
+- [x] Validate with real environment/API/replay checks, seven short CPU training phases with checkpoint reload/inference, the frontend build and 17 existing desktop browser end-to-end cases. No unit tests were created or rewritten.
+- [ ] Verify the new Vast.ai launcher on a live rented GPU and measure CUDA throughput. Script implementation and local checks do not establish live provider behavior or long-budget learning quality.
+
+Decision logs: [environment/UI](refactor_environment.md), [training](refactor_training.md), [cloud](refactor_cloud.md), and [documentation](refactor_documentation.md). Start GPU work with the [Vast.ai run guide](../rl/vastai.md); inspect model data flow in the [illustrated algorithm guide](../../engine/aresim/algorithms/README.md).

@@ -26,11 +26,11 @@ One simulator supports human play, scripted baselines, and learned policies:
 
 - **Play** a survival loop: scout terrain, scan, extract ice and ore, haul cargo, service the pad, and build while battery, health, power, weather, and livability decay.
 - **Inspect** the same episode as a player, an analyst, or a policy: Manual, Algorithm, and Replay modes share snapshots from the Python API.
-- **Train** action-masked PPO or mask-aware DQN with checked-in YAML, W&B metrics, native checkpoints, and frozen evaluation on fixed seed splits.
+- **Train** PPO, DQN, Recurrent DQN, MuZero, DreamerV3, or Plan2Explore with checked-in YAML, W&B metrics, native checkpoints, and frozen evaluation on fixed seed splits.
 - **Record** portable trajectories (`aresim.trajectory.episode.v1`) from the UI or from `RolloutRunner`, then reload them in Replay.
-- **Attach** a baseline or a PPO/DQN checkpoint in Algorithm mode; inference stays on the API host, and Python still validates every action.
+- **Attach** a baseline or any learned-policy checkpoint in Algorithm mode; inference stays on the API host, and Python still validates every action.
 
-Phase 1 is open exploration: there is no mission-complete victory. Reward, survival, and coverage are diagnostics, not a score to “win.”
+The open-exploration task has no mission-complete victory. The resource-mission task adds explicit delivery/service success; evaluation reports both mission outcomes and survival/coverage diagnostics.
 
 ## Features
 
@@ -39,8 +39,10 @@ Phase 1 is open exploration: there is no mission-complete victory. Reward, survi
 - **Local policy crop** — `aresim.obs.local.v1` is a rover-centered window (`window_size` in `engine/aresim/defaults.py`) with an authoritative legal-action mask; Wait is always legal
 - **3D shell** — orthographic Survey, north-up Top, and Rover POV; zoom, follow, mini-map, visibility flashlight, layers, and Martian day/night
 - **HUD and analytics** — grouped status, mission/warning chips, inspector, guide, and run charts without duplicating engine math
-- **Training stack** — RLlib masked PPO and mask-aware DQN, shared local CNN encoder, mid-run UI-loadable checkpoints, W&B as the sole app-level log
+- **Training stack** — RLlib PPO and feedforward/recurrent DQN; native PyTorch/Ray MuZero, DreamerV3 and Plan2Explore; shared symbolic observations, UI-loadable checkpoints and W&B metrics
 - **Baselines** — Wait, uniform random, random-valid, and a scripted local-observation heuristic, all on the same `Agent` contract as PPO and DQN
+
+See the [recurrent/world-model guide](engine/aresim/algorithms/README.md) for the three new algorithms, Plan2Explore pretrain/adapt commands, presets, and local verification limits.
 
 ## Flexibility
 
@@ -50,13 +52,13 @@ The engine is the source of truth. New behavior plugs in at registries; adapters
 |---|---|
 | Observation, action, reward, task | Implement the protocol, register a name, select it in `EnvironmentConfig` |
 | Rollout agent | Same `Agent` contract as Wait / PPO checkpoints |
-| Learned algorithm | `TrainingRegistry` algorithm / model / checkpoint factories + YAML |
+| Learned algorithm | `TrainingRegistry` algorithm / model / loader / runner registration + typed YAML |
 | Framework | `make_env`, `make_gym_env`, `make_parallel_env` — one transition, three APIs |
-| Install | Base extra is FastAPI only; `env`, `rllib`, and `notebook` stay optional |
+| Install | Base extra is FastAPI only; `env`, `rllib`, `muzero`, `world_models`, and `notebook` stay optional |
 
 Unknown YAML fields, unsafe tags, and incompatible batch sizes fail before Ray workers start. `--set path=value` overrides a config without editing the file. Custom components do not require source edits, inheritance, or plugin discovery.
 
-Later milestones (multi-rover, recurrence, LLM agents) are designed to reuse this core rather than fork it. See [Implementation Checklist](docs/project/implementation_checklist.md).
+Later milestones (multi-rover and additional LLM/controller strategies) are designed to reuse this core rather than fork it. See [Implementation Checklist](docs/project/implementation_checklist.md).
 
 ## Repository layout
 
@@ -76,7 +78,7 @@ Requires Python 3.12+ and Node.js.
 ```bash
 python3 -m venv engine/.venv
 source engine/.venv/bin/activate
-pip install -e './engine[dev]'
+pip install -e './engine[dev,env]'
 python -m aresim.api
 ```
 
@@ -107,7 +109,7 @@ engine/.venv/bin/aresim-rl train configs/masked_dqn/smoke.yaml
 | [`configs/masked_dqn/dev.yaml`](configs/masked_dqn/dev.yaml) | 102,400 | Local DQN development |
 | [`configs/masked_dqn/reference.yaml`](configs/masked_dqn/reference.yaml) | 2,097,152 | DQN reference (4 env runners, CUDA learner, n-step=3) |
 
-See the [RL usage guide](docs/rl/usage.md) for W&B, evaluation, trajectories, and extension contracts.
+See the [RL usage guide](docs/rl/usage.md) for W&B, evaluation, trajectories, and extension contracts. For cloud GPUs, use the [Vast.ai scripts and run guide](docs/rl/vastai.md). The [illustrated algorithm guide](engine/aresim/algorithms/README.md) maps each policy’s inputs, outputs and training steps.
 
 ## Documentation
 

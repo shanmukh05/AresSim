@@ -4,6 +4,8 @@
  * engine owns gameplay meaning; this file only types what the UI already receives.
  */
 
+import type { AlgorithmId } from "../lib/algorithms";
+
 export type TerrainType = "regolith" | "rock" | "ice" | "crater" | "dune" | "build_pad" | "ridge";
 export type WeatherState = "Clear" | "Dusty" | "Dust Front" | "Severe Storm" | "Cold Night";
 export type GameStatus = "running" | "paused" | "victory" | "game_over";
@@ -22,16 +24,12 @@ export type ViewportZoomMode = "fit" | "manual";
 export type CameraView = "survey" | "top" | "rover";
 export type RunMode = "manual" | "algorithm" | "load";
 export type SavedRunMode = RunMode | "llm";
-export type AlgorithmId = "random" | "random_valid" | "wait" | "scripted" | "jev" | "masked_ppo" | "masked_dqn";
+export type { AlgorithmId } from "../lib/algorithms";
+export { supportsActionSampling, usesCheckpoint, usesWorldModel, usesJev } from "../lib/algorithms";
+export type PolicyActionMode = "stochastic" | "deterministic";
 
-export function usesCheckpoint(algorithmId: AlgorithmId): boolean {
-  return algorithmId === "masked_ppo" || algorithmId === "masked_dqn";
-}
-
-export function usesJev(algorithmId: AlgorithmId): boolean {
-  return algorithmId === "jev";
-}
 export interface PolicyMeta {
+  actionMode?: PolicyActionMode;
   algorithmId: AlgorithmId;
   policyId: string;
   actionIndex: number;
@@ -61,10 +59,11 @@ export interface PolicyCatalogEntry {
 
 export interface PoliciesResponse {
   policies: PolicyCatalogEntry[];
-  capabilities: { rllib: boolean; jev?: boolean };
+  capabilities: { rllib: boolean; muzero?: boolean; world_models?: boolean; jev?: boolean };
 }
 
 export interface AttachPolicyResponse {
+  actionMode?: PolicyActionMode | null;
   algorithmId: AlgorithmId;
   policyId: string;
   checkpointPath?: string | null;
@@ -200,6 +199,7 @@ export interface SimSnapshot {
   statusReason: string;
   terrainSize: { width: number; height: number };
   observationWindowSize: number;
+  waitChargeEstimate?: number;
   weather: WeatherState;
   dustIntensity: number;
   resources: {
@@ -271,6 +271,7 @@ export interface GameplayStepDelta {
     rovers: RoverEntity[];
     structures: StructureEntity[];
     resources?: SimSnapshot["resources"];
+    waitChargeEstimate?: number;
     objectiveStats?: ObjectiveStats;
     buildPadState?: BuildPadState;
     mission?: SimSnapshot["mission"];

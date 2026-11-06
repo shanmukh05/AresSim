@@ -1,6 +1,6 @@
 # AresSim UI Design Reference
 
-Last updated: 2026-08-02
+Last updated: 2026-10-16
 
 Status: Canonical implemented specification for the orthographic 3D simulator shell, renderer boundary, extension direction, and multi-agent UI readiness. Simulator semantics live in [Environment Rules Reference](environment_rules.md), and portable replay serialization lives in [Gameplay Save Format](gameplay_save_format.md). This document supersedes the separate historical 3D redesign proposals.
 
@@ -300,24 +300,24 @@ Contains:
 
 ## 8. Mode and Gameplay Controls
 
-The Action Bar is a reserved 60 px footer below the world, so it never obscures environment geometry. Its opaque carbon rail uses compact command slots and three individually bordered, subtly tinted zones rather than a floating card. Each zone has a persistent micro-label and mode-colored status dot so ownership is clear without adding large headings.
+The Action Bar footer reserves space below the world. The footer is 60 px tall on desktop and tablet; below 900 px it puts the active run controls on a second row. Its opaque carbon rail uses compact command slots and three individually bordered, subtly tinted zones. Each zone has a persistent micro-label and mode-colored status dot.
 
-- Left: mode selection plus Algorithm policy/parameter configuration or Replay file source.
+- Left: mode selection, an Agent settings toggle in Algorithm mode, or Replay file source when applicable.
 - Center: Manual action controls, Algorithm transport/speed, or Replay transport/timeline.
-- Right: seed, apply, and randomize controls for Manual and Algorithm. In Replay, the `World setup` zone label remains for stable spatial grouping, but the zone contains no environment controls because the file is authoritative.
+- Right: seed, apply, and randomize controls. Loading a Replay supplies the seed and disables these controls because the file is authoritative.
 
 The mode row contains:
 
 - three mode buttons: cyan Manual, violet Algorithm, and amber Replay, using compact 10 px sentence-case labels, normal tracking, and a strong active baseline;
-- mode names remain visible on wide desktop layouts and collapse to accessible icons below 1100 px so Algorithm configuration cannot intrude into the center transport zone.
+- mode names remain visible on wide desktop layouts and collapse to accessible icons below 1100 px.
 
 Mode-specific setup follows these contracts:
 
 - Manual: deterministic seed, icon-only apply and randomize, seven icon-only actions, reset, and save.
-- Algorithm: policy selector, reserved parameter icon, deterministic seed, icon-only apply and randomize, play/pause, step, speed, reset, and save.
+- Algorithm: policy selector, checkpoint path, action selection (Sampling by default for PPO, feedforward/recurrent DQN, MuZero, DreamerV3 and Plan2Explore), deterministic world seed, icon-only apply and randomize, play/pause, step, speed, reset, and save. Both DQN variants label their choices Sampling (ε-greedy) and Highest Q-value; PPO, MuZero, DreamerV3 and Plan2Explore offer Sampling and Highest probability.
 - Replay: icon-only upload, filename, play/pause, step, speed, repeat, cursor, and timeline. Seed controls and environment randomization are unavailable.
 
-The reserved parameters control is intentionally disabled and labeled as forthcoming. It defines a stable location for policy-specific and agent-specific configuration without inventing parameters before their schemas exist.
+Algorithm mode has a compact, content-sized `Agent settings` panel floating over the world directly above the footer. Only the panel has a dark background; the surrounding world remains visible and interactive. It starts open, with visibly labeled Agent, Checkpoint, and Action selection fields. Close it with its X button, Escape, or the footer's Agent settings toggle; the toggle reopens it. Opening and closing preserve the world viewport size, selected settings, and attached policy. The checkpoint input has a bounded width with its apply button alongside it; long paths stay within the input. Checkpoint and Action selection controls appear for all six learned algorithms. Dependency capabilities distinguish RLlib, MuZero, and world-model inference; Plan2Explore chooses its exploration/task actor from the checkpoint phase. Mode toggles retain recurrent memory, manual interventions clear neural memory before the next policy action, and paused/ended requests do not consume policy state. Below 768 px the fields stack. Switching to Manual or Replay hides the panel, and returning to Algorithm preserves its open/closed state.
 
 All command buttons except mode names and essential data inputs are icon-only. Tooltips and accessible names carry their text labels. The rail uses normal compact text, with monospace reserved for seed, speed, filename, and replay position.
 

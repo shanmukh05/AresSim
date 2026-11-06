@@ -1027,7 +1027,7 @@ For every algorithm/configuration:
 
 ### 13.1 Implemented first: Jev per-tick Choice, recommended later: planner
 
-The first implemented LLM-class rover is Jev as a **per-tick masked Choice** over `aresim.action.rover.v1`. Encoding, attach, and fallbacks are documented in the [Jev workflow](../../engine/aresim/algorithms/jev/workflow.md). The 5x5 named-cell encoder is the `aresim.llm.ops.v1` slice used at inference.
+The first implemented LLM-class rover is Jev as a **per-tick masked Choice** over `aresim.action.rover.v1`. Encoding, attach, and fallbacks are documented in the [Jev workflow](../../engine/aresim/algorithms/jev/DETAILS.md). The 5x5 named-cell encoder is the `aresim.llm.ops.v1` slice used at inference.
 
 The stronger long-horizon hybrid remains:
 

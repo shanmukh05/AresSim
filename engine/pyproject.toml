@@ -22,6 +22,7 @@ env = [
   "pettingzoo>=1.26,<2",
 ]
 dev = [
+  "pytest>=8,<9",
   "httpx>=0.28,<1",
 ]
 notebook = [
@@ -39,6 +40,26 @@ rllib = [
   "pettingzoo>=1.26,<2",
   "PyYAML>=6.0.3,<7",
   "ray[rllib,tune]>=2.58,<2.59",
+  "torch>=2.13,<2.14",
+  "wandb>=0.29,<0.30",
+]
+muzero = [
+  "gymnasium==1.2.2",
+  "matplotlib>=3.10,<4",
+  "numpy>=2,<3",
+  "pandas>=2.3,<4",
+  "PyYAML>=6.0.3,<7",
+  "ray>=2.58,<2.59",
+  "torch>=2.13,<2.14",
+  "wandb>=0.29,<0.30",
+]
+world_models = [
+  "gymnasium==1.2.2",
+  "matplotlib>=3.10,<4",
+  "numpy>=2,<3",
+  "pandas>=2.3,<4",
+  "PyYAML>=6.0.3,<7",
+  "ray>=2.58,<2.59",
   "torch>=2.13,<2.14",
   "wandb>=0.29,<0.30",
 ]

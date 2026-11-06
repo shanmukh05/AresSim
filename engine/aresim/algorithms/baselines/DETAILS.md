@@ -1,5 +1,13 @@
 # Baseline rover policies
 
+## Inference at a glance
+
+![Baseline Agent input, policy alternatives, and engine output](inference.drawio.png)
+
+Each policy receives an observation and a ten-entry legal-action mask and returns one integer in `Discrete(10)`. The default local crop is 8×8. Wait and random-valid ignore crop contents; uniform random intentionally ignores legality, while scripted uses observed telemetry and private navigation memory. These policies have no trainable weights or training loop.
+
+The PNG figures contain editable draw.io XML: open the PNG directly in draw.io to revise the illustration. Shapes and numbers are grounded in the adjacent model/configuration files and `../common/encoder.py`.
+
 Inference-only `Agent` implementations used for rollouts, frozen evaluation, and UI Algorithm mode. They share the Discrete(10) action space and the same mask contract as PPO, DQN, and Jev. Simulator rules stay in `aresim.core`. None of these policies train.
 
 For the broader RL guide, see [RL Algorithms, Training, and Evaluation](../../../../docs/rl/rl_quickstart.md).
@@ -68,4 +76,9 @@ plan = RolloutConfig(
 result = RolloutRunner(plan, "random_valid").run()
 ```
 
-In the UI, Algorithm mode attaches the same registry names through `POST /api/sessions/{id}/attach-policy`. Requires `aresim[env]`. Frozen evaluation after PPO/DQN training also runs `random_valid` and `scripted` on the validation split.
+In the UI, Algorithm mode attaches the same registry names through `POST /api/sessions/{id}/attach-policy`. Requires `aresim[env]`. PPO, DQN and MuZero training never invoke checkpoint evaluation. The separate manual checkpoint evaluator runs only the learned policy and contains no baseline scheduling or opt-in option. Baseline analysis remains separate through `RolloutRunner`, as shown above.
+
+
+### October 6, 2026: scripted v2
+
+The scripted baseline now accepts public task quotas and capacity from its environment configuration. On resource missions it returns with the required cargo, skips optional Build priority, avoids exhausted/unneeded resource targets, and uses observed home memory when available. It does not designate an arbitrary off-pad attachment point as home. These behavioral changes are identified by `aresim.agent.scripted.v2`; historical v1 totals remain historical. See [pipeline corrections](../../../../docs/rl/pipeline_fixes_2026-10-06.md).

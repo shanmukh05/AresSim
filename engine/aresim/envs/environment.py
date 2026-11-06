@@ -22,8 +22,10 @@ from gymnasium import Space
 
 import numpy as np
 
+from ..components.actions import DiscreteActions
 from ..components.base import ActionAdapter, ObservationBuilder, RewardFunction, TaskEvaluator
-from ..components.rewards import RewardBreakdown
+from ..components.rewards import RewardBreakdown, ShapedTrainReward, SparseEvalReward
+from ..components.tasks import OpenExplorationTask, ResourceMissionTask
 from ..config import EngineConfig
 from ..core.engine import AresEngine, state_checksum
 from ..types import Actor, EngineTransition, WorldState
@@ -122,7 +124,13 @@ class AresEnvironment(Generic[ObservationT, ActionT]):
         self.engine = AresEngine(engine_config)
         self._reset = False
         self._done = False
-        self._last_step: tuple[WorldState, EngineTransition, TaskOutcome] | None = None
+        # Custom subclasses may override hooks that compact stepping bypasses.
+        self._compact_before = (
+            not audit
+            and type(actions) is DiscreteActions
+            and type(reward) in (ShapedTrainReward, SparseEvalReward)
+            and type(task) in (OpenExplorationTask, ResourceMissionTask)
+        )
 
     @property
     def observation_space(self):
@@ -172,6 +180,8 @@ class AresEnvironment(Generic[ObservationT, ActionT]):
         self.task.reset(state)
         observation = self.observation_builder.reset(state, self.engine_config)
         action_mask = self.action_adapter.mask(state, self.engine_config)
+        if not np.any(action_mask):
+            raise ValueError("action mask contains no legal action")
         self._reset = True
         self._done = False
         return EnvironmentReset(
@@ -187,11 +197,17 @@ class AresEnvironment(Generic[ObservationT, ActionT]):
             raise RuntimeError("environment has not been reset")
         if self._done:
             raise RuntimeError("episode has ended; reset before stepping again")
-        before = self.engine.state
-        command = self.action_adapter.decode(before, action_id)
-        transition = self.engine.step(command, Actor.AGENT, audit=self.audit)
-        outcome = self.task.evaluate(before, transition)
-        self._last_step = (before, transition, outcome)
+        if self._compact_before:
+            state = self.engine._borrow_state()
+            command = self.action_adapter.decode(state, action_id)
+            before = self.reward_profile.prepare_step(state)
+            transition = self.engine.step(command, Actor.AGENT, audit=False)
+            outcome = self.task.evaluate_transition(transition)
+        else:
+            before = self.engine.state
+            command = self.action_adapter.decode(before, action_id)
+            transition = self.engine.step(command, Actor.AGENT, audit=self.audit)
+            outcome = self.task.evaluate(before, transition)
         breakdown = self.reward_profile.calculate(
             before,
             transition,
@@ -200,12 +216,20 @@ class AresEnvironment(Generic[ObservationT, ActionT]):
         )
         observation = self.observation_builder.build(transition.state, self.engine_config)
         action_mask = self.action_adapter.mask(transition.state, self.engine_config)
+        if not np.any(action_mask):
+            raise ValueError("action mask contains no legal action")
         info = self._base_info(transition.state.seed, transition.after_checksum)
         info.update({
             "before_checksum": transition.before_checksum,
             "effective_action": transition.effective_action.value,
             "events": list(transition.events),
             "terminal_reason": outcome.terminal_reason,
+            "success": outcome.success,
+            "objective_stats": {
+                "ice_delivered": transition.state.objective_stats.ice_delivered,
+                "samples_delivered": transition.state.objective_stats.samples_delivered,
+                "ice_collected": transition.state.objective_stats.ice_collected,
+            },
             "reward_breakdown": breakdown.as_dict(),
             "engine_reward": transition.reward,
             "engine_reward_terms": dict(transition.reward_terms),
@@ -222,13 +246,6 @@ class AresEnvironment(Generic[ObservationT, ActionT]):
             transition=transition,
             reward_breakdown=breakdown,
         )
-
-    def episode_end_breakdown(self) -> RewardBreakdown | None:
-        """Recompute reward with episode-end terms when truncation follows a non-terminal step."""
-        if self._last_step is None:
-            return None
-        before, transition, outcome = self._last_step
-        return self.reward_profile.calculate(before, transition, outcome, episode_end=True)
 
 
 class AresTimeLimit(Generic[ObservationT, ActionT]):
@@ -294,19 +311,9 @@ class AresTimeLimit(Generic[ObservationT, ActionT]):
         }
         if reached_limit and not result.terminated and not result.truncated:
             info["truncation_reason"] = "max_episode_steps"
-        reward = result.reward
-        reward_breakdown = result.reward_breakdown
-        if truncated and not result.terminated and hasattr(self.environment, "episode_end_breakdown"):
-            end_breakdown = self.environment.episode_end_breakdown()
-            if end_breakdown is not None:
-                reward = end_breakdown.total
-                reward_breakdown = end_breakdown
-                info["reward_breakdown"] = end_breakdown.as_dict()
         self._done = result.terminated or truncated
         return replace(
             result,
-            reward=reward,
-            reward_breakdown=reward_breakdown,
             truncated=truncated,
             info=info,
         )

@@ -1,10 +1,12 @@
 # AresSim RL Algorithms: Implementation, Training, and Evaluation
 
-Last updated: 2026-09-20
+Last updated: 2026-10-16
+
+See [pipeline corrections and the October 7 follow-up](pipeline_fixes_2026-10-06.md) for the versioned contracts, observed memory, frozen configuration, manual validation selection, and regression evidence. Start full-mission PPO training with `configs/masked_ppo/reference.yaml` on a CUDA host. Training saves checkpoints without automatic evaluation; run analysis separately afterward. The PPO folder keeps only smoke, dev, and reference presets; reduced delivery missions remain covered by regression fixtures.
 
 This is the canonical guide to the reinforcement-learning implementation in AresSim. It explains the implemented policies, action-masked PPO, mask-aware DQN, neural network, online sampling, learner updates, evaluation, metrics, checkpoints, and extension surface.
 
-`phase1_open_exploration_v1` has no victory condition. `phase1_resource_mission_v1` succeeds when the rover delivers 12 kg ice and 4 kg ore samples and the build pad is not latched for service. Sparse eval still uses only success, terminal failure, and invalid-action terms.
+`phase1_open_exploration_v1` has no victory condition. `phase1_resource_mission_v2` succeeds when the rover delivers 12 kg ice and 4 kg ore samples and the build pad is not latched for service. Sparse eval still uses only success, terminal failure, and invalid-action terms.
 
 ## Current implementation status
 
@@ -14,16 +16,22 @@ This is the canonical guide to the reinforcement-learning implementation in Ares
 | Uniform random | No | No; may select illegal actions | Implemented | Invalid-action and environment robustness baseline |
 | Random-valid | No | Yes | Implemented | Untrained legal-action baseline |
 | Scripted | No | Yes | Implemented | Deterministic partial-observation heuristic baseline |
-| Jev (TypeSafe) | No | Yes, legal Choice options only | Implemented | Per-tick System One rover; see [Jev workflow](../../engine/aresim/algorithms/jev/workflow.md) |
+| Jev (TypeSafe) | No | Yes, legal Choice options only | Implemented | Per-tick System One rover; see [Jev workflow](../../engine/aresim/algorithms/jev/DETAILS.md) |
 | Action-masked PPO | Yes, on-policy | Yes, in exploration, training, and inference | Implemented | First learned reference policy |
 | Action-masked DQN | Yes, off-policy | Yes, in selection, epsilon-greedy, and TD targets | Implemented | Sample-efficient discrete comparison |
+| MuZero | Yes, model-based | Yes, at the real search root | Implemented | Learned-model planning comparison |
+| Recurrent DQN | Yes, off-policy | Yes, selection and TD targets | Implemented; CPU smoke verified | RLlib Double/Dueling DQN with LSTM memory and sequence replay |
+| DreamerV3 | Yes, model-based | Authoritative real masks; learned imagined masks | Implemented; CPU smoke verified | PyTorch/Ray recurrent world model and imagined actor-critic |
+| Plan2Explore | Yes, model-based | Shared Dreamer real/imagined mask handling | Implemented; both CPU phases verified | Reward-free pretraining followed by separate task adaptation |
 | Recurrent PPO, multi-agent policies | — | — | Planned | Later milestones; see the [Algorithm Literature Survey](algorithm_literature_survey.md) |
 
-Action-masked PPO and mask-aware DQN are the learned RL algorithms. Wait, random, random-valid, scripted, and Jev are inference-only comparisons; Jev calls TypeSafe and does not optimize parameters.
+The six learned RL algorithms are action-masked PPO, feedforward DQN, Recurrent DQN, MuZero, DreamerV3, and Plan2Explore. Wait, random, random-valid, scripted, and Jev are inference-only comparisons; Jev calls TypeSafe and does not optimize parameters. MuZero's dedicated trainer and inference path are documented in the [MuZero workflow](../../engine/aresim/algorithms/muzero/DETAILS.md).
+
+The [recurrent and world-model implementation guide](../../engine/aresim/algorithms/README.md) documents the new algorithms, shared training ownership, complete presets, Plan2Explore transfer, numerical details and verification limits. Local CPU checks do not establish long-budget mission learning.
 
 ## Install and run
 
-The base backend does not import numerical or training packages. From the repository root:
+The deterministic core does not import numerical or training packages; API policy integration uses the environment extra, and training uses its selected backend extra. From the repository root:
 
 ```bash
 python3 -m venv engine/.venv
@@ -32,10 +40,14 @@ engine/.venv/bin/pip install -e './engine[dev,rllib,notebook]'
 
 The `rllib` extra installs the environment dependencies, Ray with RLlib/Tune, PyTorch, W&B, YAML, plotting, and notebook support. Exact installed versions are recorded in each run manifest.
 
+Install `./engine[muzero]` for MuZero with PyTorch and Ray Core 2.58; RLlib/Tune are not required. Every MuZero training run uses Ray; smoke/dev use one CPU collector with one environment; the CUDA reference uses eight CPU collectors × four environments and batched search/reanalysis. See [parallel MuZero configuration and timing evidence](muzero_parallel_2026-10-11.md). Presets remain under `configs/muzero/`.
+
+Install `./engine[world_models]` for DreamerV3 and Plan2Explore (Torch + Ray Core, no RLlib/Tune). Recurrent DQN uses `./engine[rllib]`. New presets live under `configs/recurrent_dqn/`, `configs/dreamerv3/`, and `configs/plan2explore/{pretrain,adapt}/`; each has smoke/dev/reference YAMLs. See the [phase commands and budgets](../../engine/aresim/algorithms/README.md).
+
 Checked-in experiment configurations are:
 
-- [`configs/masked_ppo/smoke.yaml`](../../configs/masked_ppo/smoke.yaml): 102,400 environment steps;
-- [`configs/masked_ppo/dev.yaml`](../../configs/masked_ppo/dev.yaml): 102,400 steps;
+- [`configs/masked_ppo/smoke.yaml`](../../configs/masked_ppo/smoke.yaml): 8,192 environment steps;
+- [`configs/masked_ppo/dev.yaml`](../../configs/masked_ppo/dev.yaml): 102,400 steps (4 CPU EnvRunners, 2 update epochs);
 - [`configs/masked_ppo/reference.yaml`](../../configs/masked_ppo/reference.yaml): 2,097,152 steps (28 env runners and a CUDA learner; not for a CPU-only laptop).
 - [`configs/masked_dqn/smoke.yaml`](../../configs/masked_dqn/smoke.yaml): 4,096 steps;
 - [`configs/masked_dqn/dev.yaml`](../../configs/masked_dqn/dev.yaml): 102,400 steps;
@@ -88,7 +100,7 @@ Adapters never inspect hidden state, recalculate rewards, rebuild masks, render,
 
 ```text
 Dict({
-  "observation": aresim.obs.local.v1,
+  "observation": aresim.obs.local_memory.v2,
   "action_mask": int8[10]
 })
 ```
@@ -102,7 +114,7 @@ The local observation contains:
 - categorical pad proximity and weather;
 - fixed-capacity objective fields.
 
-The rover is anchored at local index `[3,3]`; the crop covers world offsets `-3..+4` and is zero-padded without shifting at map edges. Objective slots are a five-row mission progress table (ice collected/delivered, samples delivered, pad service, battery). They do not encode directions or off-crop locations.
+The rover is anchored at local index `[3,3]`; the crop covers world offsets `-3..+4` and is zero-padded without shifting at map edges. Objective slots are a five-row mission progress table (ice collected/delivered, samples delivered, pad service, battery). The new observation additionally supplies `navigation[13]` and a visited-cell crop. Bearings refer only to previously observed resources and home; undiscovered resource locations remain hidden. `local` v1 remains available for old architectures.
 
 Action IDs are stable:
 
@@ -114,11 +126,11 @@ Action IDs are stable:
 | 3 | Move south | 8 | Service |
 | 4 | Move west | 9 | Unload |
 
-The mask is computed by the environment from canonical validation rules. Wait is always legal. The neural network does not learn or duplicate those rules.
+Real action masks come from canonical validation; Wait is always legal. PPO and DQN apply the mask directly. MuZero additionally learns legality for imagined states, while its real root still uses the canonical mask.
 
 ## Implemented baseline policies
 
-The baselines live in [`engine/aresim/algorithms/baselines/`](../../engine/aresim/algorithms/baselines/) and implement the same public `Agent` contract used by checkpoint policies. What each one does is documented in [`baselines/workflow.md`](../../engine/aresim/algorithms/baselines/workflow.md).
+The baselines live in [`engine/aresim/algorithms/baselines/`](../../engine/aresim/algorithms/baselines/) and implement the same public `Agent` contract used by checkpoint policies. What each one does is documented in [`baselines/DETAILS.md`](../../engine/aresim/algorithms/baselines/DETAILS.md).
 
 ## Action-masked PPO
 
@@ -175,7 +187,7 @@ This ensures that both the behavior distribution stored during sampling and the 
 
 ## Neural network implementation
 
-The local CNN trunk lives in [`algorithms/common/encoder.py`](../../engine/aresim/algorithms/common/encoder.py). Masked PPO attaches policy and value heads (`local_cnn_actor_critic`); masked DQN attaches a Q / dueling head (`local_cnn_q`). Both are selected through [`algorithms/registry.py`](../../engine/aresim/algorithms/registry.py).
+The local CNN trunk lives in [`algorithms/common/encoder.py`](../../engine/aresim/algorithms/common/encoder.py). Masked PPO attaches policy and value heads (`local_cnn_actor_critic`); masked DQN attaches a Q / dueling head (`local_cnn_q`). Both include the memory spatial channel and navigation telemetry when using `local_memory`, and are selected through [`algorithms/registry.py`](../../engine/aresim/algorithms/registry.py).
 
 ```mermaid
 flowchart TB
@@ -221,11 +233,11 @@ a*     = argmax Q_online(s')          # legal only
 target = r + γ^n (1 - terminated) Q_target(s', a*)
 ```
 
-`rollout_batch_size` is environment steps per Tune iteration. `train_batch_size` is the replay minibatch (typically 32–256). DQN uses a few env runners and a large replay; it does not copy PPO's 28-runner reference layout. n-step is 1 in smoke/dev and 3 in `configs/masked_dqn/reference.yaml`. Prioritized replay, C51, and recurrence are later.
+`rollout_batch_size` is environment steps per Tune iteration. `train_batch_size` is the replay minibatch (typically 32–256). The DQN reference uses 28 env runners and replay intensity 4; smoke/dev use smaller runner counts. n-step is 1 in smoke/dev and 3 in `configs/masked_dqn/reference.yaml`. Prioritized replay, C51, and recurrence are later.
 
 Compare PPO and Double Dueling DQN on held-out seeds at equal environment steps. The reference trial is `resource_mission` (same as current masked PPO). Registry name stays `masked_dqn`.
 
-Sources: [`dqn/config.py`](../../engine/aresim/algorithms/dqn/config.py), [`dqn/train.py`](../../engine/aresim/algorithms/dqn/train.py), [`dqn/workflow.md`](../../engine/aresim/algorithms/dqn/workflow.md).
+Sources: [`dqn/config.py`](../../engine/aresim/algorithms/dqn/config.py), [`dqn/train.py`](../../engine/aresim/algorithms/dqn/train.py), [`dqn/DETAILS.md`](../../engine/aresim/algorithms/dqn/DETAILS.md).
 
 ## How training trajectories are sampled
 
@@ -309,7 +321,7 @@ The separate [`RolloutRunner`](../../engine/aresim/training/runner.py) records c
 
 ## Seeds, scaling, and reproducibility
 
-[`notebooks/phase1_open_exploration_split_v1.yaml`](../../notebooks/phase1_open_exploration_split_v1.yaml) declares:
+[`configs/seeds/phase1_open_exploration_split_v1.yaml`](../../configs/seeds/phase1_open_exploration_split_v1.yaml) declares:
 
 - 512 training environment seeds;
 - 32 validation seeds;
@@ -341,18 +353,19 @@ The immutable experiment envelope lives in [`experiments.py`](../../engine/aresi
 
 ## Reward used for learning
 
-PPO trains on `aresim.reward.shaped_train.v1`, not the engine/UI reward. Both are returned separately for auditing.
+PPO trains on `aresim.reward.shaped_train.v2`, not the engine/UI reward. Both are returned separately for auditing.
 
 | Shaped term | Weight | Raw measurement |
 |---|---:|---|
 | Mission success | +10 | `resource_mission` success |
 | Terminal failure | -5 | Authoritative failure |
-| Objective progress | +2 | Mission completion delta |
+| Objective progress | +2 | Capped, irreversible delivery progress; pad service cannot earn it |
 | New cell | 0 | First visit (logged, not trained) |
 | Approach pad | 0 | Disabled |
-| Goal potential | +1.00 | `γΦ(s′) − Φ(s)` toward nearer ice or unscanned ore if empty, pad if loaded |
+| Goal potential | +1.00 | `γΦ(s′) − Φ(s)` toward still-needed resources or home, including cargo changes; terminal potential zero |
 | New scan | 0 | Newly scanned terrain (logged, not trained) |
 | Collected ice | +0.40 | Ice collected on Extract |
+| Collected samples | 0 default; +0.30 in DQN/MuZero references | Positive delta of quota-capped delivered + onboard samples, divided by 0.5 kg; Unload cannot reset credit |
 | Delivered ice | +1.00 | Delivered mass divided by payload capacity |
 | Delivered samples | +0.80 | Delivered mass divided by payload capacity |
 | Build progress | 0 | Disabled |
@@ -364,9 +377,11 @@ PPO trains on `aresim.reward.shaped_train.v1`, not the engine/UI reward. Both ar
 | Invalid action | -0.10 | Canonical action resolved as invalid |
 | Nonterminal time cost | -0.002 | Each nonterminal transition |
 
-Nonterminal shaped totals are clipped to `[-2, 2]`. Sparse evaluation retains only mission success, terminal failure, and invalid-action terms. Since mission success is unavailable, reports present it as unavailable rather than zero.
+Nonterminal base terms are clipped to `[-2, 2]`; the potential contribution is added afterward. The learner gamma is frozen into the reward config. Collection/delivery bonuses stop at mission quotas, and external truncation does not alter reward. Sparse evaluation retains success, failure and invalid actions. Mission success rate is reported for `resource_mission`; it is unavailable for `open_exploration`.
 
 Reward code lives in [`components/rewards.py`](../../engine/aresim/components/rewards.py). Changing the selected RL reward never rewrites the engine/UI reward or replay history.
+
+The October 8 DQN reference isolates sample acquisition credit in `seed_3_sample_credit_030`, using a maximum 2.4 collection bonus for the unchanged 4 kg quota and retaining −0.025 time cost. Its [observed results](../../results/rllib_masked_double_dueling_dqn_reference/seed_3_sample_credit_030/learnings.md) show mission improvement for that learner seed. The October 10 MuZero reference adopted the same reward; the October 11 parallel trial was `seed_7_sample_credit_030_parallel`. The [October 13 checkpoint/loss corrections](muzero_learning_fixes_2026-10-13.md) used trial `seed_7_sample_credit_030_parallel_lossnorm`, which also completed no full validation missions. The [learning-path follow-up](muzero_learning_v3_2026-10-13.md) now uses `seed_7_sample_credit_030_learning_v3`; its task-learning benefit and CUDA throughput remain unverified. Enabling the bonus versions the shaped profile/breakdown to v3. At the zero default, the extra term is omitted and the v2 reward contract is preserved; sparse rewards also remain v2. See [run instructions](usage.md).
 
 ## Training metrics and W&B
 
@@ -400,7 +415,7 @@ flowchart LR
     Files --> Notebook
 ```
 
-`RLlibCheckpointAgent` consumes only observation and mask. Deterministic evaluation uses masked argmax; explicitly seeded stochastic evaluation is also supported. The shared rollout path preserves observations, masks, actions, selected and engine rewards, events, end flags, effective actions, and state checksums. After Tune, Ray shuts down and frozen eval fans the same 32 validation seeds plus both baselines across CPU workers. `record_trajectories: true` stays one process.
+`RLlibCheckpointAgent` consumes only observation and mask. Deterministic evaluation uses masked argmax; explicitly seeded stochastic evaluation is also supported. The shared rollout path preserves observations, masks, actions, selected and engine rewards, events, end flags, effective actions, and state checksums. Training saves checkpoints without running frozen validation or selecting `best`. Run evaluation separately afterward; the manual selection utility can preserve `best` by success, capped delivery progress and sparse return. Snapshots include all numerical environment settings, source hashes and inline seed contents. Explicit evaluations report both action modes separately; DQN is greedy only. `evaluation.workers` bounds parallelism (default 1); recording and custom registries stay sequential. Test seeds are excluded from checkpoint promotion.
 
 ```bash
 engine/.venv/bin/aresim-rl evaluate results/<experiment>/<trial> \

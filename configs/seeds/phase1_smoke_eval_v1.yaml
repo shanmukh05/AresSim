@@ -1,0 +1,12 @@
+# Minimal seed split for masked PPO smoke runs and notebook demos.
+schema_version: aresim.seed_split.v1
+manifest_id: phase1_smoke_eval_v1
+scenario_id: phase1_default_v1
+task_id: phase1_open_exploration_v1
+observation_schema: aresim.obs.local.v1
+action_schema: aresim.action.rover.v1
+reward_profile: aresim.reward.shaped_train.v1
+agent_seed_offset: 1000000
+train: [1000]
+validation: [2000, 2001]
+test: [3000]

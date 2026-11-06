@@ -2,7 +2,7 @@
 
 Manifests keep train, validation, and test environment seeds disjoint. ``task_id``
 names the original split family; ``resource_mission`` reuses the same world seeds.
-Checked-in YAML lives in repository ``notebooks/``, not the installable package.
+Checked-in YAML lives in repository ``configs/seeds/``, not the installable package.
 
 **Last updated:** September 1, 2026
 
@@ -45,6 +45,8 @@ class SeedSplitManifest:
         if not all(identifiers):
             raise ValueError("seed manifest identifiers cannot be empty")
         _validate_splits(self.train, self.validation, self.test)
+        if _invalid_seed(self.agent_seed_offset):
+            raise ValueError("agent_seed_offset must be a non-negative integer")
 
     def episodes(self, split: str) -> tuple[EpisodeSpec, ...]:
         """Return stable rollout episode definitions for validation or test."""
@@ -58,6 +60,8 @@ def _validate_splits(*splits: tuple[int, ...]) -> None:
     if any(not split for split in splits):
         raise ValueError("seed manifest splits cannot be empty")
     groups = tuple(set(split) for split in splits)
+    if any(len(group) != len(split) for group, split in zip(groups, splits, strict=True)):
+        raise ValueError("seed manifest splits cannot contain duplicates")
     if _splits_overlap(groups):
         raise ValueError("seed manifest splits must be disjoint")
     if any(_invalid_seed(seed) for group in groups for seed in group):
@@ -87,6 +91,11 @@ def load_seed_manifest(path: str | Path) -> SeedSplitManifest:
     import yaml
 
     payload = yaml.safe_load(resolve_checkout_file(path, kind="seed manifest").read_text(encoding="utf-8"))
+    return parse_seed_manifest(payload)
+
+
+def parse_seed_manifest(payload: object) -> SeedSplitManifest:
+    """Validate inline frozen splits by the same rules as checked-in manifests."""
     if not isinstance(payload, dict) or payload.get("schema_version") != SEED_SPLIT_SCHEMA:
         raise ValueError("unsupported seed split manifest")
     allowed = {"schema_version", "manifest_id", "scenario_id", "task_id", "observation_schema", "action_schema", "reward_profile", "train", "validation", "test", "agent_seed_offset"}
@@ -97,7 +106,7 @@ def load_seed_manifest(path: str | Path) -> SeedSplitManifest:
         manifest_id=str(payload["manifest_id"]), scenario_id=str(payload["scenario_id"]), task_id=str(payload["task_id"]),
         observation_schema=str(payload["observation_schema"]), action_schema=str(payload["action_schema"]), reward_profile=str(payload["reward_profile"]),
         train=tuple(payload["train"]), validation=tuple(payload["validation"]), test=tuple(payload["test"]),
-        agent_seed_offset=int(payload["agent_seed_offset"]),
+        agent_seed_offset=payload["agent_seed_offset"],
     )
     manifest.validate()
     return manifest

@@ -106,7 +106,7 @@ def create_step_delta(before: JsonObject, after: JsonObject) -> JsonObject:
         },
         "appendedHistoryEntry": deepcopy(entry),
     }
-    for key in ("resources", "objectiveStats", "buildPadState", "mission", "rules"):
+    for key in ("resources", "objectiveStats", "buildPadState", "mission", "rules", "waitChargeEstimate"):
         if _changed(before.get(key), after.get(key)):
             changes[key] = deepcopy(after[key])
     result: JsonObject = {
@@ -194,7 +194,7 @@ def apply_step_delta(snapshot: JsonObject, delta: JsonObject) -> JsonObject:
     if not isinstance(changes, dict):
         raise ValueError("replay delta has no changes")
     _apply_status_changes(current, delta, changes)
-    for key in ("resources", "buildPadState", "mission", "rules"):
+    for key in ("resources", "buildPadState", "mission", "rules", "waitChargeEstimate"):
         if key in changes:
             current[key] = deepcopy(changes[key])
     _apply_objective_stats(current, changes)

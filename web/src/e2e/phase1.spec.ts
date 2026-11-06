@@ -1,7 +1,6 @@
 /** Playwright checks that the Phase 1 shell renders and the canvas is not blank. */
 
 import { expect, test } from "@playwright/test";
-import initialSnapshot from "../test/fixtures/snapshot-246.json";
 import type { SimSnapshot } from "../types/sim";
 
 test("loads the simulator shell and renders a nonblank canvas", async ({ page }) => {
@@ -275,9 +274,10 @@ test("UI export downloads the unified replayable trajectory schema", async ({ pa
   expect(trajectory.replay.finalSnapshot.step).toBe(1);
 });
 
-test("uploaded legacy gameplay restores seed and history in replay mode", async ({ page }) => {
+test("uploaded legacy gameplay restores seed and history in replay mode", async ({ page, request }) => {
+  const source = await request.post("/api/sessions", { data: { seed: 24680 } });
+  const initial = (await source.json()).snapshot as SimSnapshot;
   await page.goto("/");
-  const initial = structuredClone(initialSnapshot) as SimSnapshot;
   const final = JSON.parse(JSON.stringify(initial));
   final.step = 10;
   final.statusReason = "Checkpoint test final state";
@@ -380,4 +380,131 @@ test("analytics modal opens from ribbon and renders tabs", async ({ page }) => {
   await expect(page.getByText("Run Analytics")).toBeVisible();
   await expect(page.getByRole("tab", { name: /Rewards/ })).toBeVisible();
   await expect(page.getByRole("tab", { name: /Environment/ })).toBeVisible();
+});
+
+test("PPO defaults to sampling and switching action mode reattaches the policy", async ({ page }) => {
+  const attachments: Array<{ actionMode?: string; algorithmId: string }> = [];
+  await page.route('**/api/policies', (route) => route.fulfill({ json: {
+    policies: [], capabilities: { rllib: true, muzero: true, jev: false },
+  } }));
+  await page.route('**/attach-policy', async (route) => {
+    const payload = route.request().postDataJSON();
+    attachments.push(payload);
+    await route.fulfill({ json: { ...payload, policyId: 'sampling-fixture' } });
+  });
+  await page.goto('/');
+  await page.getByLabel('Algorithm mode').click();
+  await page.getByLabel('Algorithm policy').selectOption('masked_ppo');
+  const selection = page.getByLabel('Policy action selection');
+  await expect(selection).toBeVisible();
+  await expect(selection).toHaveValue('stochastic');
+  await page.getByLabel('Checkpoint path', { exact: true }).fill('/fixture/checkpoint.json');
+  await page.getByLabel('Checkpoint path', { exact: true }).press('Enter');
+  await expect.poll(() => attachments.at(-1)?.actionMode).toBe('stochastic');
+  await selection.selectOption('deterministic');
+  await expect.poll(() => attachments.at(-1)?.actionMode).toBe('deterministic');
+  await selection.selectOption('stochastic');
+  await expect.poll(() => attachments.at(-1)?.actionMode).toBe('stochastic');
+  await page.getByLabel('Algorithm policy').selectOption('masked_dqn');
+  await expect(selection).toHaveValue('stochastic');
+  await expect(selection.getByRole('option', { name: 'Sampling (ε-greedy)', exact: true })).toHaveCount(1);
+  await page.getByLabel('Checkpoint path', { exact: true }).press('Enter');
+  await expect.poll(() => attachments.at(-1)).toMatchObject({ algorithmId: 'masked_dqn', actionMode: 'stochastic' });
+  await selection.selectOption('deterministic');
+  await expect.poll(() => attachments.at(-1)).toMatchObject({ algorithmId: 'masked_dqn', actionMode: 'deterministic' });
+  await selection.selectOption('stochastic');
+  await page.getByLabel('Algorithm policy').selectOption('muzero');
+  await expect(selection).toHaveValue('stochastic');
+  await page.getByLabel('Checkpoint path', { exact: true }).press('Enter');
+  await expect.poll(() => attachments.at(-1)).toMatchObject({ algorithmId: 'muzero', actionMode: 'stochastic' });
+});
+
+test("agent settings stay above the footer without overlapping controls", async ({ page }, testInfo) => {
+  await page.route('**/api/policies', (route) => route.fulfill({ json: {
+    policies: [], capabilities: { rllib: true, muzero: true, jev: false },
+  } }));
+  await page.route('**/attach-policy', (route) => route.fulfill({ json: { policyId: 'layout-fixture' } }));
+  await page.goto('/');
+  await page.getByLabel('Algorithm mode').click();
+  await page.getByLabel('Algorithm policy').selectOption('masked_ppo');
+  const checkpointPath = '/very/long/checkpoint/path/'.repeat(20);
+  await page.getByLabel('Checkpoint path', { exact: true }).fill(checkpointPath);
+  await page.getByLabel('Policy action selection').selectOption('deterministic');
+
+  const checkLayout = async (hasAgentSettings = true) => {
+    const panel = hasAgentSettings ? await page.getByTestId('agent-settings-panel').boundingBox() : null;
+    const footer = await page.getByTestId('action-bar').boundingBox();
+    expect(footer).not.toBeNull();
+    if (hasAgentSettings) {
+      expect(panel).not.toBeNull();
+      expect(panel!.y + panel!.height).toBeLessThanOrEqual(footer!.y + 1);
+      const world = await page.getByTestId('game-viewport').boundingBox();
+      expect(panel!.y).toBeGreaterThanOrEqual(world!.y);
+      expect(panel!.y + panel!.height).toBeLessThanOrEqual(world!.y + world!.height);
+    } else {
+      await expect(page.getByTestId('agent-settings-panel')).toHaveCount(0);
+    }
+    expect(footer!.y + footer!.height).toBeLessThanOrEqual(page.viewportSize()!.height + 1);
+    const controls = [...(hasAgentSettings ? [
+      page.getByLabel('Algorithm policy'),
+      page.getByLabel('Checkpoint path', { exact: true }),
+      page.getByLabel('Apply checkpoint path', { exact: true }),
+      page.getByLabel('Policy action selection'),
+    ] : []),
+      page.getByTestId('action-bar-left'),
+      page.getByTestId('action-bar-center'),
+      page.getByTestId('action-bar-right'),
+    ];
+    const boxes = await Promise.all(controls.map(async (control) => {
+      await expect(control).toBeVisible();
+      return control.boundingBox();
+    }));
+    for (const box of boxes) {
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+    }
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i]!;
+        const b = boxes[j]!;
+        const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+        const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+        expect(overlapX > 1 && overlapY > 1).toBe(false);
+      }
+    }
+  };
+
+  await checkLayout();
+  const panel = page.getByTestId('agent-settings-panel');
+  expect((await panel.boundingBox())!.width).toBeLessThan(page.viewportSize()!.width - 100);
+  await page.screenshot({ path: testInfo.outputPath('agent-settings.png') });
+  const toggle = page.getByRole('button', { name: 'Agent settings', exact: true });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  const worldHeight = (await page.getByTestId('game-viewport').boundingBox())!.height;
+  await page.getByLabel('Close agent settings', { exact: true }).click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toBeFocused();
+  await checkLayout(false);
+  expect((await page.getByTestId('game-viewport').boundingBox())!.height).toBe(worldHeight);
+  await toggle.click();
+  await expect(page.getByLabel('Algorithm policy')).toHaveValue('masked_ppo');
+  await expect(page.getByLabel('Checkpoint path', { exact: true })).toHaveValue(checkpointPath);
+  await expect(page.getByLabel('Policy action selection')).toHaveValue('deterministic');
+  await page.getByLabel('Checkpoint path', { exact: true }).press('Escape');
+  await expect(panel).toHaveCount(0);
+  await expect(toggle).toBeFocused();
+  await toggle.click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await checkLayout();
+  await page.screenshot({ path: testInfo.outputPath('agent-settings-narrow.png') });
+  await toggle.click();
+  await checkLayout(false);
+  await page.getByLabel('Manual mode').click();
+  await checkLayout(false);
+  await page.getByLabel('Replay mode').click();
+  await checkLayout(false);
+  await page.getByLabel('Algorithm mode').click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await checkLayout(false);
 });

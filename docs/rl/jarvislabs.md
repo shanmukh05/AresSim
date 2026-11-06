@@ -1,8 +1,8 @@
 # Train on JarvisLabs
 
-Last updated: 2026-09-12
+Last updated: 2026-10-16
 
-Run the same `aresim-rl train` path from [RL Usage](usage.md) on a JarvisLabs GPU container or CPU VM. The helper uploads a slim training payload, installs Python 3.12 plus `aresim[rllib]`, starts training, then downloads the entire remote `results/` tree. Official CLI reference: [JarvisLabs CLI](https://docs.jarvislabs.ai/cli/).
+Run the same `aresim-rl train` path from [RL Usage](usage.md) on a JarvisLabs GPU container or CPU VM. The helper uploads a slim training payload, installs Python 3.12 plus the selected algorithm's extra (`aresim[rllib]`, `aresim[muzero]`, or `aresim[world_models]`), starts training, then downloads the entire remote `results/` tree. Official CLI reference: [JarvisLabs CLI](https://docs.jarvislabs.ai/cli/).
 
 Do not use `jl run .` from the repository root. That syncs `results/`, `web/`, and local venvs, and JarvisLabs pytorch templates default to Python 3.10, which cannot install AresSim (`requires-python = ">=3.12"`).
 
@@ -68,7 +68,7 @@ export WANDB_API_KEY=...     # from wandb.ai/authorize
 
 ```bash
 ssh-add -l                   # key listed
-echo "$WANDB_API_KEY"        # non-empty for reference.yaml / dev.yaml
+test -n "${WANDB_API_KEY:-}" && echo "W&B key is configured"
 python3 scripts/jarvislabs/cloud_train.py self-check
 ```
 
@@ -97,6 +97,12 @@ python3 scripts/jarvislabs/cloud_train.py run --gpu L4 \
 python3 scripts/jarvislabs/cloud_train.py run --gpu L4 \
   --config configs/masked_dqn/reference.yaml
 
+# Parallel MuZero reference (eight CPU collectors × four environments; W&B required)
+python3 scripts/jarvislabs/cloud_train.py run --gpu A30 --region IN2 \
+  --config configs/muzero/reference.yaml \
+  --set algorithm_config.batch_size=256 \
+  --set resources.torch_threads=8 --detach
+
 # CPU VM
 python3 scripts/jarvislabs/cloud_train.py run --cpu --vcpus 8 --ram 32 \
   --config configs/masked_ppo/dev.yaml
@@ -105,8 +111,9 @@ python3 scripts/jarvislabs/cloud_train.py run --cpu --vcpus 8 --ram 32 \
 The `run` command:
 
 1. Creates a pytorch GPU container or a CPU VM (or resumes `--on MACHINE_ID`).
-2. Uploads `engine/`, `configs/`, seed YAMLs under `notebooks/`, and `scripts/jarvislabs/remote_setup.sh`.
-3. Installs Python 3.12, `aresim[rllib]`, and CUDA torch when `nvidia-smi` is present.
+2. Uploads allowlisted engine source, YAML configs including `configs/seeds/`, and the shared/JarvisLabs setup scripts.
+   The staged `aresim` directory uploads explicitly to remote HOME, its parent, so a reused checkout is updated rather than nested inside `/home/aresim/aresim`.
+3. Installs Python 3.12, the config's training extra (`aresim[rllib]`, `aresim[muzero]`, or `aresim[world_models]`), and CUDA torch when `nvidia-smi` is present.
 4. Starts `aresim-rl train` in the background (`jl run`) and follows logs.
 5. Downloads the remote `results/` directory into local `results/`.
 6. Pauses the instance so compute billing stops (storage billing continues).
@@ -135,7 +142,7 @@ python3 scripts/jarvislabs/cloud_train.py run --on MACHINE_ID --gpu L4 --skip-se
   --config configs/masked_ppo/reference.yaml
 ```
 
-`--gpu` on a reused instance still sets `resources.gpus_per_learner=1` unless you pass `--set resources.gpus_per_learner=...` yourself. Extra `--set` flags are forwarded to `aresim-rl train` unchanged.
+`--gpu` on a reused RLlib instance still sets `resources.gpus_per_learner=1` unless you pass `--set resources.gpus_per_learner=...` yourself. MuZero uses its config's `resources.device: cuda` setting instead. Extra `--set` flags are forwarded to `aresim-rl train` unchanged. MuZero’s extra includes Ray Core; its reference reserves eight CPUs for collectors and one driver-owned GPU. The [parallel implementation](muzero_parallel_2026-10-11.md) records measured A30 performance. Resume can change the machine ID; the helper uses the returned ID for upload and launch.
 
 | Flag | Purpose |
 |---|---|
@@ -173,18 +180,11 @@ jl get MACHINE_ID
 
 Training needs `engine/`, `configs/`, and the seed YAMLs (evaluation fails without them). Skip `web/`, local `.venv`, and local `results/` unless you are resuming a previous cloud run.
 
-The helper stages that payload; doing it by hand:
+The helper stages that payload. For a manual upload, build the same allowlisted bundle in a new temporary directory:
 
 ```bash
-# From the repository root, after a local stage or by uploading trees directly:
-jl upload MACHINE_ID ./engine /home/aresim/engine
-jl upload MACHINE_ID ./configs /home/aresim/configs
-jl upload MACHINE_ID ./notebooks/phase1_open_exploration_split_v1.yaml \
-  /home/aresim/notebooks/phase1_open_exploration_split_v1.yaml
-jl upload MACHINE_ID ./notebooks/phase1_smoke_eval_v1.yaml \
-  /home/aresim/notebooks/phase1_smoke_eval_v1.yaml
-jl upload MACHINE_ID ./scripts/jarvislabs/remote_setup.sh \
-  /home/aresim/scripts/jarvislabs/remote_setup.sh
+python3 -c "from pathlib import Path; from scripts.cloud_payload import stage_payload; stage_payload(Path.cwd(), Path('/tmp/aresim'))"
+jl upload MACHINE_ID /tmp/aresim /home/
 ```
 
 On CPU VMs the home directory is `/home/<user>/`, not `/home/`. Check with:
@@ -231,7 +231,7 @@ jl run status RUN_ID
 jl exec MACHINE_ID -- nvidia-smi    # GPU sanity check
 ```
 
-Checked-in `reference.yaml` is sized for a 32-vCPU L4: `num_env_runners: 28`, `num_envs_per_env_runner: 1`, `gpus_per_learner: 1.0`. Training fails before Ray starts if CUDA is missing. On a CPU VM, disable the GPU learner:
+The checked-in PPO and DQN `reference.yaml` presets are sized for a 32-vCPU L4: `num_env_runners: 28`, `num_envs_per_env_runner: 1`, `gpus_per_learner: 1.0`. DQN also uses the explicit −0.025 time-cost reward override. Training fails before Ray starts if CUDA is missing. On a CPU VM, disable the GPU learner:
 
 ```bash
 --set resources.gpus_per_learner=0 --set resources.num_env_runners=28
@@ -276,12 +276,12 @@ Pick a GPU with `jl gpus`. IN2 has L4, A100, A100-80GB, A30, H100, H200. EU1 is 
 
 | Included | Not uploaded |
 |---|---|
-| `engine/` (no `.venv` or `__pycache__`) | `web/`, `docs/`, `.git/` |
-| `configs/` | local `results/` |
-| `notebooks/*.yaml` seed manifests | notebooks `.ipynb` (not needed for CLI train) |
-| `scripts/jarvislabs/remote_setup.sh` | W&B keys in git (copied separately as `.wandb.env`) |
+| Engine Python source and `engine/pyproject.toml` | `web/`, `docs/`, `.git/`, venvs and caches |
+| Config YAML, including `configs/seeds/` | local `results/` and environment files |
+| Shared `scripts/cloud/remote_setup.sh` and JarvisLabs setup entrypoint | notebooks `.ipynb` (not needed for CLI train) |
+| SHA-256 `source_inventory.json` | W&B keys in git (copied separately as `.wandb.env`) |
 
-Seed YAMLs live under `notebooks/` locally. Training cannot start without them. Confirm with:
+Seed YAMLs live under `configs/seeds/`. Training cannot start without them. Confirm with:
 
 ```bash
 python3 scripts/jarvislabs/cloud_train.py self-check
@@ -294,8 +294,8 @@ python3 scripts/jarvislabs/cloud_train.py self-check
 Same commands as local training, pointed at the downloaded run directory:
 
 ```bash
-engine/.venv/bin/aresim-rl inspect results/rllib_masked_ppo_reference/seed_7
-engine/.venv/bin/aresim-rl evaluate results/rllib_masked_ppo_reference/seed_7 \
+engine/.venv/bin/aresim-rl inspect results/rllib_masked_ppo_reference/seed_35
+engine/.venv/bin/aresim-rl evaluate results/rllib_masked_ppo_reference/seed_35 \
   --checkpoint final --split validation
 ```
 
@@ -304,7 +304,7 @@ Resume on the cloud instance (directory already exists remotely; `artifacts.reje
 ```bash
 python3 scripts/jarvislabs/cloud_train.py run --on MACHINE_ID --gpu L4 --skip-setup \
   --config configs/masked_ppo/reference.yaml \
-  --resume-from results/rllib_masked_ppo_reference/seed_7
+  --resume-from results/rllib_masked_ppo_reference/seed_35
 ```
 
 `--resume-from` is a **remote** path relative to `$HOME/aresim`.
@@ -320,14 +320,28 @@ Running instances bill compute. Paused instances bill storage only. Destroy stop
 | Symptom | What to do |
 |---|---|
 | `sh: 1: set: Illegal option -o pipefail` | Ubuntu `/bin/sh` is dash. Training must run under `bash -lc`. Re-run with `--on MACHINE_ID --skip-setup` after pulling this helper. `jl run logs --follow` will sit on a dead run until you Ctrl+C. |
-| `torch>=2.13` unsatisfiable / only `torch<=2.11.0+cu128` | The CUDA wheel index was consulted first. Setup now installs `engine[rllib]` from PyPI only. Re-upload and re-run setup (`run --on MACHINE_ID` without `--skip-setup`). Do not add a second requirements file. |
+| `ModuleNotFoundError: No module named 'pettingzoo'` on MuZero setup | `aresim[muzero]` does not install PettingZoo. The CLI used to import the PettingZoo adapter at startup; that import is now lazy. Re-upload engine and re-run with `--on MACHINE_ID --skip-setup`. |
 | `Permission denied (publickey)` / `scp: Connection closed` | JarvisLabs has the pubkey, but this shell does not. `ssh-add ~/.ssh/id_rsa` (or `id_ed25519`), then `ssh-add -l`. Do not `run --gpu` again until the agent lists a key — the failed instance may already be paused or gone. |
 | `Invalid value for 'pubkey_file': ... id_ed25519.pub` | That file is missing. `ls ~/.ssh/*.pub` and add the key you have (`id_rsa.pub` on this machine). |
 | `The agent has no identities` | New terminal, reboot, or expired macOS keychain unlock. Run `ssh-add` again; it does not persist across sessions unless you configure that yourself. |
 | CUDA requested but unavailable | `reference.yaml` sets `gpus_per_learner: 1.0`. Use an L4 (or `--set resources.gpus_per_learner=0` on a CPU VM). |
 | W&B authentication failed | `WANDB_API_KEY` missing before `run`. Export it, or put it in `.env.local` as `WANDB_API_KEY=` (not `WAND_API_KEY`). Smoke configs can use `--set tracking.mode=disabled`. |
-| Seed manifest does not exist | Upload the YAML files under `notebooks/`; `self-check` lists the required names. |
+| Seed manifest does not exist | Upload the YAML files under `configs/seeds/`; `self-check` lists the required names. |
 | `jl download` cannot find `results/` | Training never created the directory (failed in setup). `jl run logs RUN_ID --tail 80`. |
 | Resume returned a new id | Use the new `machine_id`. Update `--on` and `results/.jarvislabs_session.json`. |
 | First setup takes a long time | Expected: Ray + torch install. Later `--skip-setup` reuses `/home/aresim/.venv`. |
-| Logs freeze after W&B `Synced` / RLModule deprecation | Tune is done; frozen eval is running. Current builds print `Frozen evaluation N/M` and use all CPUs. An already-started sequential eval will not pick that up — stop it and run `aresim-rl evaluate` after uploading this engine. |
+| Logs freeze in `Frozen evaluation` during training | This is an older loaded engine. October 7 builds save checkpoints and train without periodic or final frozen evaluation. Upload/install the updated engine before starting a new trial; existing processes retain their loaded code. Manual `aresim-rl evaluate` is a separate analysis step. Resume still requires compatible runtime source hashes. |
+
+
+## Recurrent DQN and world-model algorithms
+
+The helper maps Recurrent DQN to `rllib`, and DreamerV3/Plan2Explore to `world_models`. World-model GPU selection uses `resources.device=cuda`; RLlib uses `resources.gpus_per_learner`. Explicit overrides remain authoritative. No new cloud run was launched to verify the October 16 implementations; only local staging/self-check and CPU integration were exercised.
+
+```bash
+python3 scripts/jarvislabs/cloud_train.py self-check
+# These commands provision/reuse cloud resources when deliberately executed:
+python3 scripts/jarvislabs/cloud_train.py run --config configs/dreamerv3/reference.yaml --gpu A30
+python3 scripts/jarvislabs/cloud_train.py run --config configs/recurrent_dqn/reference.yaml --gpu A30
+```
+
+Plan2Explore has separate `configs/plan2explore/pretrain/` and `adapt/` presets. Adaptation requires an initializer sidecar path **on the remote host**, supplied with `--set algorithm_config.initialization_checkpoint=...`; ensure its complete native checkpoint directory is available there. Resume targets refer to the current phase, not its parent. Each reference phase uses 1,048,576 interactions; report their combined budget. [Implementation and phase guide](../../engine/aresim/algorithms/README.md).

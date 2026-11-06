@@ -1,6 +1,6 @@
 # AresSim Engine Code Reference
 
-**Last updated:** September 20, 2026  
+**Last updated:** November 7, 2026
 **Status:** Living document
 
 This document explains the purpose of every maintained file in `engine/`, how the files work together, and where future backend code should be added. Update it in the same change whenever an engine file is added, removed, renamed, or given a different responsibility.
@@ -13,87 +13,140 @@ Generated files such as `__pycache__/`, `.pyc` files, virtual environments, cove
 engine/
 ├── pyproject.toml
 ├── README.md
-├── aresim/
-│   ├── __init__.py
-│   ├── types.py
-│   ├── config.py
-│   ├── defaults.py
-│   ├── registry.py
-│   ├── factory.py
-│   ├── gameplay.py
-│   ├── service.py
-│   ├── api.py
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── engine.py
-│   │   ├── generation.py
-│   │   └── rules.py
-│   ├── components/
-│   │   ├── __init__.py
-│   │   ├── base.py
-│   │   ├── observations.py
-│   │   ├── actions.py
-│   │   ├── rewards.py
-│   │   └── tasks.py
-│   ├── algorithms/
-│   │   ├── __init__.py
-│   │   ├── base.py
-│   │   ├── registry.py
-│   │   ├── baselines/
-│   │   │   ├── __init__.py
-│   │   │   ├── random.py
-│   │   │   ├── random_valid.py
-│   │   │   ├── scripted.py
-│   │   │   ├── wait.py
-│   │   │   └── workflow.md
-│   │   ├── common/
-│   │   │   ├── __init__.py
-│   │   │   ├── masks.py
-│   │   │   ├── config_decode.py
-│   │   │   ├── tracking.py
-│   │   │   ├── resume.py
-│   │   │   └── encoder.py
-│   │   ├── dqn/
-│   │   │   ├── __init__.py
-│   │   │   ├── config.py
-│   │   │   ├── train.py
-│   │   │   ├── checkpoint.py
-│   │   │   └── workflow.md
-│   │   ├── jev/
-│   │   │   ├── __init__.py
-│   │   │   ├── config.py
-│   │   │   ├── state.py
-│   │   │   ├── questions.py
-│   │   │   ├── client.py
-│   │   │   ├── agent.py
-│   │   │   ├── rollout.py
-│   │   │   └── workflow.md
-│   │   └── ppo/
-│   │       ├── config.py
-│   │       ├── train.py
-│   │       ├── checkpoint.py
-│   │       └── workflow.md
-│   ├── envs/
-│   │   ├── __init__.py
-│   │   ├── environment.py
-│   │   ├── gymnasium.py
-│   │   └── pettingzoo.py
-│   ├── training/
-│   │   ├── __init__.py
-│   │   ├── cli.py
-│   │   ├── evaluation.py
-│   │   ├── experiments.py
-│   │   ├── reports.py
-│   │   ├── runner.py
-│   │   ├── seeds.py
-│   │   └── trajectories.py
-│   └── integrations/
-│       ├── __init__.py
-│       ├── ui.py
-│       └── policy.py
+└── aresim/
+    ├── __init__.py
+    ├── api.py
+    ├── config.py
+    ├── defaults.py
+    ├── factory.py
+    ├── gameplay.py
+    ├── registry.py
+    ├── service.py
+    ├── types.py
+    ├── algorithms/
+    │   ├── __init__.py
+    │   ├── base.py
+    │   ├── catalog.py
+    │   ├── README.md
+    │   ├── registry.py
+    │   ├── baselines/
+    │   │   ├── __init__.py
+    │   │   ├── random.py
+    │   │   ├── random_valid.py
+    │   │   ├── scripted.py
+    │   │   ├── wait.py
+    │   │   └── DETAILS.md
+    │   ├── common/
+    │   │   ├── __init__.py
+    │   │   ├── config_decode.py
+    │   │   ├── encoder.py
+    │   │   ├── masks.py
+    │   │   ├── model_config.py
+    │   │   ├── resume.py
+    │   │   └── tracking.py
+    │   ├── dqn/
+    │   │   ├── __init__.py
+    │   │   ├── checkpoint.py
+    │   │   ├── config.py
+    │   │   ├── train.py
+    │   │   └── DETAILS.md
+    │   ├── dreamerv3/
+    │   │   ├── __init__.py
+    │   │   ├── behavior.py
+    │   │   ├── checkpoint.py
+    │   │   ├── config.py
+    │   │   ├── distributions.py
+    │   │   ├── model.py
+    │   │   ├── train.py
+    │   │   └── DETAILS.md
+    │   ├── jev/
+    │   │   ├── __init__.py
+    │   │   ├── agent.py
+    │   │   ├── client.py
+    │   │   ├── config.py
+    │   │   ├── questions.py
+    │   │   ├── rollout.py
+    │   │   ├── state.py
+    │   │   └── DETAILS.md
+    │   ├── muzero/
+    │   │   ├── __init__.py
+    │   │   ├── checkpoint.py
+    │   │   ├── collection.py
+    │   │   ├── config.py
+    │   │   ├── model.py
+    │   │   ├── replay.py
+    │   │   ├── search.py
+    │   │   ├── train.py
+    │   │   └── DETAILS.md
+    │   ├── plan2explore/
+    │   │   ├── __init__.py
+    │   │   ├── checkpoint.py
+    │   │   ├── config.py
+    │   │   ├── ensemble.py
+    │   │   ├── train.py
+    │   │   └── DETAILS.md
+    │   ├── ppo/
+    │   │   ├── __init__.py
+    │   │   ├── checkpoint.py
+    │   │   ├── config.py
+    │   │   ├── train.py
+    │   │   └── DETAILS.md
+    │   └── recurrent_dqn/
+    │       ├── __init__.py
+    │       ├── checkpoint.py
+    │       ├── config.py
+    │       ├── train.py
+    │       └── DETAILS.md
+    ├── components/
+    │   ├── __init__.py
+    │   ├── actions.py
+    │   ├── base.py
+    │   ├── observations.py
+    │   ├── rewards.py
+    │   └── tasks.py
+    ├── core/
+    │   ├── __init__.py
+    │   ├── engine.py
+    │   ├── generation.py
+    │   └── rules.py
+    ├── envs/
+    │   ├── __init__.py
+    │   ├── environment.py
+    │   ├── gymnasium.py
+    │   └── pettingzoo.py
+    ├── integrations/
+    │   ├── __init__.py
+    │   ├── policy.py
+    │   └── ui.py
+    └── training/
+        ├── __init__.py
+        ├── artifacts.py
+        ├── checkpoints.py
+        ├── cli.py
+        ├── evaluation.py
+        ├── experiments.py
+        ├── provenance.py
+        ├── reports.py
+        ├── resume.py
+        ├── runner.py
+        ├── seeds.py
+        ├── selection.py
+        ├── trajectories.py
+        ├── rllib/
+        │   ├── __init__.py
+        │   ├── checkpoint.py
+        │   ├── environment.py
+        │   ├── metrics.py
+        │   └── runner.py
+        └── world_models/
+            ├── __init__.py
+            ├── collection.py
+            ├── learner.py
+            ├── replay.py
+            └── runner.py
 ```
 
-The engine is the deterministic gameplay backend used by the UI and the core composed by the optional RL environment. Local observations, masks, rewards, adapters, baselines, truncation, rollouts, trajectories, fixed seed splits, RLlib masked PPO and mask-aware DQN, checkpoint evaluation, metrics, tracking, and reports are implemented. Jupyter notebooks, seed-split YAML, and experiment configs live in repository `notebooks/` and `configs/`, not in the installable package. Training run artifacts live in `results/`.
+The engine is the deterministic gameplay backend used by the UI and the core composed by the optional RL environment. Local observations, masks, rewards, adapters, baselines, truncation, rollouts, trajectories, fixed seed splits, RLlib masked PPO and mask-aware DQN, checkpoint evaluation, metrics, tracking, and reports are implemented. Seed-split YAML lives in `configs/seeds/`, and experiment presets live in `configs/`; local notebooks are optional gitignored artifacts. Training run artifacts live in `results/`.
 
 ## 2. How the engine is organized
 
@@ -140,6 +193,7 @@ Defines the installable `aresim` Python package.
 - Lists the runtime dependencies: FastAPI and Uvicorn.
 - Defines the optional `env` extra for NumPy, Gymnasium, and PettingZoo.
 - Defines the self-contained `rllib` extra and the `aresim-rl` command.
+- Defines the `muzero` extra with PyTorch, environment packages, W&B and pinned Ray Core 2.58 for parallel CPU collectors; MuZero does not require RLlib/Tune.
 - Lists the development extra: HTTPX.
 
 Change this file when the package metadata, supported Python version, dependencies, or test configuration changes. Dependencies should not be added for functionality that can be implemented clearly with the standard library.
@@ -231,7 +285,7 @@ Owns the explicit repository-local component and agent registry and the uniform 
 
 ### `engine/aresim/factory.py`
 
-Provides `make_engine`, `make_agent`, `make_env`, `make_gym_env`, and `make_parallel_env`. It resolves configuration through one registry and optionally applies the same external step limit before wiring framework adapters. Import this module only when the optional `env` dependencies are installed.
+Provides `make_engine`, `make_agent`, `make_env`, `make_gym_env`, and `make_parallel_env`. It resolves configuration through one registry and optionally applies the same external step limit before wiring framework adapters. Gymnasium and NumPy are required to import this module; PettingZoo is imported only when calling `make_parallel_env`.
 
 ## 5. Deterministic core
 
@@ -357,22 +411,35 @@ Neither adapter implements gameplay validation, state mutation, observation feat
 ### `engine/aresim/algorithms/`
 
 - `base.py` defines the public generic `Agent` contract, schema compatibility, reset seeding, and action interface.
-- `baselines/` groups the four built-in baseline policies (`random.py`, `random_valid.py`, `wait.py`, `scripted.py`). [`workflow.md`](../../engine/aresim/algorithms/baselines/workflow.md) explains each one. The scripted policy cannot access canonical `WorldState`.
-- `jev/` is the inference-only TypeSafe Jev rover agent (`state.py` encodes `aresim.llm.ops.v1`, `agent.py` implements `Agent`). Canonical usage and payload docs are [`jev/workflow.md`](../../engine/aresim/algorithms/jev/workflow.md). It cannot access canonical `WorldState`.
+- `catalog.py` owns dependency-free policy IDs, display labels and live-controller kinds used by API policy integration; algorithm registration owns model/loader IDs and dependency extras.
+- `README.md` links the eight illustrated algorithm `DETAILS.md` documents; their `.drawio.png` files embed editable diagram XML.
+- `baselines/` groups the four built-in baseline policies (`random.py`, `random_valid.py`, `wait.py`, `scripted.py`). [`DETAILS.md`](../../engine/aresim/algorithms/baselines/DETAILS.md) explains each one. The scripted policy cannot access canonical `WorldState`.
+- `jev/` is the inference-only TypeSafe Jev rover agent (`state.py` encodes `aresim.llm.ops.v1`, `agent.py` implements `Agent`). Canonical usage and payload docs are [`jev/DETAILS.md`](../../engine/aresim/algorithms/jev/DETAILS.md). It cannot access canonical `WorldState`.
 - `common/masks.py` shares mask validation across baselines.
 - `common/config_decode.py` shares YAML-to-dataclass decoding and scalar validation for algorithm and experiment configs.
 - `common/tracking.py` owns W&B run-id helpers so training entry points do not invent ids.
 - `common/resume.py` resolves a run directory or checkpoint sidecar into a validated resume target without starting Ray.
-- `common/encoder.py` owns the shared local CNN + telemetry trunk used by masked PPO and masked DQN.
-- `registry.py` owns the algorithm, model, and checkpoint-loader training registry.
-- `ppo/config.py` owns masked PPO hyperparameters and model architecture dataclasses.
-- `ppo/workflow.md` documents the masked PPO data flow, model inputs, and training/checkpoint path.
-- `ppo/train.py` owns the actor-critic, RLModule, W&B callbacks, and Ray Tune training path.
-- `ppo/checkpoint.py` validates native checkpoint provenance and adapts frozen inference to `Agent`.
+- `common/encoder.py` owns the shared local CNN/telemetry trunk reused by all learned algorithms; `common/model_config.py` owns its lightweight architecture dimensions.
+- `registry.py` owns algorithm/model/loader registration, strict model/resource decoders, compatible model pairing, lazy `TrainingRunner` dispatch, and dependency metadata.
+- `ppo/config.py` owns masked PPO hyperparameters and preserves the historical shared `ModelConfig` alias.
+- `ppo/DETAILS.md` documents the masked PPO data flow, model inputs, and training/checkpoint path.
+- `ppo/train.py` owns the actor-critic, RLModule and factory; public callback/driver aliases point to `training/rllib/`.
+- `ppo/checkpoint.py` owns PPO-specific frozen actor restoration and historical public checkpoint aliases; shared RLlib sidecar/provenance/transport code lives in `training/rllib/checkpoint.py`.
 - `dqn/config.py` owns masked DQN hyperparameters.
-- `dqn/workflow.md` documents replay, Double/dueling DQN, and `-inf` action masking.
+- `dqn/DETAILS.md` documents replay, Double/dueling DQN, and `-inf` action masking.
 - `dqn/train.py` owns the Q-network, RLModule, and RLlib DQN factory.
 - `dqn/checkpoint.py` loads `rllib_masked_dqn` sidecars into the shared checkpoint `Agent`.
+- `recurrent_dqn/config.py` owns sequence/burn-in and LSTM settings; `train.py` owns the recurrent encoder/RLModule, TD learner counts, seeded replay buffer and Ray 2.58 constructor adapter; `checkpoint.py` owns resettable LSTM epsilon-greedy inference. Its `DETAILS.md` explains replay/state/targets.
+- `dreamerv3/config.py` owns model, learning and Ray resources; `model.py` owns categorical RSSM and structured decoders; `distributions.py` owns categorical/legality/scalar math; `behavior.py` owns actor/critic/slow-value/normalizer state; `train.py` is the registered factory; `checkpoint.py` owns world-model metadata validation and recurrent batched inference. Its `DETAILS.md` maps tensor/data flow.
+- `plan2explore/config.py` owns phase/initializer and ensemble settings; `ensemble.py` owns bootstrapped next-embedding predictions/disagreement; `train.py` validates task/phase pairing; `checkpoint.py` selects the shared loader under the Plan2Explore identity. Its `DETAILS.md` documents reward isolation, transfer and phase-local resume.
+- `muzero/config.py` owns model, search/learning and Ray collector resource dataclasses.
+- `muzero/model.py` owns representation, latent dynamics, categorical reward/value supports and learned legality/continuation. Optional projection/prediction heads provide temporal consistency supervision against stopped recorded future-history representations.
+- `muzero/search.py` owns single-root and batched PUCT with independent masks, RNGs and value normalization.
+- `muzero/collection.py` owns real environments, bounded Ray chunks, immutable model snapshots, actor lifecycle and unfinished-episode reconstruction through deterministic action replay. `RayCollectionPool` owns the sole training collection path.
+- `muzero/replay.py` owns completed trajectories, per-position policy versions, priorities and bounded replay sampling.
+- `muzero/train.py` owns one learner, self-normalized importance-weighted loss with unweighted diagnostics, actual-step update credit, bounded policy lag, batched full-unroll reanalysis of selected actual-minibatch starts, rare-action positive legality weighting, temporal consistency and quiescent collector/replay checkpoints. Numbered rotation/resume sorts by numeric step; final is compared by its recorded step count. It performs no held-out evaluation.
+- `muzero/checkpoint.py` owns batched history packing, native sidecars and frozen sampled/greedy inference; loading a policy does not start Ray.
+- `muzero/DETAILS.md` documents configuration, execution, resume, inference and separate manual evaluation. See [parallel implementation and A30 evidence](../rl/muzero_parallel_2026-10-11.md).
 - `jev/config.py` owns Jev timeouts, confidence floor, and neighborhood size.
 - `jev/state.py` owns the `aresim.llm.ops.v1` 5x5 encoder.
 - `jev/questions.py` owns the masked Choice question.
@@ -385,13 +452,19 @@ Neither adapter implements gameplay validation, state mutation, observation feat
 
 - `runner.py` owns explicit environment/agent episode seeds, the 1,200-step default cutoff, complete episode collection, summaries, and optional writer integration. It is not an online training collector or replay buffer.
 - `trajectories.py` owns `aresim.trajectory.v1`, standalone `aresim.trajectory.episode.v1` artifacts, recursive Gymnasium space descriptors, plain/gzip JSONL shards, SHA-256 manifests, atomic publication, typed reading, and structural/reward/alignment/replay validation.
+- `artifacts.py` shares atomic JSON, file inventories, safe inventory validation, numeric checkpoint ordering and native checkpoint path resolution.
+- `checkpoints.py` dispatches frozen-policy loaders without choosing a training backend; `resume.py` owns public frozen-config compatibility checks.
+- `rllib/checkpoint.py` owns the shared RLlib sidecar schema/writer, identity and inventory validation, native checkpoint/module paths, restoration, and categorical `RLlibCheckpointAgent`.
+- `rllib/environment.py` owns seeded canonical Gym construction; `rllib/metrics.py` owns callbacks/stable metric mapping; `rllib/runner.py` owns Tune lifecycle/tracking/exports. The package initializer documents this optional framework boundary.
+- `world_models/replay.py` owns contiguous episode suffixes, padding/validity and typed sequence batches; `learner.py` owns model/behavior optimizer isolation and prefix reconstruction; `collection.py` owns bounded Ray CPU groups, batched actions and resumable histories; `runner.py` owns preflight, phase transfer/resume, budgets/tracking and checkpoint lifecycle. The initializer records shared ownership without importing the trainer.
+- `provenance.py` freezes environment, seed and source snapshots; `selection.py` owns explicitly requested manual validation selection. Neither trainer performs held-out selection.
 - `experiments.py` owns immutable experiment settings, safe YAML, strict typed overrides, and configuration hashes.
-- `seeds.py` and `evaluation.py` own fixed splits and framework-neutral frozen-policy evaluation. The checked-in split is `notebooks/phase1_open_exploration_split_v1.yaml`.
-- `reports.py` pulls W&B training history and writes matplotlib plots plus exported metrics under `<run>/reports/` without starting Ray or the simulator.
+- `seeds.py` and `evaluation.py` own fixed splits and framework-neutral frozen-policy evaluation. The checked-in split is `configs/seeds/phase1_open_exploration_split_v1.yaml`.
+- `reports.py` pulls W&B training history and writes matplotlib plots plus exported metrics under `<run>/reports/` without starting Ray or the simulator. Reports include MuZero replay/consistency/legality plots, recurrent DQN learned/burn-in/padding counts, and world-model reconstruction/KL/continuation/actor/value/disagreement, phase-budget and history-cost plots when available. Rates without observed label denominators are hidden.
 - `cli.py` provides train, evaluate, report, inspect, and rollout commands.
 - `__init__.py` re-exports rollout, trajectory, and lazy learned-policy APIs.
 
-RLlib uses its own collectors for online learning. Checkpoint-backed policies implement `Agent` and reuse the runner for matched evaluation and trajectory export.
+RLlib uses its own collectors for PPO and both DQNs; native world models use bounded Ray CPU collection waves with one learner. Checkpoint-backed policies implement `Agent` and reuse the runner for matched evaluation and trajectory export.
 
 ## 10. Integration adapters
 
@@ -440,23 +513,30 @@ Bridges one live `AresEngine` session to a registered baseline, Jev, or checkpoi
 | Change environment adapter shapes | `envs/` | Gymnasium/PettingZoo compliance and direct parity |
 | Add or change a baseline policy | `algorithms/` | Agent contracts, mask behavior, fixed-seed rollouts |
 | Add or change the Jev rover agent | `algorithms/jev/` | Encoder, fake-client fallbacks, attach, rollout YAML |
-| Add or change a learned algorithm | `algorithms/ppo/` or `algorithms/dqn/` | Registry, experiment YAML |
+| Add or change a learned algorithm | `algorithms/ppo/`, `algorithms/dqn/` or `algorithms/muzero/` | Registry, experiment YAML, algorithm workflow |
 | Change rollout or trajectory semantics | `training/` | Alignment, integrity, round-trip, and gameplay-format separation |
 
 ## 12. Learned-policy training
 
-The optional learned-policy code is split between `aresim/algorithms/` (policy implementations and training) and `aresim/training/` (rollouts, trajectories, evaluation harness, CLI). RLlib is an implementation detail inside `algorithms/ppo/train.py` and `algorithms/dqn/train.py`, not the public package name:
+The optional learned-policy code is split between `aresim/algorithms/` (policy implementations and training) and `aresim/training/` (rollouts, trajectories, evaluation harness, CLI). RLlib details live in the owning algorithm modules and shared `training/rllib/`; native world-model collection/lifecycle lives under `training/world_models/`:
 
 ```text
-algorithms/ppo/config.py     masked PPO hyperparameters and model architecture
-algorithms/ppo/train.py      actor-critic, RLModule, RLlib/Ray Tune, W&B metrics
+algorithms/ppo/config.py     masked PPO hyperparameters; shared architecture alias
+algorithms/ppo/train.py      actor-critic, RLModule and factory; driver compatibility exports
 algorithms/ppo/checkpoint.py native checkpoint sidecar and Agent adapter
 algorithms/dqn/config.py     masked DQN hyperparameters
 algorithms/dqn/train.py      Q-network, RLModule, RLlib DQN factory
 algorithms/dqn/checkpoint.py masked DQN sidecar loader
+algorithms/recurrent_dqn/    LSTM DQN, sequence replay adapter and stateful checkpoint agent
+algorithms/dreamerv3/        RSSM, structured losses, behavior and inference
+algorithms/plan2explore/     disagreement, phase configuration and loader identity
+algorithms/common/model_config.py shared encoder dimensions
 algorithms/common/encoder.py shared local CNN encoder and illegal-action masking
 algorithms/common/resume.py  run-directory / sidecar resume resolution
-algorithms/registry.py       algorithms, models, and checkpoint loaders
+algorithms/registry.py       typed decoders, algorithms/models/loaders, lazy runners
+training/rllib/             seeded environments, metrics, Tune lifecycle and exports
+training/world_models/      sequence replay, learner, Ray collectors and phase lifecycle
+training/artifacts.py       atomic metadata, inventory validation and checkpoint ordering
 training/experiments.py      immutable experiment envelope, safe YAML, hashes
 training/seeds.py            fixed train/validation/test manifest
 training/evaluation.py       frozen RolloutRunner evaluation and trajectories
@@ -464,7 +544,7 @@ training/reports.py          W&B metric plots and exported tables under <run>/re
 training/cli.py              train/evaluate/report/inspect commands
 ```
 
-Single-rover PPO and DQN train through `AresGymEnv`. `AresParallelEnv` remains the canonical future multi-rover boundary. Neither training nor evaluation reimplements simulator rules, observations, rewards, or legality.
+Single-rover PPO and both DQNs train through `AresGymEnv`; native MuZero/Dreamer/Plan2Explore use `AresEnvironment` directly. `AresParallelEnv` remains the canonical future multi-rover boundary. Neither training nor evaluation reimplements simulator rules, observations, rewards, or legality.
 
 The public boundary is imported from `aresim.training`:
 
@@ -491,3 +571,20 @@ Whenever `engine/` changes:
 5. Keep planned code clearly separated from implemented code.
 6. Update the relevant domain/API documents.
 7. Confirm generated caches and local environment files are not documented as source files.
+
+
+### October 6 pipeline corrections
+
+`training/provenance.py` freezes numerical configs, source hashes and seed contents. `training/selection.py` provides separate manual validation, best checkpoint preservation and success-gate utilities. October 7 trainers save rotating and final checkpoints without calling evaluation or selection; only the checkpoint interval schedules saves. `components/observations.py` adds crop-derived `LocalMemoryObservation`; the common encoder consumes its navigation/visited features. MuZero adds latent legality/continuation heads, replay priority refresh and reanalysis. Regression coverage lives in `engine/tests/test_pipeline_invariants.py`. See [the correction notes](../rl/pipeline_fixes_2026-10-06.md).
+
+For full recurrent/world-model training, transfer, inference and local verification details, see [Recurrent DQN, DreamerV3 and Plan2Explore](../../engine/aresim/algorithms/README.md).
+
+## 10. Provider scripts and seed inputs
+
+- `configs/seeds/` owns the checked-in smoke and full fixed evaluation seed manifests. Their provenance and checksums are recorded in its README; algorithm training still evaluates only through an explicit analysis command.
+- `scripts/cloud_payload.py` owns the shared source allowlist and safe project payload construction used by GPU-provider launchers.
+- `scripts/cloud/remote_setup.sh` installs the backend extra selected by the algorithm catalog and records the remote environment.
+- `scripts/vastai/cloud_train.py` owns bounded Vast.ai command preparation, source transfer, lifecycle recording and artifact recovery; `supervisor.py` owns detached deadline enforcement and scoped self-stop.
+- `scripts/jarvislabs/` retains the JarvisLabs launcher and setup compatibility entry point.
+
+See [Vast.ai runs](../rl/vastai.md) and [refactor decisions](../project/refactor_training.md) for operation and validation details.

@@ -16,6 +16,7 @@ landing/reward/observation profile configs with ``validate()`` methods.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Mapping
 
 from .types import ActionType, TerrainType, WeatherState
@@ -345,11 +346,37 @@ class RewardProfileConfig:
     time_cost: float
     clip_min: float
     clip_max: float
+    gamma: float = 0.995
+    # Reward per 0.5 kg acquired, capped at the task's sample quota.
+    samples_collected: float = 0.0
 
     def validate(self) -> None:
         """Reject reversed shaped-reward clipping bounds."""
+        if any(isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value)
+               for value in vars(self).values()):
+            raise ValueError("reward parameters must be finite numbers")
         if self.clip_min > self.clip_max:
             raise ValueError("reward clipping bounds are reversed")
+        if not 0 < self.gamma <= 1:
+            raise ValueError("potential discount must be in (0, 1]")
+
+
+@dataclass(frozen=True)
+class TaskConfig:
+    """Delivery requirements; zero disables a resource for diagnostic missions."""
+
+    ice_target_kg: float = 12.0
+    sample_target_kg: float = 4.0
+    require_pad_safe: bool = True
+
+    def validate(self) -> None:
+        if any(isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value)
+               for value in (self.ice_target_kg, self.sample_target_kg)):
+            raise ValueError("mission targets must be finite numbers")
+        if min(self.ice_target_kg, self.sample_target_kg) < 0 or max(self.ice_target_kg, self.sample_target_kg) <= 0:
+            raise ValueError("mission targets must be nonnegative and at least one positive")
+        if not isinstance(self.require_pad_safe, bool):
+            raise ValueError("require_pad_safe must be boolean")
 
 
 @dataclass(frozen=True)
@@ -364,12 +391,14 @@ class EnvironmentConfig:
     reward: str
     reward_config: RewardProfileConfig
     task: str
+    task_config: TaskConfig = TaskConfig()
 
     def validate(self) -> None:
         """Validate nested values; component names are resolved by the local registry."""
         self.engine.validate()
         self.observation_config.validate()
         self.reward_config.validate()
+        self.task_config.validate()
         for label, value in (
             ("scenario", self.scenario_id),
             ("observation", self.observation),

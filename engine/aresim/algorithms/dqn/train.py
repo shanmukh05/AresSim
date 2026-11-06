@@ -8,13 +8,14 @@ Double-DQN targets all exclude them. Simulator rules stay in ``aresim.core``.
 
 **Contains:** ``LocalMaskedQNetwork``, ``AresMaskedDQNRLModule``, ``MaskedDQNFactory``.
 
-**See also:** :mod:`aresim.algorithms.dqn.config`, :mod:`aresim.algorithms.ppo.train`
+**See also:** :mod:`aresim.algorithms.dqn.config`, :mod:`aresim.training.rllib`
 (shared EnvRunners, metrics, and Tune driver).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+import os
 from typing import Any
 
 import torch
@@ -27,11 +28,13 @@ from ray.rllib.utils.schedules.scheduler import Scheduler
 from torch import Tensor, nn
 
 from ...defaults import DEFAULT_ENVIRONMENT_CONFIG
+from ...training.provenance import environment_config, environment_from_payload, experiment_seeds, freeze_experiment
 from ...training.experiments import ExperimentSpec
 from ...training.seeds import load_seed_manifest
 from ..common.encoder import LocalObservationEncoder, combine_q_values
-from ..ppo.config import ModelConfig
-from ..ppo.train import ENV_NAME, AresMetricsCallback, _environment
+from ..common.model_config import ModelConfig
+from ...training.rllib.environment import ENV_NAME, _environment
+from ...training.rllib.metrics import AresMetricsCallback
 from ..registry import TrainingContext
 from .config import MaskedDQNConfig, decode_config
 
@@ -79,9 +82,10 @@ class AresMaskedDQNRLModule(DefaultDQNTorchRLModule):
         local_space, action_count = _require_local_spaces(self.observation_space, self.action_space)
         model = dict(self.model_config or {})
         self.uses_dueling, self.uses_double_q, self.num_atoms = _dqn_runtime_flags(model)
+        self._validate_masks = os.environ.get("ARESIM_VALIDATE_MODEL_OUTPUTS") == "1"
         self.epsilon_schedule = Scheduler(fixed_value_or_schedule=model["epsilon"], framework=self.framework)
         config = ModelConfig(**{key: value for key, value in model.items() if key in ModelConfig.__dataclass_fields__})
-        self.encoder = LocalObservationEncoder(config, int(local_space["terrain_type"].shape[0]))
+        self.encoder = LocalObservationEncoder(config, int(local_space["terrain_type"].shape[0]), memory="navigation" in local_space.spaces)
         self.af, value = _q_heads(config.fused_width, action_count, self.uses_dueling)
         if value is not None:
             self.vf = value
@@ -90,7 +94,21 @@ class AresMaskedDQNRLModule(DefaultDQNTorchRLModule):
         """Compute masked Q-values from the current or target encoder/heads."""
         policy_input = batch[Columns.OBS]
         advantage, value = _heads(head)
-        return {"qf_preds": combine_q_values(encoder(policy_input["observation"]), advantage, value, policy_input["action_mask"])}
+        return {"qf_preds": combine_q_values(
+            encoder(policy_input["observation"]), advantage, value,
+            policy_input["action_mask"], validate_mask=self._validate_masks,
+        )}
+
+    def _forward_exploration(self, batch, t: int, **kwargs):
+        """Uniform legal exploration, including actions whose Q-value is zero."""
+        values = self.compute_q_values(batch)["qf_preds"]
+        mask = batch[Columns.OBS]["action_mask"].to(values.device).float()
+        random_actions = torch.multinomial(mask, 1).squeeze(-1)
+        self.epsilon_schedule.update(t)
+        epsilon = torch.as_tensor(self.epsilon_schedule.get_current_value(), device=values.device)
+        actions = torch.where(torch.rand(values.shape[0], device=values.device) < epsilon,
+                              random_actions, values.argmax(-1))
+        return {Columns.ACTIONS: actions}
 
 
 def _require_local_spaces(observation_space: object, action_space: object) -> tuple[spaces.Dict, int]:
@@ -158,7 +176,7 @@ class MaskedDQNFactory:
             DQNConfig()
             .environment(ENV_NAME, env_config={
                 "environment": spec.as_dict()["environment"],
-                "training_seeds": load_seed_manifest(spec.evaluation.seed_manifest).train,
+                "training_seeds": experiment_seeds(spec).train,
                 "learner_seed": spec.learner_seed,
                 "component_registry": context.component_registry,
             })

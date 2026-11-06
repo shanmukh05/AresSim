@@ -8,7 +8,7 @@ mask; never accesses canonical engine state.
 
 **Contains:** ``ScriptedAgent`` and private navigation helpers.
 
-**Registry name:** ``scripted`` → ``policy_id`` ``aresim.agent.scripted.v1``.
+**Registry name:** ``scripted`` → ``policy_id`` ``aresim.agent.scripted.v2``.
 
 **Decision priority (high to low):** unload → service → build → recharge on pad →
 return home → extract/scan → navigate to visible resources → explore → Wait.
@@ -24,6 +24,7 @@ import numpy as np
 
 from ...components.actions import ACTION_SCHEMA
 from ...components.observations import OBSERVATION_SCHEMA
+from ...config import TaskConfig
 from ..common.masks import require_mask
 
 
@@ -40,11 +41,14 @@ class ScriptedAgent:
     accepted for API compatibility; behavior is deterministic given observations.
     """
 
-    policy_id = "aresim.agent.scripted.v1"
+    policy_id = "aresim.agent.scripted.v2"
     observation_schema = OBSERVATION_SCHEMA
     action_schema = ACTION_SCHEMA
 
-    def __init__(self) -> None:
+    def __init__(self, mission: TaskConfig | None = None, capacity_kg: float = 12.) -> None:
+        self.mission = mission
+        self.capacity_kg = capacity_kg
+        self._need_ice = self._need_samples = True
         self._reset = False
         self._home: tuple[float, float] | None = None
         self._heading = 1
@@ -56,6 +60,7 @@ class ScriptedAgent:
         self._home = None
         self._heading = 1
         self._last_move = None
+        self._need_ice = self._need_samples = True
 
     @staticmethod
     def _policy_arrays(observation: PolicyObservation) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -104,8 +109,8 @@ class ScriptedAgent:
         for local_y in range(size):
             for local_x in range(size):
                 terrain_id = int(terrain[local_y, local_x])
-                is_ice = terrain_id == 3
-                is_unscanned_rock = terrain_id == 2 and flags[2, local_y, local_x] == 0
+                is_ice = self._need_ice and terrain_id == 3 and flags[3, local_y, local_x] == 0
+                is_unscanned_rock = self._need_samples and terrain_id == 2 and flags[2, local_y, local_x] == 0
                 distance = abs(local_x - anchor) + abs(local_y - anchor)
                 if (is_ice or is_unscanned_rock) and distance > 0:
                     targets.append((distance, 0 if is_ice else 1, local_y, local_x))
@@ -151,7 +156,7 @@ class ScriptedAgent:
             return 9
         if mask[8] and service_needed:
             return 8
-        if mask[7] and build_progress < 1:
+        if self.mission is None and mask[7] and build_progress < 1:
             return 7
         if pad_proximity == 2 and battery < 0.8:
             return 0
@@ -170,9 +175,9 @@ class ScriptedAgent:
             home_action = self._toward_home(current, mask)
             if home_action is not None:
                 return home_action
-        if mask[6]:
+        if mask[6] and self._need_ice:
             return 6
-        if mask[5]:
+        if mask[5] and self._need_samples:
             return 5
         return self._toward_visible_resource(terrain, flags, mask)
 
@@ -184,7 +189,11 @@ class ScriptedAgent:
         self_vector, colony, terrain, flags = self._policy_arrays(observation)
         current = (float(self_vector[0]), float(self_vector[1]))
         if self._home is None:
-            self._home = current
+            navigation = observation.get("navigation")
+            if navigation is not None and navigation[2]:
+                self._home = tuple(float(value) for value in navigation[-2:])
+            elif observation.get("pad_proximity") == 2:
+                self._home = current
         pad_proximity = observation.get("pad_proximity")
         if not isinstance(pad_proximity, (int, np.integer)):
             raise ValueError("scripted agent requires integer pad_proximity")
@@ -195,7 +204,15 @@ class ScriptedAgent:
         immediate = self._immediate_action(mask, payload_used, service_needed, build_progress, int(pad_proximity), battery)
         if immediate is not None:
             return immediate
-        should_return = battery < 0.35 or payload_used >= 0.75 or service_needed
+        quota_aboard = False
+        if self.mission is not None:
+            objectives = observation["objectives"]
+            ice_progress = float(objectives[1, 0]) if len(objectives) > 1 else 0.
+            sample_progress = float(objectives[2, 0]) if len(objectives) > 2 else 0.
+            self._need_ice = self.capacity_kg * float(self_vector[4]) + self.mission.ice_target_kg * ice_progress < self.mission.ice_target_kg - 1e-5
+            self._need_samples = self.capacity_kg * float(self_vector[6]) + self.mission.sample_target_kg * sample_progress < self.mission.sample_target_kg - 1e-5
+            quota_aboard = not (self._need_ice or self._need_samples) and payload_used > 1e-6
+        should_return = battery < 0.35 or payload_used >= 0.75 or service_needed or quota_aboard
         chosen = self._return_or_collect(current, terrain, flags, mask, should_return, int(pad_proximity))
         if chosen is not None:
             return chosen

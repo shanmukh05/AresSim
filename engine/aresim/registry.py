@@ -185,23 +185,33 @@ def create_default_registry() -> ComponentRegistry:
     registry = ComponentRegistry()
     registry.register_observation(
         "local",
-        lambda context: LocalObservation(context.environment_config.observation_config),
+        lambda context: LocalObservation(
+            context.environment_config.observation_config, context.environment_config.task_config),
     )
+    from .components.observations import LocalMemoryObservation
+    registry.register_observation("local_memory", lambda context: LocalMemoryObservation(
+        context.environment_config.observation_config, context.environment_config.task_config))
     registry.register_action("discrete", lambda context: DiscreteActions())
     registry.register_reward(
         "shaped_train",
-        lambda context: ShapedTrainReward(context.environment_config.reward_config),
+        lambda context: ShapedTrainReward(context.environment_config.reward_config, context.environment_config.task_config),
     )
     registry.register_reward(
         "sparse_eval",
-        lambda context: SparseEvalReward(context.environment_config.reward_config),
+        lambda context: SparseEvalReward(context.environment_config.reward_config, context.environment_config.task_config),
     )
     registry.register_task("open_exploration", lambda context: OpenExplorationTask())
-    registry.register_task("resource_mission", lambda context: ResourceMissionTask())
+    registry.register_task("resource_mission", lambda context: ResourceMissionTask(context.environment_config.task_config))
     registry.register_agent("random", lambda context: UniformRandomAgent())
     registry.register_agent("random_valid", lambda context: RandomValidAgent())
     registry.register_agent("wait", lambda context: WaitAgent())
-    registry.register_agent("scripted", lambda context: ScriptedAgent())
+    def scripted(context):
+        config = context.environment_config
+        agent = ScriptedAgent(config.task_config if config.task == "resource_mission" else None,
+                              config.engine.payload.capacity_kg)
+        agent.observation_schema = registry.build_observation(context.environment_config.observation, context).schema
+        return agent
+    registry.register_agent("scripted", scripted)
     registry.register_agent("jev", build_jev_agent)
     return registry
 

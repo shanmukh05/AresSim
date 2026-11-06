@@ -1,6 +1,10 @@
 # AresSim RL Usage Guide
 
-Practical guide for running environments, training masked PPO and mask-aware DQN, configuring W&B, recording trajectories, and extending components. For network architecture, PPO/DQN internals, and metric definitions, see [RL Algorithms, Training, and Evaluation](rl_quickstart.md).
+Updated October 7, 2026: read [pipeline corrections](pipeline_fixes_2026-10-06.md) before starting another experiment. New presets use observed navigation memory, reward/task v2 and frozen environment snapshots. Training saves periodic and final checkpoints without evaluation rollouts, validation selection or success-gate checks. Use `configs/masked_ppo/reference.yaml` directly for a fresh full-mission PPO run; no smaller delivery preset is required. Historical checkpoints require an explicit `--allow-environment-mismatch` for diagnostic evaluation and cannot resume under changed semantics.
+
+MuZero is available through `aresim-rl train configs/muzero/smoke.yaml` after installing `./engine[muzero]`. It uses a dedicated PyTorch trainer with the same experiment, checkpoint, and evaluation commands; see the [MuZero workflow](../../engine/aresim/algorithms/muzero/DETAILS.md). The `dev.yaml` and CUDA `reference.yaml` presets live beside the smoke config.
+
+Practical guide for running environments, training PPO, DQN, Recurrent DQN, MuZero, DreamerV3 and Plan2Explore, configuring W&B, recording trajectories, and extending components. For network architecture, PPO/DQN internals, and metric definitions, see [RL Algorithms, Training, and Evaluation](rl_quickstart.md).
 
 ## Contents
 
@@ -13,7 +17,7 @@ Practical guide for running environments, training masked PPO and mask-aware DQN
 | [Experiment YAML](#experiment-yaml) | Checked-in configs and key fields |
 | [Train from Python](#train-from-python) | `load_experiment`, `run_experiment`, checkpoints |
 | [After training](#after-training) | Evaluate, inspect, and report |
-| [UI policy inference](#ui-policy-inference) | Attach baselines, Jev, or PPO/DQN checkpoints in Algorithm mode |
+| [UI policy inference](#ui-policy-inference) | Attach baselines, Jev, or learned-policy checkpoints in Algorithm mode |
 | [Create an environment](#create-an-environment) | Framework-neutral, Gymnasium, PettingZoo factories |
 | [Run baseline rollouts](#run-baseline-rollouts) | Deterministic episodes with built-in agents |
 | [Record trajectories](#record-trajectories) | `aresim.trajectory.v1` datasets and validation |
@@ -43,34 +47,44 @@ engine/.venv/bin/python -m ipykernel install --user --name aresim --display-name
 |---|---|---|
 | `dev` | httpx | Local API client work |
 | `env` | NumPy, Gymnasium, PettingZoo | Baselines and rollouts only |
-| `rllib` | Ray, RLlib, PyTorch, W&B | Masked PPO/DQN training and evaluation |
+| `rllib` | Ray, RLlib, PyTorch, W&B | Masked PPO, feedforward/recurrent DQN training and evaluation |
+| `world_models` | PyTorch, Ray Core, environment/tracking/report dependencies | DreamerV3 and Plan2Explore; no RLlib/Tune |
+| `muzero` | PyTorch, W&B, environment packages, Ray Core 2.58 | MuZero Ray collection and frozen evaluation; no RLlib/Tune required |
 | `jev` | TypeSafe SDK | Live Jev rover agent and `aresim-rl rollout` |
 | `notebook` | Jupyter, papermill | Running notebooks locally |
 
 Select the `AresSim (.venv)` kernel in Jupyter. The base UI/backend install does not require NumPy, Gymnasium, Ray, PyTorch, or W&B.
 
-Seed splits for evaluation live in [`notebooks/phase1_open_exploration_split_v1.yaml`](../../notebooks/phase1_open_exploration_split_v1.yaml). Experiment YAML lives under [`configs/`](../../configs/); training outputs go to [`results/`](../../results/) (gitignored).
+Seed splits for evaluation live in [`configs/seeds/phase1_open_exploration_split_v1.yaml`](../../configs/seeds/phase1_open_exploration_split_v1.yaml). Experiment YAML lives under [`configs/`](../../configs/); training outputs go to [`results/`](../../results/) (gitignored).
+
+Reference results are consolidated by algorithm under `results/rllib_masked_ppo_reference/`, `results/rllib_masked_double_dueling_dqn_reference/` and `results/muzero_reference/`. Former `_v2` runs now live alongside older runs with the same trial names. Reference configs target these folders; use a new `trial_id` for a fresh run. Historical frozen experiment IDs and W&B identities are preserved. See the [results layout](../../results/README.md).
+
 
 ---
 
 ## Train from the CLI
 
-Masked PPO and mask-aware DQN are the implemented learned algorithms. Training is driven by validated YAML under `configs/<algorithm>/` and the `aresim-rl` console script.
+Masked PPO, mask-aware DQN, and MuZero are the implemented learned algorithms. Training is driven by validated YAML under `configs/<algorithm>/` and the `aresim-rl` console script.
 
 ### Checked-in configs
 
 | File | Environment steps | W&B | Purpose |
 |---|---:|---|---|
-| [`configs/masked_ppo/smoke.yaml`](../../configs/masked_ppo/smoke.yaml) | 102,400 | disabled | Fast pipeline smoke test (2-seed eval, no trajectory export) |
-| [`configs/masked_ppo/dev.yaml`](../../configs/masked_ppo/dev.yaml) | 102,400 | online | Local development run |
+| [`configs/masked_ppo/smoke.yaml`](../../configs/masked_ppo/smoke.yaml) | 8,192 | disabled | Fast pipeline smoke test (2-seed eval, no trajectory export) |
+| [`configs/masked_ppo/dev.yaml`](../../configs/masked_ppo/dev.yaml) | 102,400 | online | CPU development run (4 env runners, 2 PPO epochs, summary-only eval) |
 | [`configs/masked_ppo/reference.yaml`](../../configs/masked_ppo/reference.yaml) | 2,097,152 | online | Longer reference training (28 env runners + CUDA learner; needs a GPU host such as JarvisLabs L4) |
 | [`configs/masked_dqn/smoke.yaml`](../../configs/masked_dqn/smoke.yaml) | 4,096 | disabled | Masked DQN pipeline smoke (uniform replay, n-step=1) |
-| [`configs/masked_dqn/dev.yaml`](../../configs/masked_dqn/dev.yaml) | 102,400 | online | Local DQN development (2 env runners) |
-| [`configs/masked_dqn/reference.yaml`](../../configs/masked_dqn/reference.yaml) | 2,097,152 | online | Double Dueling DQN reference (`rllib_masked_double_dueling_dqn_reference`, 4 env runners + CUDA learner; n-step=3) |
+| [`configs/masked_dqn/dev.yaml`](../../configs/masked_dqn/dev.yaml) | 102,400 | online | Local DQN development (2 env runners, summary-only eval) |
+| [`configs/masked_dqn/reference.yaml`](../../configs/masked_dqn/reference.yaml) | 2,097,152 | online | Double Dueling DQN sample-credit trial (`seed_3_sample_credit_030`, 28 env runners + CUDA learner; n-step=3, time cost −0.025, capped sample bonus +0.30) |
+| [`configs/muzero/reference.yaml`](../../configs/muzero/reference.yaml) | 2,097,152 | online | MuZero learning-path sample-credit trial (`seed_7_sample_credit_030_learning_v3`, eight CPU collectors × four environments, one CUDA learner, 50 simulations/action; time cost −0.025, capped sample bonus +0.30) |
+| [`configs/recurrent_dqn/smoke.yaml`](../../configs/recurrent_dqn/smoke.yaml) | 512 | disabled | LSTM sequence-replay DQN smoke |
+| [`configs/dreamerv3/smoke.yaml`](../../configs/dreamerv3/smoke.yaml) | 256 | disabled | Structured RSSM and imagined behavior smoke |
+| [`configs/plan2explore/pretrain/smoke.yaml`](../../configs/plan2explore/pretrain/smoke.yaml) | 256 | disabled | Reward-free disagreement exploration smoke |
+| [`configs/plan2explore/adapt/smoke.yaml`](../../configs/plan2explore/adapt/smoke.yaml) | 256 | disabled | Separate task adaptation; requires initializer |
 | [`configs/jev/smoke.yaml`](../../configs/jev/smoke.yaml) | 20 (rollout) | n/a | Fake-client Jev pipeline smoke |
 | [`configs/jev/dev.yaml`](../../configs/jev/dev.yaml) | 40 (rollout) | n/a | Live Jev episodes (requires `JEV_API_KEY`) |
 
-Jev is not trained. See the [Jev workflow](../../engine/aresim/algorithms/jev/workflow.md). Roll it out with:
+Jev is not trained. See the [Jev workflow](../../engine/aresim/algorithms/jev/DETAILS.md). Roll it out with:
 
 ```bash
 engine/.venv/bin/aresim-rl rollout configs/jev/smoke.yaml
@@ -97,6 +111,31 @@ engine/.venv/bin/aresim-rl train configs/masked_ppo/dev.yaml \
 
 `--set path=value` accepts dotted paths into the resolved experiment dict. Unknown paths, type mismatches, unsafe YAML, incompatible batch sizes, and missing seed manifests fail **before** Ray or W&B start.
 
+The built-in PPO/DQN collectors use a compact pre-step reward snapshot and skip audit checksums during training. Recorded trajectories and the normal simulator/API remain fully audited. Evaluation settings apply to later manual evaluation; add `--set evaluation.record_trajectories=true` to save that setting for UI replay export. Training never launches those rollouts. PPO dev uses four CPU EnvRunners and two update epochs, while the 8,192-step smoke preset is only a wiring check, not a learning-quality benchmark. Set `ARESIM_VALIDATE_MODEL_OUTPUTS=1` for stricter per-forward model checks during diagnosis; this may slow GPU training.
+
+**DQN reference update, October 8:** run `seed_3_sample_credit_030` with learner seed 3, 28 CPU environment runners and one CUDA learner. It preserves the seed_3 budget of 2,097,152 steps, epsilon schedule, mission, maps, and DQN hyperparameters. The single reward change is `environment.reward_overrides.samples_collected: 0.30`: +0.30 per 0.5 kg acquired, capped at the 4 kg sample quota (maximum 2.4). Acquisition is delivered plus onboard sample mass, so Unload cannot reset the bonus. Partial quota increments receive proportional credit. `new_scan` remains zero; scanning excess rocks earns no acquisition bonus. The new shaped profile/breakdown are `aresim.reward.shaped_train.v3` / `aresim.reward.mission.v3`; zero-default and sparse rewards retain v2. PPO presets retain zero acquisition credit; the October 10 MuZero reference now enables the same bonus. DQN’s sample-credit run completed 9/32 greedy validation missions; MuZero’s learning quality remains unverified. See [seed_3 evidence and next experiment](../../results/rllib_masked_double_dueling_dqn_reference/seed_3/learnings.md).
+
+**MuZero reference update, October 11:** `configs/muzero/reference.yaml` uses the sole Ray collection path with eight CPU collectors × four environments and one CUDA learner in fresh trial `seed_7_sample_credit_030_parallel`. Batched MCTS/reanalysis preserve the architecture, gamma 0.995, 50 simulations/action, 0.1 updates/step, 2,097,152-step budget and corrected reward. Default batch size remains 32. Checkpoints save at quiescent collection-wave boundaries every 81,920 requested steps, retaining three intermediate snapshots plus final and preserving unfinished trajectories for resume. A bounded same-A30 batch-256/eight-thread comparison measured 13.52 → 111.26 steps/s, about 8.2× faster. CPU/Ray partial resume and CUDA checkpoint/RNG restore passed; mission-learning acceptance remains pending. See [implementation, verification and commands](muzero_parallel_2026-10-11.md). Training performs no automatic evaluation.
+
+**MuZero checkpoint/loss corrections, October 13:** that trial was `seed_7_sample_credit_030_parallel_lossnorm`. Numeric checkpoint ordering now preserves the newest steps across digit widths and resumes the newest snapshot even when final is older. The learner divides weighted losses by total importance weight and reports unweighted losses, weight statistics and effective sample size. Manual reports export/plot these fields. The model, reward, search and replay sampling settings remain unchanged. See [math and verification](muzero_learning_fixes_2026-10-13.md). Previous loss magnitudes are not directly comparable.
+
+**MuZero learning-path follow-up, October 13:** the current reference is `seed_7_sample_credit_030_learning_v3` with the unchanged full 2,097,152-step budget. It refreshes all real policy positions in selected minibatch unrolls, balances positive Scan/Extract/Unload legality labels and adds temporal consistency against stopped recorded-history targets. Reports include target age/coverage, consistency and legality recall/false-positive counts. Existing checks and tiny Ray resume pass; no CUDA training or benchmark was launched, and the temporary instance was destroyed at the user's request. See [settings, verification and ablations](muzero_learning_v3_2026-10-13.md).
+
+The −0.025 cost still applies to every nonterminal action; `5 × (1 − 0.995)` removes the failure/time-cost incentive for postponing an otherwise identical failure. Wait/Service legality, mission requirements, and engine/UI scores are unchanged. The new trial rejects an existing output directory, preserving the original seed_3 artifacts. Launch on the CUDA host:
+
+```bash
+engine/.venv/bin/aresim-rl train configs/masked_dqn/reference.yaml
+
+# After training: 32 greedy episodes and 96 sampled episodes (three action seeds/map).
+engine/.venv/bin/aresim-rl evaluate \
+  results/rllib_masked_double_dueling_dqn_reference/seed_3_sample_credit_030 \
+  --checkpoint final --split validation --action-mode both
+```
+
+Training only saves checkpoints; the evaluation command is a separate manual step. Compare mission success and sample-quota completion, ice delivery, and post-ice camping. Raw shaped returns differ across rewards. Changed source provenance prevents resuming old training; use a fresh trial. Historical checkpoint diagnostics require `--allow-environment-mismatch` and are labelled incomparable by the strict evaluator, even though zero-default v2 reward behavior is retained.
+
+With RLlib 2.58, 28 runners, fragments of 32, minibatches of 256, and `training_intensity: 4.0`, the scheduler chooses one collection round followed by 14 replay updates: 896 new steps and 3,584 replayed samples, preserving a replay-to-collection ratio of 4. A requested minimum of 4,096 steps per reporting iteration is rounded by collection batches to approximately 4,480; the 20-iteration checkpoint frequency therefore corresponds to roughly 89,600 actual steps. Labels and stopping use observed step counters. More runners improve collection capacity, but learner throughput still limits overall speed. Launch with `--set artifacts.reject_existing=true` to prevent reusing an existing output directory.
+
 ### Run directory layout
 
 Each trial writes to:
@@ -113,7 +152,7 @@ results/<experiment_id>/<trial_id>/
 │   └── final/
 │       ├── checkpoint.json # aresim.checkpoint.rllib.v1 sidecar
 │       └── native/         # RLlib checkpoint files
-└── evaluation/             # post-training frozen evaluation (when enabled)
+└── evaluation/             # created later by explicit manual evaluation
 ```
 
 `experiment_id` and `trial_id` come from the YAML (`rllib_masked_ppo_smoke`, `seed_7`, etc.). Set `artifacts.reject_existing: false` in YAML or change `trial_id` to reuse a directory.
@@ -175,9 +214,9 @@ Each `aresim-rl train` invocation gets a fresh W&B id so a deleted remote run ca
 
 ### What gets logged
 
-During training, [`AresMetricsCallback`](../../engine/aresim/algorithms/ppo/train.py) maps RLlib metrics to stable names. The learning-curve x-axis is `train/environment_steps`. Logged groups include shaped return, episode length, action counts, invalid actions, policy/value losses (PPO), TD error and Q stats (DQN), entropy, KL, clip fraction, explained variance, and throughput.
+During training, [`AresMetricsCallback`](../../engine/aresim/training/rllib/metrics.py) maps RLlib metrics to stable names. The learning-curve x-axis is `train/environment_steps`. Logged groups include shaped return, episode length, action counts, invalid actions, policy/value losses (PPO), TD error and Q stats (DQN), entropy, KL, clip fraction, explained variance, and throughput.
 
-After training, frozen validation evaluation metrics are appended to the same W&B run (unless `mode: disabled`).
+Training logs learner and collection metrics to W&B. It does not append frozen validation metrics or run post-training evaluation. Use the explicit evaluation and report commands for later analysis.
 
 Override tracking from the CLI without editing YAML:
 
@@ -206,7 +245,7 @@ engine/.venv/bin/wandb sync results/<experiment_id>/<trial_id>/wandb/
 
 ## Experiment YAML
 
-Configs use schema `aresim.experiment.v1`. Each file selects a registered algorithm, model, environment components, hyperparameters, resources, evaluation schedule, checkpoint policy, tracking, and artifact root.
+Configs use schema `aresim.experiment.v1`. Each file selects a registered algorithm, model, environment components, hyperparameters, resources, a manual evaluation protocol, checkpoint policy, tracking, and artifact root. Legacy `evaluation.interval_environment_steps` is accepted when reading older configs/snapshots but is ignored; only `checkpoint.interval_environment_steps` schedules training-time saves.
 
 Minimal skeleton:
 
@@ -231,8 +270,7 @@ algorithm_config:
   learning_rate: 0.0001
 
 evaluation:
-  seed_manifest: notebooks/phase1_open_exploration_split_v1.yaml
-  interval_environment_steps: 20480
+  seed_manifest: configs/seeds/phase1_open_exploration_split_v1.yaml
   split: validation
   record_trajectories: true
 
@@ -261,7 +299,7 @@ The same path as the CLI, for notebooks and scripts:
 from aresim.training import load_experiment, make_checkpoint_agent, run_experiment
 
 spec = load_experiment("configs/masked_ppo/smoke.yaml")
-run_directory = run_experiment(spec)  # starts Ray, trains, evaluates, shuts down Ray
+run_directory = run_experiment(spec)  # starts Ray, trains, saves checkpoints, shuts down Ray
 
 agent = make_checkpoint_agent(run_directory / "checkpoints/final/checkpoint.json")
 ```
@@ -270,12 +308,13 @@ agent = make_checkpoint_agent(run_directory / "checkpoints/final/checkpoint.json
 
 | Argument | Default | Purpose |
 |---|---|---|
-| `evaluate` | `True` | Run frozen validation evaluation after training |
-| `report` | `True` | Execute the evaluation notebook (requires `tracking.mode: online`) |
+| `report` | `False` | Generate plots from existing W&B history/artifacts (requires `tracking.mode: online`; does not run rollouts) |
 | `registry` | built-in | Custom `TrainingRegistry` for extended algorithms |
 | `component_registry` | built-in | Custom environment component registry |
 
 For a notebook-friendly flow with explicit control, see [Masked PPO training](../../notebooks/masked_ppo_training.ipynb).
+
+The former `evaluate` training argument has been removed. Training does not generate `checkpoints/best` or enforce `evaluation.minimum_success_rate`; those are manual analysis operations. A completed training run means the training budget finished, not that its policy passed a validation gate. The usual `checkpoint.keep` rotation still applies, so increase it before training if later analysis needs more saved snapshots.
 
 ---
 
@@ -285,20 +324,24 @@ All commands take the **run directory** (`results/<experiment_id>/<trial_id>/`),
 
 ```bash
 # Print manifest.json or checkpoint sidecar
-engine/.venv/bin/aresim-rl inspect results/rllib_masked_ppo_smoke/seed_7
+engine/.venv/bin/aresim-rl inspect results/rllib_masked_ppo_smoke_v2/seed_7
 
 # Evaluate a checkpoint on the fixed validation or test split
-engine/.venv/bin/aresim-rl evaluate results/rllib_masked_ppo_dev/seed_7 \
+engine/.venv/bin/aresim-rl evaluate results/rllib_masked_ppo_dev_v2/seed_7 \
   --checkpoint final \
   --split validation
 
 # Generate local training plots from W&B history (tracked runs only)
-engine/.venv/bin/aresim-rl report results/rllib_masked_ppo_dev/seed_7
+engine/.venv/bin/aresim-rl report results/rllib_masked_ppo_dev_v2/seed_7
 ```
 
 `--checkpoint` accepts a path to `checkpoint.json` or a checkpoint folder name under `checkpoints/` (e.g. `final`).
 
-Evaluation writes `evaluation/<label>/summary.json` and optional trajectory shards. When `record_trajectories` is false, the validation split plus `random_valid` and `scripted` baselines run as one CPU process pool (not the training EnvRunners). Logs print `Frozen evaluation N/M`. Trajectory recording stays sequential so shard writes stay ordered. `aresim-rl report` reads W&B history plus local evaluation artifacts without restarting Ray.
+Evaluation writes `evaluation/<label>/summary.json` and optional trajectory shards only when requested through `aresim-rl evaluate` or the Python evaluation API. PPO, DQN and MuZero training never invoke the evaluator, including at completion. The checkpoint evaluator runs only the learned policy and contains no baseline scheduling or opt-in option. Baseline comparisons belong to separate analysis using the existing [rollout tools](#run-baseline-rollouts); new checkpoint summaries contain no `baseline_comparisons` field. Historical reports can still read that field from old artifacts.
+
+For manual evaluation, `record_trajectories: false` and `evaluation.workers > 1` use a CPU process pool. The default `workers: 1` and trajectory recording use the sequential path. PPO, DQN and MuZero retain their configured deterministic/stochastic evaluation modes and repeats for these explicit runs. Logs print `Frozen evaluation N/M` on the pool path. `aresim-rl report` reads W&B history plus local evaluation artifacts without restarting Ray or collecting episodes.
+
+This October 7 change applies when the updated package is loaded. An already-running training process retains its loaded code. Runtime source verification continues to reject resuming a checkpoint produced by different trainer/evaluator code.
 
 ### Resume training
 
@@ -310,7 +353,7 @@ engine/.venv/bin/aresim-rl train configs/masked_ppo/reference.yaml --resume-from
 
 # Resume from a specific exported checkpoint under checkpoints/
 engine/.venv/bin/aresim-rl train configs/masked_ppo/reference.yaml \
-  --resume-from results/rllib_masked_ppo_reference/seed_7/checkpoints/step_081920/checkpoint.json
+  --resume-from results/rllib_masked_ppo_reference/seed_35/checkpoints/final/checkpoint.json
 ```
 
 Set `artifacts.reject_existing: false` (or use `--resume-from`) so the existing run directory is reused. Increase `algorithm_config.total_environment_steps` in YAML when extending a completed run.
@@ -319,7 +362,27 @@ Set `artifacts.reject_existing: false` (or use `--resume-from`) so the existing 
 
 ## UI policy inference
 
+In Algorithm mode, choose the agent, checkpoint, and Action selection in the compact **Agent settings** panel floating over the world above the bottom controls. Close the panel after configuring it using X, Escape, or the footer's **Agent settings** toggle; use the toggle to reopen it. Your selections and attached policy are preserved. The footer contains mode switching, run controls, and world setup; the settings fields stack on narrow screens.
+
 Algorithm mode in the React UI runs policies **server-side** through the Python API. The browser never loads Ray, PyTorch, or checkpoint files.
+
+PPO, DQN and MuZero default to **Sampling** in the UI. PPO samples masked policy probabilities; MuZero samples temperature-adjusted MCTS visit counts without training root noise. DQN uses seeded epsilon-greedy selection: with probability `epsilon_end` from the checkpoint's experiment it samples a uniformly random legal action, otherwise it chooses the highest legal Q-value. This is an evaluation policy with a fixed final epsilon, even for early checkpoints; it does not restart the training epsilon schedule or apply softmax to Q-values. The selector offers **Highest Q-value** for DQN and **Highest probability** for PPO/MuZero comparisons. Changing selection mode preserves the current world, discovered-cell memory, and MuZero history. Sampling is seeded from the world seed when the policy is first attached; resetting a run with the same seed and controls reproduces its action sequence.
+
+The attach-policy API accepts optional `actionMode: "stochastic" | "deterministic"` and returns the effective mode. Omitting it samples for all six learned algorithms. Agent-step responses include `policyMeta.actionMode` for checkpoints. Explicit CLI evaluation retains the mode from the experiment or `--action-mode`; DQN now supports stochastic and both modes too. Restart a running API process to load these changes.
+
+### Action-path plots and training exploration
+
+`scripts/plot_reference_action_paths.py` defaults to seeded sampling for all learned policies. `--action-mode deterministic` requests a greedy comparison. It stores v3 caches separately under `action_path_cache_v3/stochastic` and `action_path_cache_v3/deterministic`, records the sampler, epsilon/temperature, checkpoint hash, and seeds, and rejects outdated or incompatible caches. Plot metadata is written to `action_paths_metadata.json`. Scripted rollouts remain deterministic when explicitly included in this post-training analysis.
+
+```bash
+PYTHONPATH=engine engine/.venv/bin/python scripts/plot_reference_action_paths.py --trials seed_33 seed_35 --no-scripted
+PYTHONPATH=engine engine/.venv/bin/python scripts/plot_reference_action_paths.py --trials seed_33 seed_35 --no-scripted --action-mode deterministic --output results/reports/greedy
+# dqn_seed_N and muzero_seed_N route to their respective experiment directories.
+# Use --dqn-experiment / --muzero-experiment for a different experiment root,
+# and --checkpoint-name step_NNNNNN for a saved checkpoint instead of final.
+```
+
+Training already uses stochastic exploration: PPO samples masked categorical actions; DQN uses its configured epsilon schedule with uniformly sampled legal exploration actions; MuZero samples tempered visit counts and adds Dirichlet root noise. These training paths are unchanged. Sampling during evaluation can expose capabilities hidden by greedy action selection, but does not establish that learning improved. Compare held-out mission success and delivery across repeated agent seeds. Evaluation remains a separate manual action, with no new training-time evaluations.
 
 ### Requirements
 
@@ -335,7 +398,7 @@ Start the API with `engine/.venv/bin/python -m aresim.api` (from any working dir
 engine/.venv/bin/python -m aresim.api
 ```
 
-`GET /api/health` returns `rllibAvailable` and `jevAvailable` when those optional stacks can actually run.
+`GET /api/health` returns `rllibAvailable`, `muzeroAvailable`, and `jevAvailable` when those optional stacks can actually run.
 
 ### Attach and step
 
@@ -358,33 +421,33 @@ For masked PPO or DQN during development, pass the **checkpoint sidecar** path i
 ```json
 {
   "algorithmId": "masked_ppo",
-  "checkpointPath": "/absolute/path/to/results/rllib_masked_ppo_smoke/seed_7/checkpoints/final/checkpoint.json"
+  "checkpointPath": "/absolute/path/to/results/rllib_masked_ppo_smoke_v2/seed_7/checkpoints/final/checkpoint.json"
 }
 ```
 
 ```json
 {
   "algorithmId": "masked_dqn",
-  "checkpointPath": "/absolute/path/to/results/rllib_masked_dqn_smoke/seed_7/checkpoints/final/checkpoint.json"
+  "checkpointPath": "/absolute/path/to/results/rllib_masked_dqn_smoke_v2/seed_7/checkpoints/final/checkpoint.json"
 }
 ```
 
 While a run is still training, use the latest mid-training export instead, for example:
 
 ```text
-/absolute/path/to/results/rllib_masked_ppo_reference/seed_7/checkpoints/step_081920/checkpoint.json
+/absolute/path/to/results/rllib_masked_ppo_reference/seed_35/checkpoints/final/checkpoint.json
 ```
 
 `aresim-rl evaluate <run_dir> --checkpoint step_081920` accepts the same folder name under `checkpoints/`.
 
-Checkpoint paths must be **absolute** and point to an existing `checkpoint.json`. Loaded RLModules are cached in-process (LRU, max 4) so swapping checkpoints during development does not reload unchanged files on every step.
+Checkpoint paths must be **absolute** and point to an existing `checkpoint.json`. Loaded learned-policy models are cached in-process (LRU, max 4) so swapping checkpoints during development does not reload unchanged files on every step.
 
 Validate a path without attaching:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/policies/validate-checkpoint \
   -H 'Content-Type: application/json' \
-  -d '{"checkpointPath":"/absolute/path/to/results/rllib_masked_ppo_smoke/seed_7/checkpoints/final/checkpoint.json"}'
+  -d '{"checkpointPath":"/absolute/path/to/results/rllib_masked_ppo_smoke_v2/seed_7/checkpoints/final/checkpoint.json"}'
 ```
 
 Saved trajectories record `algorithmId` and, for learned policies, `checkpointPath` in replay metadata.
@@ -410,7 +473,7 @@ The external step limit produces truncation; it is not a simulator failure or ta
 
 ## Run baseline rollouts
 
-Built-in agent registry names (see [baseline workflow](../../engine/aresim/algorithms/baselines/workflow.md)):
+Built-in agent registry names (see [baseline workflow](../../engine/aresim/algorithms/baselines/DETAILS.md)):
 
 | Name | Behavior |
 |---|---|
@@ -418,7 +481,7 @@ Built-in agent registry names (see [baseline workflow](../../engine/aresim/algor
 | `random_valid` | Uniform over legal actions only |
 | `wait` | Always action 0 (Wait) |
 | `scripted` | Deterministic partial-observation heuristic |
-| `jev` | TypeSafe Choice over legal actions; skips idle Wait and action loops; unloads cargo on the pad; logs traces under `results/jev/`. See [Jev workflow](../../engine/aresim/algorithms/jev/workflow.md) |
+| `jev` | TypeSafe Choice over legal actions; skips idle Wait and action loops; unloads cargo on the pad; logs traces under `results/jev/`. See [Jev workflow](../../engine/aresim/algorithms/jev/DETAILS.md) |
 
 ```python
 from aresim.training import EpisodeSpec, RolloutConfig, RolloutRunner
@@ -576,7 +639,7 @@ Checkpoint-backed policies implement the same contract for framework-neutral eva
 
 ## Extend learned policies
 
-`TrainingRegistry` exposes three extension seams: `AlgorithmFactory`, `ModelFactory`, and `CheckpointLoader`. Built-in names are `masked_ppo`, `masked_dqn`, `local_cnn_actor_critic`, `local_cnn_q`, `rllib_masked_ppo`, and `rllib_masked_dqn`.
+`TrainingRegistry` exposes `AlgorithmFactory`, `ModelFactory`, `CheckpointLoader`, and the callable `TrainingRunner` contract. Built-ins are `masked_ppo`, `masked_dqn`, `recurrent_dqn`, `muzero`, `dreamerv3`, and `plan2explore`. Registrations own compatible model/loader names, typed model/resource decoders, lazy runner dispatch, and install metadata; [the implementation guide](../../engine/aresim/algorithms/README.md#shared-ownership) lists the IDs and owners.
 
 ```python
 from aresim.training import create_training_registry, load_experiment, run_experiment
@@ -592,6 +655,25 @@ spec = load_experiment("configs/my_algorithm/dev.yaml", registry=registry)
 run_directory = run_experiment(spec, registry=registry)
 ```
 
-An algorithm factory decodes typed configuration and builds an RLlib `AlgorithmConfig`. A model factory declares the RLModule class. Add a new semantic name instead of branching on algorithm IDs in the runner.
+An algorithm factory decodes typed configuration and builds its framework-native configuration. A model factory declares `model_class`; existing `rl_module_class` factories remain compatible, including frozen custom factories. `register_algorithm` defaults to the current RLlib model/resources/runner. Supply `model_decoder`, `resource_decoder`, `runner`, and compatible `model_id` when registering a different backend. A runner accepts the resolved spec, registry, optional component registry, report flag and resume path, and returns the run directory. Add semantic registrations rather than branching on algorithm IDs in the public runner or parser.
 
 RLlib owns online batches, learners, and native checkpoint state. AresSim owns simulator semantics, canonical W&B names, seed splits, frozen evaluation, and trajectories.
+
+
+## Recurrent and world-model training
+
+Recurrent DQN uses `aresim[rllib]`; DreamerV3 and Plan2Explore use `aresim[world_models]`. Their permanent [implementation guide](../../engine/aresim/algorithms/README.md) covers network/loss details, all smoke/dev/reference presets, CPU/Ray versus CUDA resources, transfer, checkpoint formats, memory and masks, local verification and known limits.
+
+```bash
+engine/.venv/bin/aresim-rl train configs/recurrent_dqn/smoke.yaml
+engine/.venv/bin/aresim-rl train configs/dreamerv3/smoke.yaml
+engine/.venv/bin/aresim-rl train configs/plan2explore/pretrain/smoke.yaml
+engine/.venv/bin/aresim-rl train configs/plan2explore/adapt/smoke.yaml \
+  --set algorithm_config.initialization_checkpoint=results/plan2explore_pretrain_smoke_v1/seed_7/checkpoints/final/checkpoint.json
+```
+
+Plan2Explore initialization starts a new adaptation run; `--resume-from` restores the same phase without repeating transfer. Keep the original initializer field when resuming, even though the parent file is no longer read. Reference pretrain+adapt budgets total the same 2,097,152 interactions as Dreamer from scratch. Pretraining discards task rewards and exports the exploration actor; adaptation exports the task actor.
+
+World-model checkpoint inference needs no Ray/RLlib runtime. Training uses bounded CPU Ray collector waves and one learner; `resources.device` selects `cpu` or `cuda`. Its replay ratio counts valid learned real timesteps per collected real transition, excluding padding/prefix/imagination. Exact same-source CPU partial-episode resume is verified; CUDA/long-budget quality remains unverified. Recurrent DQN's native checkpoints include seeded replay, with bitwise partial-episode EnvRunner resume unclaimed.
+
+Algorithm mode exposes all six learned policies. Recurrent DQN uses Q argmax or seeded epsilon-greedy; world models use actor sampling or argmax, with modal latents for deterministic evaluation. Mode toggles retain state/RNG; manual intervention resets neural memory before the next action. Training remains checkpoint-only; run evaluation and reporting explicitly.

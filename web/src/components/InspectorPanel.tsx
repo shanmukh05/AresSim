@@ -144,7 +144,7 @@ function statusDetail(snapshot: SimSnapshot): Detail {
       { label: "Generated", value: formatFixed(snapshot.resources.powerGenerated, " kW") },
       { label: "Consumed", value: formatFixed(snapshot.resources.powerConsumed, " kW") },
       { label: "Power margin", value: formatSignedFixed(margin, " kW"), tone: margin >= 0 ? "good" : "bad" },
-      { label: "Wait charge", value: formatSignedFixed(waitCharge, "%"), tone: waitCharge > 0 ? "good" : "warn" },
+      { label: "Wait charge", value: waitCharge === null ? "Unavailable" : formatSignedFixed(waitCharge, "%"), tone: waitCharge !== null && waitCharge > 0 ? "good" : "warn" },
       { label: "Alerts", value: `${snapshot.mission.alerts.length}`, tone: "warn" },
       { label: "Mode", value: snapshot.mode },
     ],

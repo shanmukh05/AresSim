@@ -14,7 +14,9 @@ not a second simulator.
 
 from __future__ import annotations
 
-from ..defaults import DEFAULT_ENVIRONMENT_CONFIG
+from ..config import EngineConfig
+from ..core.rules import wait_recharge
+from ..defaults import DEFAULT_ENGINE_CONFIG, DEFAULT_ENVIRONMENT_CONFIG
 from ..types import (
     GameRule,
     HistoryEntry,
@@ -151,7 +153,7 @@ def _rule(rule: GameRule) -> dict[str, str]:
     }
 
 
-def snapshot_from_state(state: WorldState) -> dict[str, object]:
+def snapshot_from_state(state: WorldState, config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> dict[str, object]:
     """Build one UI snapshot. Callers own copying; this walks the current state as-is."""
     return {
         "sessionId": state.session_id,
@@ -167,6 +169,7 @@ def snapshot_from_state(state: WorldState) -> dict[str, object]:
         "weather": state.weather.value,
         "dustIntensity": state.dust_intensity,
         "resources": _resources(state.resources),
+        "waitChargeEstimate": wait_recharge(state.resources.power_generated - state.resources.power_consumed, config),
         "mission": {
             "title": state.mission.title,
             "objective": state.mission.objective,

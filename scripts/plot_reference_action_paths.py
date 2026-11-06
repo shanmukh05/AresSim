@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Roll out reference checkpoints on validation seeds and plot action paths.
 
-Default writes combined PPO + DQN figures under ``results/reports/``. Caches
-per-trial action sequences as JSON so plots can be regenerated without RLlib.
+Defaults to seeded sampling for PPO, DQN and MuZero. Writes figures under
+``results/reports/`` and caches action sequences separately by selection mode.
 
 Usage::
 
     engine/.venv/bin/python scripts/plot_reference_action_paths.py
     engine/.venv/bin/python scripts/plot_reference_action_paths.py --plot-only
     engine/.venv/bin/python scripts/plot_reference_action_paths.py --trials seed_27 seed_29 dqn_seed_1
+    engine/.venv/bin/python scripts/plot_reference_action_paths.py --action-mode deterministic
+    engine/.venv/bin/python scripts/plot_reference_action_paths.py --trials muzero_seed_7 --checkpoint-name step_901504 --no-scripted
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -22,11 +25,10 @@ import numpy as np
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Patch
 
-from aresim.algorithms.baselines.scripted import ScriptedAgent
 from aresim.factory import make_gym_env
 from aresim.integrations.policy import load_checkpoint_agent
-from aresim.training.evaluation import _environment_config
-from aresim.training.experiments import load_experiment
+from aresim.training.experiments import parse_experiment
+from aresim.training.provenance import digest, environment_config, experiment_seeds, serialize, verify_provenance
 
 ACTION_LABELS = (
     "wait",
@@ -43,32 +45,42 @@ ACTION_LABELS = (
 ROOT = Path(__file__).resolve().parents[1]
 PPO_EXPERIMENT = ROOT / "results" / "rllib_masked_ppo_reference"
 DQN_EXPERIMENT = ROOT / "results" / "rllib_masked_double_dueling_dqn_reference"
+MUZERO_EXPERIMENT = ROOT / "results" / "muzero_reference"
+CHECKPOINT_NAME = "final"
 DEFAULT_OUTPUT = ROOT / "results" / "reports"
-PPO_TRIALS = ("seed_7", "seed_11", "seed_13", "seed_14", "seed_17", "seed_19", "seed_21", "seed_23", "seed_25", "seed_27", "seed_29")
-DEFAULT_TRIALS = (*PPO_TRIALS, "dqn_seed_1")
-VAL_SEEDS = tuple(range(2000, 2032))
+DEFAULT_TRIALS = ("seed_29", "dqn_seed_1")
 NORMALIZED_STEPS = 100
 PAD_VALUE = -1
 GRID_COLUMNS = 4
 
 
-def _experiment_for(label: str) -> Path:
-    return DQN_EXPERIMENT if label.startswith("dqn_") else PPO_EXPERIMENT
+@dataclass(frozen=True)
+class CheckpointSources:
+    """Explicit experiment roots and checkpoint label selected for one invocation."""
+
+    ppo: Path = PPO_EXPERIMENT
+    dqn: Path = DQN_EXPERIMENT
+    muzero: Path = MUZERO_EXPERIMENT
+    checkpoint_name: str = CHECKPOINT_NAME
+
+    def checkpoint(self, label: str) -> Path:
+        if label.startswith("muzero_"):
+            root = self.muzero
+        elif label.startswith("dqn_"):
+            root = self.dqn
+        else:
+            root = self.ppo
+        trial = label.removeprefix("dqn_").removeprefix("muzero_")
+        return root / trial / "checkpoints" / self.checkpoint_name / "checkpoint.json"
 
 
-def _checkpoint_trial_id(label: str) -> str:
-    return label.removeprefix("dqn_")
+DEFAULT_SOURCES = CheckpointSources()
 
 
-def _legacy_cache_path(label: str) -> Path:
-    experiment = _experiment_for(label)
-    return experiment / "reports" / "action_path_cache" / f"{_checkpoint_trial_id(label)}.json"
-
-
-def _rollout_episode(env, agent, seed: int) -> dict[str, object]:
+def _rollout_episode(env, agent, seed: int, agent_seed_offset: int) -> dict[str, object]:
     obs, info = env.reset(seed=seed)
     if hasattr(agent, "reset"):
-        agent.reset(seed + 1_000_000)
+        agent.reset(seed + agent_seed_offset)
     actions: list[int] = []
     effective: list[str] = []
     done = False
@@ -83,6 +95,7 @@ def _rollout_episode(env, agent, seed: int) -> dict[str, object]:
     rover = state.rovers[0]
     return {
         "environment_seed": seed,
+        "agent_seed": seed + agent_seed_offset,
         "length": len(actions),
         "actions": actions,
         "effective_actions": effective,
@@ -95,49 +108,69 @@ def _rollout_episode(env, agent, seed: int) -> dict[str, object]:
     }
 
 
-def _collect_trial(label: str, seeds: tuple[int, ...], cache: Path) -> list[dict[str, object]]:
-    cache_path = cache / f"{label}.json"
-    for candidate in (cache_path, _legacy_cache_path(label)):
-        if candidate.is_file():
-            episodes = json.loads(candidate.read_text(encoding="utf-8"))
-            if candidate != cache_path:
-                cache.mkdir(parents=True, exist_ok=True)
-                cache_path.write_text(json.dumps(episodes), encoding="utf-8")
-            return episodes
-
-    trial_id = _checkpoint_trial_id(label)
-    experiment = _experiment_for(label)
-    checkpoint = experiment / trial_id / "checkpoints" / "final" / "checkpoint.json"
-    if not checkpoint.exists():
-        raise FileNotFoundError(f"missing final checkpoint for {label}")
-    spec = load_experiment(experiment / trial_id / "resolved_config.yaml")
-    env = make_gym_env(_environment_config(spec))
-    agent = load_checkpoint_agent(str(checkpoint.resolve()))
-    episodes = [_rollout_episode(env, agent, seed) for seed in seeds]
-    cache.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(episodes, indent=2), encoding="utf-8")
-    return episodes
+def _trial_spec(label, sources: CheckpointSources = DEFAULT_SOURCES):
+    checkpoint = sources.checkpoint(label)
+    payload = json.loads(checkpoint.read_text())
+    spec = parse_experiment(payload["experiment"])
+    verify_provenance(spec)
+    return checkpoint, spec, payload
 
 
-def _collect_scripted(seeds: tuple[int, ...], cache: Path) -> list[dict[str, object]]:
-    cache_path = cache / "scripted.json"
-    legacy = PPO_EXPERIMENT / "reports" / "action_path_cache" / "scripted.json"
-    for candidate in (cache_path, legacy, DQN_EXPERIMENT / "reports" / "action_path_cache" / "scripted.json"):
-        if candidate.is_file():
-            episodes = json.loads(candidate.read_text(encoding="utf-8"))
-            if candidate != cache_path:
-                cache.mkdir(parents=True, exist_ok=True)
-                cache_path.write_text(json.dumps(episodes), encoding="utf-8")
-            return episodes
+def _cache_metadata(spec, seeds, checkpoint_payload=None, *, action_mode="stochastic", algorithm_id=None):
+    algorithm = algorithm_id or spec.algorithm
+    if algorithm == "scripted" or action_mode == "deterministic":
+        sampling = {"method": "scripted" if algorithm == "scripted" else "argmax"}
+    elif algorithm in {"masked_dqn", "recurrent_dqn"}:
+        sampling = {"method": "epsilon_greedy", "epsilon": spec.algorithm_config.epsilon_end}
+    elif algorithm == "muzero":
+        sampling = {"method": "search_visits", "temperature": spec.algorithm_config.temperature, "root_noise": False}
+    else:
+        sampling = {"method": "categorical"}
+    return {"schema_version": "aresim.action_paths.v3", "environment": serialize(environment_config(spec)),
+            "environment_sources": spec.provenance["environment_sources"],
+            "max_episode_steps": spec.environment.max_episode_steps, "seeds": list(seeds),
+            "agent_seed_offset": experiment_seeds(spec).agent_seed_offset, "action_mode": action_mode,
+            "algorithm_id": algorithm, "sampling": sampling,
+            "checkpoint_sha256": digest(checkpoint_payload) if checkpoint_payload else None}
 
-    config = PPO_EXPERIMENT / "seed_29" / "resolved_config.yaml"
-    spec = load_experiment(config)
-    env = make_gym_env(_environment_config(spec))
-    agent = ScriptedAgent()
-    episodes = [_rollout_episode(env, agent, seed) for seed in seeds]
+
+def _comparison_metadata(metadata):
+    """Compare environments and seeds while allowing algorithm-specific samplers."""
+    return {key: value for key, value in metadata.items()
+            if key not in {"checkpoint_sha256", "algorithm_id", "sampling", "action_mode"}}
+
+
+def _cached_rollouts(cache_path, metadata, env, agent, seeds):
+    if cache_path.is_file():
+        payload = json.loads(cache_path.read_text())
+        if isinstance(payload, dict) and payload.get("metadata") == metadata:
+            return payload["episodes"]
+    episodes = [_rollout_episode(env, agent, seed, int(metadata["agent_seed_offset"])) for seed in seeds]
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(episodes, indent=2), encoding="utf-8")
+    cache_path.write_text(json.dumps({"metadata": metadata, "episodes": episodes}, indent=2))
     return episodes
+
+
+def _collect_trial(label: str, seeds: tuple[int, ...], cache: Path, *, action_mode="stochastic", sources: CheckpointSources = DEFAULT_SOURCES) -> list[dict[str, object]]:
+    checkpoint, spec, payload = _trial_spec(label, sources)
+    env = make_gym_env(environment_config(spec), max_episode_steps=spec.environment.max_episode_steps)
+    agent = load_checkpoint_agent(str(checkpoint.resolve()), deterministic=action_mode == "deterministic")
+    try:
+        return _cached_rollouts(cache / f"{label}.json", _cache_metadata(spec, seeds, payload, action_mode=action_mode), env, agent, seeds)
+    finally:
+        env.close()
+
+
+def _collect_scripted(seeds: tuple[int, ...], cache: Path, reference_label: str, sources: CheckpointSources = DEFAULT_SOURCES) -> list[dict[str, object]]:
+    _, spec, _ = _trial_spec(reference_label, sources)
+    config = environment_config(spec)
+    env = make_gym_env(config, max_episode_steps=spec.environment.max_episode_steps)
+    from aresim.factory import make_agent
+    agent = make_agent("scripted", config)
+    try:
+        return _cached_rollouts(cache / "scripted.json", _cache_metadata(spec, seeds, action_mode="deterministic", algorithm_id="scripted"), env, agent, seeds)
+    finally:
+        env.close()
 
 
 def _pad_matrix(episodes: list[dict[str, object]]) -> np.ndarray:
@@ -280,32 +313,33 @@ def _write_summary(series: dict[str, list[dict[str, object]]], output: Path) -> 
     output.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 
-def _load_cached_series(cache: Path, trial_ids: tuple[str, ...], include_scripted: bool) -> dict[str, list[dict[str, object]]]:
-    series: dict[str, list[dict[str, object]]] = {}
-    for trial_id in trial_ids:
-        candidates = (cache / f"{trial_id}.json", _legacy_cache_path(trial_id))
-        path = next((candidate for candidate in candidates if candidate.is_file()), None)
-        if path is None:
-            raise FileNotFoundError(f"missing cache for {trial_id}: run collection first")
-        series[trial_id] = json.loads(path.read_text(encoding="utf-8"))
-    if include_scripted:
-        scripted_candidates = (
-            cache / "scripted.json",
-            PPO_EXPERIMENT / "reports" / "action_path_cache" / "scripted.json",
-            DQN_EXPERIMENT / "reports" / "action_path_cache" / "scripted.json",
-        )
-        scripted = next((candidate for candidate in scripted_candidates if candidate.is_file()), None)
-        if scripted is None:
-            raise FileNotFoundError("missing scripted cache: run collection first")
-        series["scripted"] = json.loads(scripted.read_text(encoding="utf-8"))
+def _load_cached_series(cache: Path, trial_ids: tuple[str, ...], include_scripted: bool, *, action_mode="stochastic") -> dict[str, list[dict[str, object]]]:
+    series = {}
+    metadata = []
+    for label in (*trial_ids, *(("scripted",) if include_scripted else ())):
+        payload = json.loads((cache / f"{label}.json").read_text())
+        if not isinstance(payload, dict) or payload.get("metadata", {}).get("schema_version") != "aresim.action_paths.v3":
+            raise ValueError("outdated action-path cache cannot be used; regenerate from compatible checkpoints")
+        meta = payload["metadata"]
+        if label != "scripted" and meta["action_mode"] != action_mode:
+            raise ValueError("action-path cache uses a different action mode; regenerate it")
+        metadata.append(_comparison_metadata(meta))
+        series[label] = payload["episodes"]
+    if any(meta != metadata[0] for meta in metadata):
+        raise ValueError("action-path caches have different environments or seeds")
     return series
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="directory for figures and cache (default: results/reports)")
+    parser.add_argument("--ppo-experiment", type=Path, default=PPO_EXPERIMENT)
+    parser.add_argument("--dqn-experiment", type=Path, default=DQN_EXPERIMENT)
+    parser.add_argument("--muzero-experiment", type=Path, default=MUZERO_EXPERIMENT)
+    parser.add_argument("--checkpoint-name", default="final", help="checkpoint folder to evaluate (default: final)")
+    parser.add_argument("--action-mode", choices=("stochastic", "deterministic"), default="stochastic")
     parser.add_argument("--trials", nargs="+", default=list(DEFAULT_TRIALS))
-    parser.add_argument("--seeds", nargs="+", type=int, default=list(VAL_SEEDS))
+    parser.add_argument("--seeds", nargs="+", type=int, help="environment seeds (default: frozen validation split)")
     parser.add_argument("--include-scripted", action="store_true", default=True)
     parser.add_argument("--no-scripted", action="store_false", dest="include_scripted")
     parser.add_argument(
@@ -314,22 +348,30 @@ def main() -> None:
         help="regenerate figures from cached JSON without loading checkpoints",
     )
     args = parser.parse_args()
+    sources = CheckpointSources(args.ppo_experiment, args.dqn_experiment, args.muzero_experiment, args.checkpoint_name)
     reports = args.output if args.output.is_absolute() else ROOT / args.output
-    cache = reports / "action_path_cache"
-    seeds = tuple(args.seeds)
+    cache = reports / "action_path_cache_v3" / args.action_mode
     reports.mkdir(parents=True, exist_ok=True)
 
     if args.plot_only:
-        series = _load_cached_series(cache, tuple(args.trials), args.include_scripted)
+        series = _load_cached_series(cache, tuple(args.trials), args.include_scripted, action_mode=args.action_mode)
     else:
+        reference = _trial_spec(args.trials[0], sources)[1]
+        seeds = tuple(args.seeds) if args.seeds is not None else experiment_seeds(reference).validation
+        metadata = [_comparison_metadata(_cache_metadata(_trial_spec(label, sources)[1], seeds)) for label in args.trials]
+        if any(meta != metadata[0] for meta in metadata):
+            raise ValueError("comparative plots require identical environment, seeds and episode limits")
         series: dict[str, list[dict[str, object]]] = {}
         for trial_id in args.trials:
             print(f"collecting {trial_id}...")
-            series[trial_id] = _collect_trial(trial_id, seeds, cache)
+            series[trial_id] = _collect_trial(trial_id, seeds, cache, action_mode=args.action_mode, sources=sources)
         if args.include_scripted:
             print("collecting scripted...")
-            series["scripted"] = _collect_scripted(seeds, cache)
+            series["scripted"] = _collect_scripted(seeds, cache, args.trials[0], sources)
 
+    (reports / "action_paths_metadata.json").write_text(json.dumps({
+        label: json.loads((cache / f"{label}.json").read_text())["metadata"] for label in series
+    }, indent=2), encoding="utf-8")
     _plot_heatmaps(series, reports / "action_path_heatmaps.png")
     _plot_mix_over_time(series, reports / "action_mix_over_time.png")
     _plot_early_window(series, reports / "action_path_early_120.png")

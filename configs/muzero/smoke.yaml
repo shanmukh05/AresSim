@@ -1,0 +1,62 @@
+schema_version: aresim.experiment.v1
+experiment_id: muzero_smoke_v2
+trial_id: seed_7
+algorithm: muzero
+model: local_muzero
+learner_seed: 7
+environment:
+  scenario_id: phase1_default_v1
+  observation: local_memory
+  action: discrete
+  reward: shaped_train
+  task: open_exploration
+  max_episode_steps: 16
+algorithm_config:
+  total_environment_steps: 64
+  rollout_batch_size: 16
+  simulations: 2
+  evaluation_simulations: 2
+  unroll_steps: 2
+  td_steps: 3
+  batch_size: 4
+  replay_capacity: 128
+  learning_starts: 16
+  updates_per_environment_step: 0.1
+  reanalysis_interval_updates: 2
+  reanalysis_positions: 64
+  reanalysis_fraction: 0.25
+  reanalysis_batch_size: 128
+  reanalysis_bootstrap_search: false
+  legality_positive_weights: [1, 1, 1, 1, 1, 2, 4, 1, 1, 8]
+  consistency_loss_weight: 0.2
+model_config:
+  predict_constraints: true
+  consistency_projection_width: 32
+  conv_channels: [8, 16]
+  telemetry_layers: [32, 32]
+  fused_width: 64
+  latent_width: 64
+  dynamics_blocks: 1
+  support_size: 30
+resources:
+  device: cpu
+  torch_threads: 1
+  num_collectors: 1
+  num_envs_per_collector: 1
+  collection_steps_per_env: 32
+  collector_torch_threads: 1
+  max_policy_lag_updates: 32
+evaluation:
+  seed_manifest: configs/seeds/phase1_smoke_eval_v1.yaml
+  split: validation
+  record_trajectories: false
+checkpoint:
+  interval_environment_steps: 32
+  keep: 1
+tracking:
+  mode: disabled
+  project: aresim
+  tags: [smoke, muzero]
+artifacts:
+  root: results
+  reject_existing: true

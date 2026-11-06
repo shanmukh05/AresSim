@@ -21,7 +21,7 @@ from typing import Sequence
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="aresim-rl", description="Train and evaluate AresSim RLlib policies")
+    parser = argparse.ArgumentParser(prog="aresim-rl", description="Train and evaluate AresSim learned policies")
     commands = parser.add_subparsers(dest="command", required=True)
     train = commands.add_parser("train", help="run a validated experiment YAML")
     train.add_argument("config", type=Path)
@@ -35,6 +35,9 @@ def _parser() -> argparse.ArgumentParser:
     evaluate = commands.add_parser("evaluate", help="evaluate a frozen checkpoint on fixed seeds")
     evaluate.add_argument("run", type=Path)
     evaluate.add_argument("--checkpoint", required=True)
+    evaluate.add_argument("--output", type=Path, help="new evaluation output directory")
+    evaluate.add_argument("--action-mode", choices=("deterministic", "stochastic", "both"))
+    evaluate.add_argument("--allow-environment-mismatch", action="store_true")
     evaluate.add_argument("--split", choices=("validation", "test"), default="validation")
     commands.add_parser("report", help="generate W&B metric plots under <run>/reports/").add_argument("run", type=Path)
     inspect = commands.add_parser("inspect", help="print a run manifest or checkpoint sidecar")
@@ -59,7 +62,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     if arguments.command == "train":
         from .experiments import load_experiment_with_overrides
-        from ..algorithms.ppo.train import run_experiment
+        from . import run_experiment
 
         spec = load_experiment_with_overrides(arguments.config, tuple(arguments.overrides))
         print(run_experiment(spec, resume_from=arguments.resume_from))
@@ -68,8 +71,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .evaluation import evaluate_checkpoint
 
         checkpoint = _checkpoint_path(arguments.run, arguments.checkpoint)
-        output = arguments.run / "evaluation" / f"manual-{arguments.split}"
-        print(evaluate_checkpoint(checkpoint, split=arguments.split, output_directory=output))
+        output = arguments.output or arguments.run / "evaluation" / f"manual-{arguments.split}"
+        print(evaluate_checkpoint(checkpoint, split=arguments.split, output_directory=output, action_mode=arguments.action_mode,
+                                  allow_environment_mismatch=arguments.allow_environment_mismatch))
         return 0
     if arguments.command == "report":
         from .reports import generate_report

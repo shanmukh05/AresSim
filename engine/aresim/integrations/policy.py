@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import threading
+from copy import deepcopy
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -27,29 +28,14 @@ from typing import Any
 import numpy as np
 
 from ..algorithms.base import Agent
+from ..algorithms.catalog import BASELINE_ALGORITHMS, CHECKPOINT_ALGORITHMS, LLM_ALGORITHMS, POLICY_CATALOG
 from ..config import EngineConfig, EnvironmentConfig
 from ..core.engine import AresEngine
 from ..defaults import DEFAULT_ENVIRONMENT_CONFIG
 from ..factory import make_agent
 from ..registry import ComponentBuildContext, ComponentRegistry, create_default_registry
-from ..types import ActionCommand, Actor, EngineTransition
+from ..types import ActionCommand, Actor, EngineTransition, GameStatus
 
-BASELINE_ALGORITHMS = frozenset({"random", "random_valid", "wait", "scripted"})
-CHECKPOINT_ALGORITHMS = frozenset({"masked_ppo", "masked_dqn"})
-LLM_ALGORITHMS = frozenset({"jev"})
-CHECKPOINT_ALGORITHM = "masked_ppo"
-
-POLICY_CATALOG: list[dict[str, object]] = [
-    {"id": "random", "label": "Random", "kind": "baseline", "requiresPath": False},
-    {"id": "random_valid", "label": "Random (valid)", "kind": "baseline", "requiresPath": False},
-    {"id": "wait", "label": "Wait", "kind": "baseline", "requiresPath": False},
-    {"id": "scripted", "label": "Scripted", "kind": "baseline", "requiresPath": False},
-    {"id": "jev", "label": "Jev", "kind": "llm", "requiresPath": False},
-    {"id": "masked_ppo", "label": "Masked PPO", "kind": "checkpoint", "requiresPath": True},
-    {"id": "masked_dqn", "label": "Double Dueling DQN", "kind": "checkpoint", "requiresPath": True},
-]
-
-# ponytail: max 4 cached RLModules; single-user local API; bump for multi-session prod
 _CHECKPOINT_CACHE_MAX = 4
 _checkpoint_cache: OrderedDict[str, Agent[Any, Any]] = OrderedDict()
 _checkpoint_cache_lock = threading.Lock()
@@ -67,7 +53,26 @@ class PolicyError(Exception):
 def rllib_available() -> bool:
     """Return whether optional RLlib checkpoint loading is importable."""
     try:
-        from ..algorithms.ppo.checkpoint import make_checkpoint_agent  # noqa: F401
+        from ..training.rllib.checkpoint import RLlibCheckpointAgent  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def muzero_available() -> bool:
+    """Return whether the optional PyTorch MuZero checkpoint loader is importable."""
+    try:
+        from ..algorithms.muzero.checkpoint import BuiltinCheckpointLoader  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+
+def world_models_available() -> bool:
+    """Return whether frozen world-model inference dependencies are installed (no Ray startup)."""
+    try:
+        from ..algorithms.dreamerv3.checkpoint import WorldModelAgent
     except ImportError:
         return False
     return True
@@ -101,8 +106,8 @@ def resolve_checkpoint_path(path: str) -> Path:
     return candidate
 
 
-def _cache_key(sidecar: Path) -> str:
-    return f"{sidecar}:{sidecar.stat().st_mtime_ns}"
+def _cache_key(sidecar: Path, *, deterministic: bool = True) -> str:
+    return f"{sidecar}:{sidecar.stat().st_mtime_ns}:{deterministic}"
 
 
 def _cache_get(key: str) -> Agent[Any, Any] | None:
@@ -122,25 +127,36 @@ def _cache_put(key: str, agent: Agent[Any, Any]) -> None:
             _checkpoint_cache.popitem(last=False)
 
 
-def load_checkpoint_agent(path: str) -> Agent[Any, Any]:
+def load_checkpoint_agent(path: str, *, deterministic: bool = True) -> Agent[Any, Any]:
     """Load one checkpoint sidecar, using the process-level LRU cache."""
-    if not rllib_available():
-        raise PolicyError("RLLIB_UNAVAILABLE", "Learned checkpoint policies require the aresim[rllib] extra on the API host.")
     sidecar = resolve_checkpoint_path(path)
-    key = _cache_key(sidecar)
+    try:
+        metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (ValueError, json.JSONDecodeError) as error:
+        raise PolicyError("CHECKPOINT_INCOMPATIBLE", str(error)) from error
+    from ..algorithms.registry import create_training_registry
+    try:
+        extra = create_training_registry().checkpoint_extra(str(metadata.get("loader_id", "rllib_masked_ppo")))
+    except ValueError as error:
+        raise PolicyError("CHECKPOINT_INCOMPATIBLE", str(error)) from error
+    available = {"rllib": rllib_available, "muzero": muzero_available, "world_models": world_models_available}
+    error_code = {"rllib": "RLLIB_UNAVAILABLE", "muzero": "MUZERO_UNAVAILABLE", "world_models": "WORLD_MODELS_UNAVAILABLE"}[extra]
+    if not available[extra]():
+        raise PolicyError(error_code, f"Checkpoint requires the aresim[{extra}] extra on the API host.")
+    key = _cache_key(sidecar, deterministic=deterministic)
     cached = _cache_get(key)
     if cached is not None:
-        return cached
+        return deepcopy(cached)
     try:
-        from ..algorithms.ppo.checkpoint import make_checkpoint_agent
+        from ..training import make_checkpoint_agent
 
-        agent = make_checkpoint_agent(sidecar)
+        agent = make_checkpoint_agent(sidecar, deterministic=deterministic)
     except (ImportError, OSError) as error:
-        raise PolicyError("RLLIB_UNAVAILABLE", "Learned checkpoint policies require the aresim[rllib] extra on the API host.") from error
+        raise PolicyError(error_code, "Checkpoint dependencies are unavailable on the API host.") from error
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as error:
         raise PolicyError("CHECKPOINT_INCOMPATIBLE", str(error)) from error
     _cache_put(key, agent)
-    return agent
+    return deepcopy(agent)
 
 
 def validate_checkpoint_path(path: str) -> dict[str, object]:
@@ -160,7 +176,18 @@ def validate_checkpoint_path(path: str) -> dict[str, object]:
         return {"valid": False, "error": str(error), "code": "CHECKPOINT_INCOMPATIBLE"}
 
 
-def resolve_agent(algorithm_id: str, checkpoint_path: str | None = None) -> tuple[Agent[Any, Any], str, str | None]:
+def resolve_action_mode(algorithm_id: str, action_mode: str | None = None) -> str:
+    """Default learned live controllers to their seeded sampling method."""
+    supports_sampling = algorithm_id in CHECKPOINT_ALGORITHMS
+    mode = action_mode or ("stochastic" if supports_sampling else "deterministic")
+    if mode not in {"stochastic", "deterministic"}:
+        raise PolicyError("INVALID_ACTION_MODE", "Unknown policy action mode.")
+    if mode == "stochastic" and not supports_sampling:
+        raise PolicyError("UNSUPPORTED_ACTION_MODE", "Sampling is available for learned checkpoints.")
+    return mode
+
+
+def resolve_agent(algorithm_id: str, checkpoint_path: str | None = None, *, action_mode: str | None = None) -> tuple[Agent[Any, Any], str, str | None]:
     """Build or load one agent for ``algorithm_id`` and return ``(agent, policy_id, resolved_path)``."""
     if algorithm_id in BASELINE_ALGORITHMS:
         agent = make_agent(algorithm_id)
@@ -176,8 +203,16 @@ def resolve_agent(algorithm_id: str, checkpoint_path: str | None = None) -> tupl
     if algorithm_id in CHECKPOINT_ALGORITHMS:
         if checkpoint_path is None or not checkpoint_path.strip():
             raise PolicyError("CHECKPOINT_NOT_FOUND", "Checkpoint path is required for this learned policy.")
-        agent = load_checkpoint_agent(checkpoint_path)
-        return agent, agent.policy_id, str(resolve_checkpoint_path(checkpoint_path))
+        sidecar = resolve_checkpoint_path(checkpoint_path)
+        try:
+            checkpoint_algorithm = json.loads(sidecar.read_text(encoding="utf-8")).get("algorithm_id")
+        except (ValueError, json.JSONDecodeError) as error:
+            raise PolicyError("CHECKPOINT_INCOMPATIBLE", str(error)) from error
+        if checkpoint_algorithm != algorithm_id:
+            raise PolicyError("CHECKPOINT_INCOMPATIBLE", "Checkpoint algorithm does not match the selected policy.")
+        mode = resolve_action_mode(algorithm_id, action_mode)
+        agent = load_checkpoint_agent(checkpoint_path, deterministic=mode == "deterministic")
+        return agent, agent.policy_id, str(sidecar)
     raise PolicyError("UNKNOWN_ALGORITHM", f"Unknown algorithm id: {algorithm_id}")
 
 
@@ -201,6 +236,8 @@ class PolicyBridge:
         env_config.validate()
         self.env_config = env_config
         components = create_default_registry() if registry is None else registry
+        self._components = components
+        self._last_policy_step: int | None = None
         context = ComponentBuildContext(env_config, env_config.engine)
         self._observation = components.build_observation(env_config.observation, context)
         self._actions = components.build_action(env_config.action, context)
@@ -214,11 +251,27 @@ class PolicyBridge:
     def step(self, engine: AresEngine, agent: Agent[Any, Any], *, algorithm_id: str) -> PolicyStepResult:
         """Run one policy decision and apply it to ``engine`` as ``Actor.AGENT``."""
         state = engine.state
+        if state.game_status != GameStatus.RUNNING:
+            raise PolicyError("POLICY_NOT_RUNNING", "Resume a running session before requesting agent actions.")
+        if self._last_policy_step is not None and self._last_policy_step != state.step:
+            reset_memory = getattr(agent, "reset_memory", None)
+            if callable(reset_memory):
+                reset_memory()
+        declared = agent.observation_schema
+        if declared is not None and declared != self._observation.schema:
+            name = "local_memory" if declared == "aresim.obs.local_memory.v2" else "local"
+            config = getattr(agent, "environment_config", self.env_config)
+            self.env_config = replace(config, engine=self.env_config.engine, observation=name)
+            context = ComponentBuildContext(self.env_config, self.env_config.engine)
+            self._observation = self._components.build_observation(name, context)
+            if self._observation.schema != declared:
+                raise PolicyError("CHECKPOINT_INCOMPATIBLE", "Unsupported observation schema.")
         observation = self._observation.build(state, self.env_config.engine)
         action_mask = self._actions.mask(state, self.env_config.engine)
         action_index = int(agent.act(observation, action_mask))
         command = self._actions.decode(state, action_index)
         transition = engine.step(command, Actor.AGENT)
+        self._last_policy_step = transition.state.step
         info = _agent_info(agent)
         return PolicyStepResult(
             transition=transition,
@@ -269,7 +322,6 @@ def policy_meta_from_result(result: PolicyStepResult) -> dict[str, object]:
 
 __all__ = [
     "BASELINE_ALGORITHMS",
-    "CHECKPOINT_ALGORITHM",
     "CHECKPOINT_ALGORITHMS",
     "LLM_ALGORITHMS",
     "POLICY_CATALOG",
@@ -283,5 +335,7 @@ __all__ = [
     "resolve_agent",
     "resolve_checkpoint_path",
     "rllib_available",
+    "muzero_available",
+    "world_models_available",
     "validate_checkpoint_path",
 ]

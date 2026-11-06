@@ -139,9 +139,9 @@ class RolloutRunner:
         legal: bool | None = None
         if isinstance(action, (int, np.integer)) and 0 <= int(action) < current_mask.size:
             legal = bool(current_mask[int(action)])
-        before_snapshot = snapshot_from_state(environment.world_state)
+        before_snapshot = snapshot_from_state(environment.world_state, self.environment_config.engine)
         result = environment.step(action)
-        after_snapshot = snapshot_from_state(result.transition.state)
+        after_snapshot = snapshot_from_state(result.transition.state, self.environment_config.engine)
         trajectory_recorder.record(before_snapshot, after_snapshot)
         if str(result.info["observation_schema"]) != observation_schema or str(result.info["action_schema"]) != action_schema:
             raise RuntimeError("environment schema identifiers changed during an episode")
@@ -149,7 +149,7 @@ class RolloutRunner:
 
     def _collect_episode(self, environment, spec: EpisodeSpec) -> EpisodeTrajectory[Any, Any]:
         reset = environment.reset(seed=spec.environment_seed)
-        initial_snapshot = snapshot_from_state(environment.world_state)
+        initial_snapshot = snapshot_from_state(environment.world_state, self.environment_config.engine)
         trajectory_recorder = TrajectoryRecorder.create(
             self.environment_config.engine.replay,
             initial_snapshot,

@@ -43,6 +43,7 @@ export function MissionRail() {
 
 export function AlertsSection() {
   const snapshot = useAresStore((state) => state.snapshot)!;
+  const waitCharge = estimateWaitRecharge(snapshot);
   const selectTarget = useAresStore((state) => state.selectTarget);
   const criticalAlert = snapshot.gameStatus === "game_over" || snapshot.rules.some((rule) => rule.status === "failed") || snapshot.resources.battery <= 18 || snapshot.resources.livability <= 16;
   const alertCount = snapshot.mission.alerts.length + (snapshot.buildPadState.serviceNeeded ? 1 : 0);
@@ -70,7 +71,7 @@ export function AlertsSection() {
           <div className="grid gap-1.5 border-t border-stone-800/80 pt-2 text-[10px] text-stone-400">
             <AlertMetric icon={<Sun size={12} />} label="Solar" value={formatFixed(snapshot.resources.powerGenerated, " kW")} />
             <AlertMetric icon={<BatteryCharging size={12} />} label="Load" value={formatFixed(snapshot.resources.powerConsumed, " kW")} />
-            <AlertMetric icon={<BatteryCharging size={12} />} label="Wait charge" value={formatSignedFixed(estimateWaitRecharge(snapshot), "%")} />
+            <AlertMetric icon={<BatteryCharging size={12} />} label="Wait charge" value={waitCharge === null ? "Unavailable" : formatSignedFixed(waitCharge, "%")} />
             <AlertMetric icon={<Droplets size={12} />} label="Water chain" value={snapshot.resources.water > 110 ? "Online" : "Building"} />
             <AlertMetric icon={<Gauge size={12} />} label="Pressure" value={snapshot.resources.oxygen > 150 ? "Stable" : "Incomplete"} />
           </div>

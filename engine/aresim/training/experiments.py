@@ -1,12 +1,12 @@
 """Validated experiment configuration for the optional learned-policy stack.
 
 Immutable dataclasses decode repository YAML before Ray or W&B starts. Algorithm-
-specific hyperparameters live in :mod:`aresim.algorithms.ppo.config` and
-:mod:`aresim.algorithms.dqn.config`; checked-in YAML lives in repository
+specific hyperparameters and model/resources decode through the explicit training
+registry; checked-in YAML lives in repository
 ``configs/<algorithm>/``, not the installable package. Training
 run artifacts default to ``results/``.
 
-**Last updated:** September 12, 2026
+**Last updated:** October 16, 2026
 
 **Contains:** ``ExperimentSpec``, resource/tracking/artifact configs,
 :func:`parse_experiment`, :func:`load_experiment`, :func:`apply_overrides`.
@@ -21,12 +21,13 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Generic, Literal, Mapping, TypeVar
+from typing import Callable, Generic, Literal, Mapping, TypeVar
 
 from ..algorithms.common.config_decode import decode_dataclass, finite_number, mapping, positive_integer
-from ..algorithms.ppo.config import MaskedPPOConfig, ModelConfig, decode_config as decode_algorithm_config
+from ..algorithms.ppo.config import MaskedPPOConfig
+from ..algorithms.common.model_config import ModelConfig
 from .seeds import resolve_checkout_file
 
 
@@ -44,12 +45,22 @@ class EnvironmentTrainingConfig:
     reward: str = "shaped_train"
     task: str = "open_exploration"
     max_episode_steps: int = 1200
+    resolved_config: dict[str, object] | None = None
+    task_config: dict[str, object] = field(default_factory=dict)
+    engine_overrides: dict[str, object] = field(default_factory=dict)
+    observation_overrides: dict[str, object] = field(default_factory=dict)
+    reward_overrides: dict[str, object] = field(default_factory=dict)
 
     def validate(self) -> None:
         for name in (self.scenario_id, self.observation, self.action, self.reward, self.task):
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("environment identifiers must be non-empty strings")
         positive_integer(self.max_episode_steps, "max_episode_steps")
+        from ..config import TaskConfig
+        TaskConfig(**self.task_config).validate()
+        for value in (self.engine_overrides, self.observation_overrides, self.reward_overrides):
+            if not isinstance(value, dict):
+                raise ValueError("environment overrides must be mappings")
 
 @dataclass(frozen=True)
 class RLlibResourceConfig:
@@ -72,17 +83,32 @@ class RLlibResourceConfig:
 
 @dataclass(frozen=True)
 class EvaluationConfig:
-    """Frozen-policy evaluation schedule and split."""
+    """Manual frozen-policy evaluation protocol; training never evaluates."""
 
-    seed_manifest: str = "notebooks/phase1_open_exploration_split_v1.yaml"
-    interval_environment_steps: int = 20480
+    seed_manifest: str = "configs/seeds/phase1_open_exploration_split_v1.yaml"
+    # Retain old snapshots/configs for inference; this field no longer schedules work.
+    interval_environment_steps: int | None = None
     split: Literal["validation", "test"] = "validation"
     record_trajectories: bool = True
+    action_mode: Literal["deterministic", "stochastic", "both"] = "both"
+    stochastic_repeats: int = 3
+    workers: int = 1
+    minimum_success_rate: float | None = None
+    selection_action_mode: Literal["deterministic", "stochastic"] = "deterministic"
 
     def validate(self) -> None:
         if not isinstance(self.seed_manifest, str) or not self.seed_manifest.strip():
-            raise ValueError("evaluation manifest and interval are required")
-        positive_integer(self.interval_environment_steps, "evaluation interval_environment_steps")
+            raise ValueError("evaluation seed manifest is required")
+        if self.interval_environment_steps is not None:
+            positive_integer(self.interval_environment_steps, "legacy evaluation interval_environment_steps")
+        positive_integer(self.stochastic_repeats, "stochastic_repeats")
+        positive_integer(self.workers, "evaluation workers")
+        if self.action_mode not in {"deterministic", "stochastic", "both"}:
+            raise ValueError("invalid evaluation action_mode")
+        if self.selection_action_mode not in {"deterministic", "stochastic"} or (self.action_mode != "both" and self.selection_action_mode != self.action_mode):
+            raise ValueError("selection_action_mode must be an evaluated action mode")
+        if self.minimum_success_rate is not None and not 0 <= finite_number(self.minimum_success_rate, "minimum_success_rate") <= 1:
+            raise ValueError("minimum_success_rate must be in [0, 1]")
         if not isinstance(self.record_trajectories, bool):
             raise ValueError("record_trajectories must be a boolean")
         if self.split not in {"validation", "test"}:
@@ -135,7 +161,7 @@ class ArtifactConfig:
 
 @dataclass(frozen=True)
 class ExperimentSpec(Generic[AlgorithmConfigT]):
-    """Fully resolved RLlib experiment selected by one YAML document."""
+    """Fully resolved registered experiment selected by one YAML document."""
 
     schema_version: str
     experiment_id: str
@@ -145,21 +171,23 @@ class ExperimentSpec(Generic[AlgorithmConfigT]):
     learner_seed: int
     environment: EnvironmentTrainingConfig
     algorithm_config: AlgorithmConfigT
-    model_config: ModelConfig
-    resources: RLlibResourceConfig
+    model_config: object
+    resources: object
     evaluation: EvaluationConfig
     checkpoint: CheckpointConfig
     tracking: TrackingConfig
     artifacts: ArtifactConfig
+    provenance: dict[str, object] | None = None
 
     def validate(self) -> None:
         if self.schema_version != EXPERIMENT_SCHEMA:
             raise ValueError(f"unsupported experiment schema: {self.schema_version}")
         _require_identifiers(self.experiment_id, self.trial_id, self.algorithm, self.model)
-        if isinstance(self.learner_seed, bool) or self.learner_seed < 0:
-            raise ValueError("learner_seed must be non-negative")
+        positive_integer(self.learner_seed, "learner_seed", allow_zero=True)
         _validate_components(self.environment, self.algorithm_config, self.model_config, self.resources, self.evaluation, self.checkpoint, self.tracking, self.artifacts)
-        _validate_step_schedule(self.algorithm_config, self.evaluation, self.checkpoint)
+        _validate_step_schedule(self.algorithm_config, self.checkpoint)
+        if self.evaluation.minimum_success_rate is not None and self.environment.task != "resource_mission":
+            raise ValueError("success gates require a resource_mission task")
 
     def as_dict(self) -> dict[str, object]:
         """Return the stable JSON/YAML representation."""
@@ -190,14 +218,15 @@ def _validate_components(*components: object) -> None:
         validate()
 
 
-def _validate_step_schedule(algorithm_config: object, evaluation: EvaluationConfig, checkpoint: CheckpointConfig) -> None:
+def _validate_step_schedule(algorithm_config: object, checkpoint: CheckpointConfig) -> None:
+    if getattr(algorithm_config, "threshold_schedule", False):
+        return
     batch = getattr(algorithm_config, "rollout_batch_size", None)
     total = getattr(algorithm_config, "total_environment_steps", None)
     if not isinstance(batch, int) or isinstance(batch, bool) or not isinstance(total, int) or isinstance(total, bool):
         return
     schedules = (
         (total, "total_environment_steps"),
-        (evaluation.interval_environment_steps, "evaluation interval"),
         (checkpoint.interval_environment_steps, "checkpoint interval"),
     )
     for value, label in schedules:
@@ -207,50 +236,53 @@ def _validate_step_schedule(algorithm_config: object, evaluation: EvaluationConf
 
 _TOP_LEVEL = {
     "schema_version", "experiment_id", "trial_id", "algorithm", "model", "learner_seed",
-    "environment", "algorithm_config", "model_config", "resources", "evaluation", "checkpoint", "tracking", "artifacts",
+    "environment", "algorithm_config", "model_config", "resources", "evaluation", "checkpoint", "tracking", "artifacts", "provenance",
 }
 
 
-def _decoder_for_algorithm(name: str):
-    if name == "masked_ppo":
-        from ..algorithms.ppo.config import MaskedPPOConfig, decode_config
 
-        return lambda raw: decode_config(MaskedPPOConfig, raw, "algorithm_config")
-    if name == "masked_dqn":
-        from ..algorithms.dqn.config import MaskedDQNConfig, decode_config
 
-        return lambda raw: decode_config(MaskedDQNConfig, raw, "algorithm_config")
-    from ..algorithms.registry import create_training_registry
-
-    return lambda raw: create_training_registry().decode_algorithm_config(name, raw)
-
+def _validate_model_selection(entry, values: dict[str, object]) -> None:
+    if entry.model_id is not None and values["model"] != entry.model_id:
+        raise ValueError(f"{values['algorithm']} requires model {entry.model_id}")
 
 def parse_experiment(
     payload: object,
     *,
     algorithm_config_decoder: Callable[[object], object] | None = None,
+    registry=None,
 ) -> ExperimentSpec[object]:
-    """Decode one untrusted YAML mapping with strict unknown-field rejection."""
+    """Decode configs strictly, allowing retired MuZero metadata in frozen snapshots."""
+    from ..algorithms.registry import create_training_registry
+    selected = create_training_registry() if registry is None else registry
     values = deepcopy(mapping(payload, "experiment"))
     unknown = sorted(set(values) - _TOP_LEVEL)
     if unknown:
         raise ValueError(f"unknown experiment fields: {', '.join(unknown)}")
-    required = _TOP_LEVEL - {"environment", "algorithm_config", "model_config", "resources", "evaluation", "checkpoint", "tracking", "artifacts"}
+    required = _TOP_LEVEL - {"environment", "algorithm_config", "model_config", "resources", "evaluation", "checkpoint", "tracking", "artifacts", "provenance"}
     missing = sorted(required - set(values))
     if missing:
         raise ValueError(f"missing experiment fields: {', '.join(missing)}")
+    # Old hashed checkpoints record a backend selector. It has no effect on
+    # frozen inference; new training YAML must not expose the retired option.
+    resources = values.get("resources", {})
+    if (values["algorithm"] == "muzero" and values.get("provenance") is not None
+            and isinstance(resources, dict) and resources.get("collection_backend") in ("local", "ray")):
+        resources.pop("collection_backend")
+    _validate_model_selection(selected.registration(str(values["algorithm"])), values)
     spec = ExperimentSpec(
         schema_version=str(values["schema_version"]), experiment_id=str(values["experiment_id"]),
         trial_id=str(values["trial_id"]), algorithm=str(values["algorithm"]), model=str(values["model"]),
         learner_seed=values["learner_seed"],
         environment=decode_dataclass(EnvironmentTrainingConfig, values.get("environment", {}), "environment"),
-        algorithm_config=(algorithm_config_decoder or _decoder_for_algorithm(str(values["algorithm"])))(values.get("algorithm_config", {})),
-        model_config=decode_algorithm_config(ModelConfig, values.get("model_config", {}), "model_config"),
-        resources=decode_dataclass(RLlibResourceConfig, values.get("resources", {}), "resources"),
+        algorithm_config=(algorithm_config_decoder or (lambda raw: selected.decode_algorithm_config(str(values["algorithm"]), raw)))(values.get("algorithm_config", {})),
+        model_config=selected.decode_model_config(str(values["algorithm"]), values.get("model_config", {})),
+        resources=selected.decode_resources(str(values["algorithm"]), values.get("resources", {})),
         evaluation=decode_dataclass(EvaluationConfig, values.get("evaluation", {}), "evaluation"),
         checkpoint=decode_dataclass(CheckpointConfig, values.get("checkpoint", {}), "checkpoint"),
         tracking=decode_dataclass(TrackingConfig, values.get("tracking", {}), "tracking"),
         artifacts=decode_dataclass(ArtifactConfig, values.get("artifacts", {}), "artifacts"),
+        provenance=values.get("provenance"),
     )
     spec.validate()
     return spec
@@ -258,6 +290,7 @@ def parse_experiment(
 
 def load_experiment(
     path: str | Path,
+    registry=None,
     *,
     algorithm_config_decoder: Callable[[object], object] | None = None,
 ) -> ExperimentSpec[object]:
@@ -265,7 +298,7 @@ def load_experiment(
     import yaml
 
     payload = yaml.safe_load(resolve_checkout_file(path, kind="experiment config").read_text(encoding="utf-8"))
-    return parse_experiment(payload, algorithm_config_decoder=algorithm_config_decoder)
+    return parse_experiment(payload, algorithm_config_decoder=algorithm_config_decoder, registry=registry)
 
 
 def _override_target(values: dict[str, object], dotted: str) -> tuple[dict[str, object], str]:

@@ -1,17 +1,36 @@
-# Masked PPO workflow
+# Masked PPO details
+
+## Architecture and learning at a glance
+
+Dimensions in these figures describe the current `local_memory` reference presets at the default 8×8 crop and model widths. `B` is batch size; recurrent models additionally use `T` for sequence length. Smaller smoke models and YAML overrides change these widths; use `resolved_config.yaml` for a particular run. The action space remains `Discrete(10)`.
+
+The shared encoder consumes terrain `[B,8,8]`, five numerical spatial channels `[B,5,8,8]`, four flag channels `[B,4,8,8]`, rover `[B,10]`, colony `[B,14]`, pad/weather IDs, eight objective-type slots, objective values `[B,8,4]` and objective mask `[B,8]`. `local_memory.v2` adds visited `[B,1,8,8]` and navigation `[B,13]`. Terrain embedding contributes four channels; the resulting 14-channel CNN produces 4,096 features. Embedded and pooled telemetry has 77 inputs and produces 128 features. Fusion maps 4,224 → 256. Legacy `local.v1` omits the two memory fields and uses 13 CNN channels / 64 telemetry inputs.
+
+The policy head produces `[B,10]` masked logits and the value head produces `[B,1]`, squeezed to `[B]`. Rollouts feed on-policy PPO/GAE updates; no experience replay is used.
+
+![Architecture and tensor dimensions](architecture.drawio.png)
+
+![Training and checkpoint flow](training.drawio.png)
+
+The PNG figures contain editable draw.io XML: open the PNG directly in draw.io to revise the illustration. Shapes and numbers are grounded in the adjacent model/configuration files and `../common/encoder.py`.
+
+**October 7, 2026 update:** new presets use `local_memory` v2, capped delivery/task rewards v2 and frozen snapshots. Training saves rotating and final checkpoints without evaluation rollouts or validation selection. Evaluation and analysis run separately. Architecture details that explicitly name `local.v1` describe the retained legacy input. See [pipeline corrections](../../../../docs/rl/pipeline_fixes_2026-10-06.md) for the current contract.
 
 Implementation reference for the built-in `masked_ppo` algorithm and `local_cnn_actor_critic` model. Covers data flow, PPO/GAE/losses, the Ray training loop, and checkpoint inference. Simulator rules, rewards, and legality live in `aresim.core` and `aresim.components`; this package wires them into Ray RLlib and PyTorch.
 
 For the broader RL guide (baselines, seeds, scaling, literature), see [RL Algorithms, Training, and Evaluation](../../../../docs/rl/rl_quickstart.md).
+
+Shared checkpoint transport, sidecar/provenance validation and native module restoration live in `../../training/rllib/checkpoint.py`. Framework-neutral loader dispatch lives in `../../training/checkpoints.py`; resume compatibility lives in `../../training/resume.py`. PPO retains its historical public checkpoint/driver aliases while each algorithm owns its policy-specific inference state.
 
 **Source ownership**
 
 | File | Responsibility |
 |---|---|
 | `config.py` | `MaskedPPOConfig`, `ModelConfig`, YAML decode |
-| `train.py` | `LocalMaskedActorCritic`, `AresMaskedPPORLModule`, metrics, `run_experiment` |
-| `checkpoint.py` | Sidecar JSON, `RLlibCheckpointAgent`, frozen inference |
-| `../common/encoder.py` | Shared local CNN encoder used by PPO and DQN |
+| `train.py` | `LocalMaskedActorCritic`, `AresMaskedPPORLModule`, factory; compatibility driver/callback exports |
+| `checkpoint.py` | PPO frozen restoration and historical shared-checkpoint aliases |
+| `../common/encoder.py` | Shared local CNN encoder; dimensions live in `../common/model_config.py` |
+| `../../training/rllib/` | Shared seeded environments, metrics/callbacks, Tune driver and exports |
 | `../common/resume.py` | Run-directory / sidecar resume resolution |
 | `../registry.py` | Registers `masked_ppo`, `masked_dqn`, `local_cnn_actor_critic`, `local_cnn_q`, `rllib_masked_ppo`, `rllib_masked_dqn` |
 
@@ -19,7 +38,7 @@ For the broader RL guide (baselines, seeds, scaling, literature), see [RL Algori
 
 ## End-to-end training flow
 
-RLlib collection uses the non-audit simulator path: it preserves policy observations, masks, tasks, and rewards but omits per-step full-world checksums and the post-step defensive state copy. Frozen summary evaluation also avoids UI replay snapshots; explicit trajectory recording and the ordinary simulator/API continue to use the audited path.
+RLlib collection uses the non-audit simulator path: it preserves policy observations, masks, tasks, and rewards but omits per-step full-world checksums and the post-step defensive state copy. Built-in components also use a compact pre-step reward snapshot rather than copying the entire terrain and history; custom components retain the full-copy fallback. Frozen summary evaluation avoids UI replay snapshots; explicit trajectory recording and the ordinary simulator/API continue to use the audited path. The PPO training forward pass shares one encoder embedding between policy and value losses. Set `ARESIM_VALIDATE_MODEL_OUTPUTS=1` to restore per-forward GPU validity checks when debugging; masks are checked for at least one legal action at the CPU environment boundary.
 
 ```mermaid
 flowchart TB
@@ -30,7 +49,7 @@ flowchart TB
     Registry --> Ray[tune.Tuner PPO<br/>rollout → GAE → PPO update]
     Ray --> Native[RLlib native checkpoint]
     Native --> Sidecar[write_checkpoint_sidecar<br/>checkpoint.json]
-    Sidecar --> Eval[evaluate_checkpoint optional]
+    Sidecar -. Separate analysis command .-> Eval[evaluate_checkpoint]
     Eval --> Report[generate_report optional<br/>W&B plots]
     Sidecar --> Manifest[manifest.json + status.json]
 ```
@@ -45,7 +64,7 @@ flowchart TB
 - `status.json` — `running` / `completed` / `failed`
 - `checkpoints/final/checkpoint.json` — auditable sidecar
 - `checkpoints/final/native/` — RLlib module weights
-- `evaluation/final/` — post-training rollout summary (when enabled)
+- `evaluation/` — created only by explicit manual evaluation after training
 - `reports/` — W&B metric plots (online tracking + `report=True`)
 
 ---
@@ -211,12 +230,12 @@ PPO hyperparameters map from `MaskedPPOConfig` → `PPOConfig.training(...)` in 
 | `gae_lambda` | 0.95 | `lambda_` |
 | `clip_param` | 0.2 | `clip_param` |
 | `value_loss_coefficient` | 0.5 | `vf_loss_coeff` |
-| `entropy_coefficient` | 0.04 | `entropy_coeff` |
+| `entropy_coefficient` | 0.06 | `entropy_coeff` |
 | `learning_rate` | 1e-4 | `lr` |
 | `max_gradient_norm` | 0.5 | `grad_clip` |
 | `target_kl` | 0.02 | `kl_target` |
 
-Schedules in the parent `ExperimentSpec` (`evaluation.interval_environment_steps`, `checkpoint.interval_environment_steps`) must also be divisible by `rollout_batch_size`.
+The training budget and `checkpoint.interval_environment_steps` must be divisible by `rollout_batch_size`. Legacy evaluation intervals are accepted for old snapshots but do not schedule any work.
 
 ---
 
@@ -317,7 +336,7 @@ iterations = max(1, total_environment_steps // rollout_batch_size)
 stop = {"training_iteration": iterations}
 ```
 
-Example (`smoke.yaml`): `102_400 / 4_096 = 25` training iterations.
+Example (`smoke.yaml`): `8_192 / 4_096 = 2` training iterations.
 
 Each iteration EnvRunners collect until the learner receives **`rollout_batch_size` environment steps** (`train_batch_size_per_learner` in `MaskedPPOFactory.build()`). With default sizes:
 
@@ -325,9 +344,9 @@ Each iteration EnvRunners collect until the learner receives **`rollout_batch_si
 |---|---:|---|
 | Env steps per iteration | 4,096 | `rollout_batch_size` |
 | Minibatches per epoch | 16 | `rollout_batch_size / minibatch_size` |
-| Optimizer steps per iteration | 160 | `(rollout_batch_size / minibatch_size) × update_epochs` |
-| Total env steps (smoke) | 102,400 | `25 × 4,096` |
-| Total env steps (reference) | 1,048,576 | `256 × 4,096` |
+| Optimizer steps per iteration | 32 | `(rollout_batch_size / minibatch_size) × update_epochs` |
+| Total env steps (smoke) | 8,192 | `2 × 4,096` |
+| Total env steps (reference) | 2,097,152 | `256 × 8,192` |
 
 ### EnvRunner configuration
 
@@ -348,7 +367,7 @@ Training environments are wrapped in `_SeededTrainingEnv`, which cycles **traini
 offset = learner_seed × 104729 + worker_index × 1009 + vector_index × 9176
 ```
 
-### Checkpoint and mid-training evaluation
+### Checkpoint saving and separate evaluation
 
 During `_fit`, Ray Tune checkpoints on:
 
@@ -364,7 +383,7 @@ checkpoints/step_<environment_steps>/checkpoint.json
 
 Example: `checkpoints/step_081920/checkpoint.json` after 81,920 environment steps. The callback keeps the newest `checkpoint.keep` `step_*` exports; `checkpoints/final/` is still written when training completes.
 
-Post-training (`_finish_run`, when `evaluate=True`), `evaluate_checkpoint` runs on the **validation** (or configured) split and optionally logs scalars to W&B. Neither path mutates simulator rules.
+Checkpoint callbacks export and prune snapshots without evaluation. Training completion saves `final` without collecting evaluation episodes. `run_experiment` has no `evaluate` argument and defaults `report=False`. Run `aresim-rl evaluate <run> --checkpoint final --split validation` separately after training. Automatic best-checkpoint selection and validation success gates no longer run during training.
 
 ### Termination vs truncation (bootstrap semantics)
 
@@ -560,3 +579,5 @@ Public loader: `make_checkpoint_agent(path)` via `TrainingRegistry`.
 | UI policy bridge | `aresim.integrations.policy` |
 
 Keep new learned algorithms parallel to this layout: typed config, RLModule, factory, checkpoint loader, and registry entries under new semantic names. Mask-aware DQN lives in `algorithms/dqn/` and reuses the encoder plus Tune driver.
+
+October 16 ownership update: PPO learning/network behavior is unchanged; shared RLlib infrastructure now lives in `training/rllib/`, with historical public imports retained. [Recurrent DQN and native world-model workflows](../README.md) reuse the appropriate shared seams without moving their objectives into PPO.

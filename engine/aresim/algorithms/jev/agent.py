@@ -26,10 +26,10 @@ from ...components.observations import OBSERVATION_SCHEMA
 from ...config import EnvironmentConfig
 from ...defaults import DEFAULT_ENVIRONMENT_CONFIG
 from ..common.masks import require_mask
-from .client import FakeJevClient, JevClient, JevDecision, JevUnavailableError, TypeSafeJevClient
+from .client import FakeJevClient, JevClient, JevDecision, TypeSafeJevClient
 from .config import JevAgentConfig
 from .questions import build_action_question
-from .state import ACTION_IDS, ACTION_NAMES, OpsScales, encode_ops_state
+from .state import ACTION_IDS, ACTION_NAMES, OpsScales, cargo_mass_kg, encode_ops_state, repeating_actions
 
 
 logger = logging.getLogger(__name__)
@@ -110,10 +110,7 @@ class JevAgent:
     def _resolve_client(self) -> JevClient:
         if self._client is not None:
             return self._client
-        try:
-            self._client = TypeSafeJevClient(self.config.model, self.config.timeout_seconds)
-        except JevUnavailableError:
-            raise
+        self._client = TypeSafeJevClient(self.config.model, self.config.timeout_seconds)
         return self._client
 
     def _remember(self, action_name: str) -> None:
@@ -194,7 +191,7 @@ class JevAgent:
             return self._from_ranked(mask, decision, wait_ok, "low confidence")
         if chosen == WAIT_ACTION and not wait_ok and _has_productive(mask):
             return self._from_ranked(mask, decision, False, "idle wait skipped")
-        if _continues_repeat(decision.choice, self._recent) and _has_productive(mask):
+        if decision.choice in repeating_actions(self._recent) and _has_productive(mask):
             blocked = {decision.choice, *self._recent[-2:]}
             return self._from_ranked(mask, decision, wait_ok, "repeat broken", exclude=blocked)
         return None
@@ -277,16 +274,6 @@ def _wait_recharges(state: dict[str, object]) -> bool:
     return float(colony.get("power_margin", 0) or 0) > 0
 
 
-def _cargo_mass_kg(state: dict[str, object]) -> float:
-    rover = state.get("rover")
-    if not isinstance(rover, dict):
-        return 0.0
-    cargo = rover.get("cargo")
-    if not isinstance(cargo, dict):
-        return 0.0
-    return float(cargo.get("ice_kg") or 0) + float(cargo.get("ore_kg") or 0) + float(cargo.get("samples_kg") or 0)
-
-
 def _has_free_cargo(state: dict[str, object]) -> bool:
     rover = state.get("rover")
     if not isinstance(rover, dict):
@@ -307,7 +294,7 @@ def _collect_here(state: dict[str, object], mask: np.ndarray) -> str | None:
 
 
 def _unload_ready(state: dict[str, object], mask: np.ndarray) -> bool:
-    return mask[UNLOAD_ACTION] == 1 and _cargo_mass_kg(state) > 0
+    return mask[UNLOAD_ACTION] == 1 and cargo_mass_kg(state.get("rover")) > 0
 
 
 def _seek_target(state: dict[str, object]) -> dict[str, object] | None:
@@ -345,14 +332,6 @@ def _productive_or_wait(mask: np.ndarray, exclude: set[str] | frozenset[str] = f
         if mask[ACTION_IDS[name]] == 1:
             return name
     return "wait"
-
-
-def _continues_repeat(choice: str, recent: list[str]) -> bool:
-    if len(recent) >= 3 and recent[-1] == recent[-2] == recent[-3]:
-        return choice == recent[-1]
-    if len(recent) >= 4 and recent[-4:-2] == recent[-2:]:
-        return choice in {recent[-1], recent[-2]}
-    return False
 
 
 def _ranked_legal(

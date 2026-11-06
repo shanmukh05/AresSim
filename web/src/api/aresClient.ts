@@ -4,7 +4,7 @@
  * logic belongs in `useAresStore`.
  */
 
-import type { AgentStepResponse, AlgorithmId, AttachPolicyResponse, AresReplayProjectionV1, AresTrajectoryEpisodeV1, PoliciesResponse, RunMode, SimAction, SimSnapshot } from "../types/sim";
+import type { AgentStepResponse, AlgorithmId, AttachPolicyResponse, AresReplayProjectionV1, AresTrajectoryEpisodeV1, PoliciesResponse, PolicyActionMode, RunMode, SimAction, SimSnapshot } from "../types/sim";
 
 interface SnapshotResponse {
   snapshot: SimSnapshot;
@@ -80,13 +80,14 @@ export class AresApiClient {
     return request<PoliciesResponse>("/api/policies");
   }
 
-  async attachPolicy({ algorithmId, checkpointPath }: { algorithmId: AlgorithmId; checkpointPath?: string }): Promise<AttachPolicyResponse> {
+  async attachPolicy({ algorithmId, checkpointPath, actionMode }: { algorithmId: AlgorithmId; checkpointPath?: string; actionMode?: PolicyActionMode }): Promise<AttachPolicyResponse> {
     const sessionId = this.requireSession();
     return request<AttachPolicyResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/attach-policy`, {
       method: "POST",
       body: JSON.stringify({
         algorithmId,
         checkpointPath: checkpointPath ?? null,
+        actionMode,
       }),
     });
   }
@@ -105,9 +106,9 @@ export class AresApiClient {
     });
   }
 
-  async fetchHealth(): Promise<{ rllibAvailable: boolean; jevAvailable: boolean }> {
-    const response = await request<{ rllibAvailable?: boolean; jevAvailable?: boolean }>("/api/health");
-    return { rllibAvailable: response.rllibAvailable === true, jevAvailable: response.jevAvailable === true };
+  async fetchHealth(): Promise<{ rllibAvailable: boolean; muzeroAvailable: boolean; worldModelsAvailable: boolean; jevAvailable: boolean }> {
+    const response = await request<{ rllibAvailable?: boolean; muzeroAvailable?: boolean; worldModelsAvailable?: boolean; jevAvailable?: boolean }>("/api/health");
+    return { rllibAvailable: response.rllibAvailable === true, muzeroAvailable: response.muzeroAvailable === true, worldModelsAvailable: response.worldModelsAvailable === true, jevAvailable: response.jevAvailable === true };
   }
 
   /** @deprecated Use agentStep after attachPolicy. Kept for manual pre-decoded agent actions if needed. */
@@ -188,7 +189,7 @@ export class AresApiClient {
   }
 }
 
-async function request<T>(url: string, init: RequestInit): Promise<T> {
+async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
     response = await fetch(url, {

@@ -1,0 +1,96 @@
+schema_version: aresim.experiment.v1
+experiment_id: plan2explore_adapt_reference_v1
+trial_id: seed_7
+algorithm: plan2explore
+model: local_rssm_disagreement
+learner_seed: 7
+environment:
+  scenario_id: phase1_default_v1
+  observation: local_memory
+  action: discrete
+  reward: shaped_train
+  task: resource_mission
+  max_episode_steps: 800
+  reward_overrides:
+    time_cost: -0.025
+    samples_collected: 0.3
+algorithm_config:
+  total_environment_steps: 1048576
+  batch_size: 16
+  sequence_length: 32
+  replay_capacity: 250000
+  learning_starts: 2048
+  replay_ratio: 16.0
+  gamma: 0.995
+  imagination_horizon: 15
+  lambda_return: 0.95
+  model_learning_rate: 0.0001
+  actor_learning_rate: 3.0e-05
+  critic_learning_rate: 3.0e-05
+  max_gradient_norm: 100.0
+  free_nats: 1.0
+  dynamics_loss_weight: 1.0
+  representation_loss_weight: 0.1
+  entropy_coefficient: 0.0003
+  slow_critic_rate: 0.02
+  slow_regularization_weight: 1.0
+  replay_value_loss_weight: 0.3
+  legality_threshold: 0.5
+  legality_positive_weights:
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  phase: adapt
+  initialization_checkpoint: null
+  ensemble_size: 5
+  intrinsic_scale: 1.0
+model_config:
+  terrain_embedding: 4
+  objective_embedding: 4
+  conv_channels:
+  - 32
+  - 64
+  telemetry_layers:
+  - 128
+  - 128
+  fused_width: 256
+  deterministic_size: 512
+  stochastic_size: 32
+  categories: 32
+  hidden_size: 256
+  unimix: 0.01
+  value_bins: 255
+evaluation:
+  seed_manifest: configs/seeds/phase1_open_exploration_split_v1.yaml
+  split: validation
+  record_trajectories: false
+  workers: 1
+checkpoint:
+  interval_environment_steps: 81920
+  keep: 3
+tracking:
+  mode: online
+  project: aresim
+  group: plan2explore
+  tags:
+  - reference
+  - plan2explore
+  - adapt
+artifacts:
+  root: results
+  reject_existing: true
+  resume_from: null
+resources:
+  device: cuda
+  torch_threads: 1
+  num_collectors: 4
+  num_envs_per_collector: 4
+  collection_steps_per_env: 32
+  collector_torch_threads: 1

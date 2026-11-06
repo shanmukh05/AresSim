@@ -4,12 +4,12 @@ This package contains the deterministic Phase 1 gameplay engine, the local REST 
 
 ## Development
 
-`pyproject.toml` is the canonical backend dependency manifest. The base dependencies run the API, while the `dev`, `env`, `jev`, and `notebook` extras add tests, RL environment frameworks, the TypeSafe client, and the Jupyter kernel respectively.
+`pyproject.toml` is the canonical backend dependency manifest. The deterministic core remains usable without numerical frameworks. The API policy bridge uses the `env` extra; `dev` adds development checks, `rllib`/`muzero`/`world_models` add the selected training backend, `jev` adds TypeSafe, and `notebook` adds the Jupyter kernel.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[dev]'
+pip install -e '.[dev,env]'
 python -m aresim.api
 ```
 
@@ -69,7 +69,7 @@ The supported extension surface is the typed protocols in `aresim.components`, t
 
 ## Baseline rollouts
 
-The optional environment extra also includes deterministic random, random-valid, Wait, scripted, and Jev agents. Jev needs `aresim[jev]` and `JEV_API_KEY` for live calls; smoke rollouts use a fake client. See [`algorithms/baselines/workflow.md`](aresim/algorithms/baselines/workflow.md) and [`algorithms/jev/workflow.md`](aresim/algorithms/jev/workflow.md).
+The optional environment extra also includes deterministic random, random-valid, Wait, scripted, and Jev agents. Jev needs `aresim[jev]` and `JEV_API_KEY` for live calls; smoke rollouts use a fake client. See [`algorithms/baselines/DETAILS.md`](aresim/algorithms/baselines/DETAILS.md) and [`algorithms/jev/DETAILS.md`](aresim/algorithms/jev/DETAILS.md).
 
 ```python
 from aresim.training import EpisodeSpec, RolloutConfig, RolloutRunner, TrajectoryWriter
@@ -92,9 +92,16 @@ For project-wide completed, next, and future work, see [`docs/project/implementa
 Install the complete learned-policy stack and run the checked-in smoke experiment:
 
 ```bash
-pip install -e '.[dev,rllib,notebook]'
+pip install -e '.[dev,rllib,world_models,notebook]'
 aresim-rl train configs/masked_ppo/smoke.yaml
 aresim-rl train configs/masked_dqn/smoke.yaml
+aresim-rl train configs/recurrent_dqn/smoke.yaml
+aresim-rl train configs/dreamerv3/smoke.yaml
 ```
 
-The optional `aresim.training` package provides strict experiment YAML, a compact algorithm/model/checkpoint registry, RLlib action-masked PPO and mask-aware DQN, fixed seed splits, canonical W&B metrics, native checkpoint sidecars, framework-neutral evaluation, UI-loadable trajectories, and executed Jupyter reports. Experiment configs live in repository `configs/`; training run artifacts in `results/`. It deliberately avoids parallel JSONL, CSV, and TensorBoard logging. See [RL Algorithms, Training, and Evaluation](../docs/rl/rl_quickstart.md) and [RL Usage Guide](../docs/rl/usage.md#train-from-the-cli).
+The optional `aresim.training` package provides strict experiment YAML, explicit algorithm/model/loader/runner registration, RLlib PPO and feedforward/recurrent DQN, native PyTorch/Ray MuZero and DreamerV3/Plan2Explore, fixed seed splits, canonical W&B metrics, native checkpoint sidecars, framework-neutral evaluation, UI-loadable trajectories, and executed Jupyter reports. Experiment configs live in repository `configs/`; training run artifacts in `results/`. It deliberately avoids parallel JSONL, CSV, and TensorBoard logging. See [RL Algorithms, Training, and Evaluation](../docs/rl/rl_quickstart.md) and [RL Usage Guide](../docs/rl/usage.md#train-from-the-cli).
+
+
+Recurrent DQN adds LSTM sequence replay and burn-in. DreamerV3 learns a structured categorical RSSM and actor-critic in imagination. Plan2Explore shares that runtime for reward-free disagreement exploration followed by a separately initialized task-adaptation run. Each has smoke/dev/reference YAML; Plan2Explore keeps a set for each phase. See [Recurrent DQN, DreamerV3, and Plan2Explore](aresim/algorithms/README.md) for commands, exact ownership, checkpoint/resume semantics, local evidence and pending reference-learning validation.
+
+Shared RLlib infrastructure lives in `aresim/training/rllib/`; world-model collection/replay/lifecycle in `aresim/training/world_models/`. Algorithms own their networks/objectives. Existing PPO public driver/config aliases and existing checkpoint schemas remain available.

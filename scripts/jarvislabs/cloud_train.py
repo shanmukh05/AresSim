@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch AresSim masked-PPO training on a JarvisLabs instance via the ``jl`` CLI.
+"""Launch AresSim training on a JarvisLabs instance via the ``jl`` CLI.
 
 Stages engine, configs, and seed manifests, creates or reuses an instance, installs
 a Python 3.12 venv, runs ``aresim-rl train``, then downloads ``results/``. Simulator
@@ -22,15 +22,12 @@ from pathlib import Path
 from typing import Any
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from cloud_payload import stage_payload
+
+
 REMOTE_DIRNAME = "aresim"
 SESSION_NAME = ".jarvislabs_session.json"
-SKIP_DIR_NAMES = frozenset(
-    {".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".git"}
-)
-REQUIRED_NOTEBOOKS = (
-    "phase1_open_exploration_split_v1.yaml",
-    "phase1_smoke_eval_v1.yaml",
-)
 DETACH_EXIT_CODES = {130, 143, -2, -15}
 
 
@@ -80,30 +77,6 @@ def save_session(root: Path, **fields: str) -> None:
     current = load_session(root)
     current.update({key: value for key, value in fields.items() if value})
     path.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
-
-
-def _ignore_engine(_directory: str, names: list[str]) -> list[str]:
-    return [name for name in names if name in SKIP_DIR_NAMES or name.endswith(".egg-info")]
-
-
-def stage_payload(root: Path, dest: Path) -> None:
-    """Copy the training payload into ``dest`` without local venvs, UI, or results."""
-    if dest.exists():
-        shutil.rmtree(dest)
-    dest.mkdir(parents=True)
-    shutil.copytree(root / "engine", dest / "engine", ignore=_ignore_engine)
-    shutil.copytree(root / "configs", dest / "configs")
-    notebooks = dest / "notebooks"
-    notebooks.mkdir()
-    missing = [name for name in REQUIRED_NOTEBOOKS if not (root / "notebooks" / name).is_file()]
-    if missing:
-        paths = ", ".join(str(root / "notebooks" / name) for name in missing)
-        raise FileNotFoundError(f"seed manifests are required for training and are missing locally: {paths}")
-    for name in REQUIRED_NOTEBOOKS:
-        shutil.copy2(root / "notebooks" / name, notebooks / name)
-    script_dir = dest / "scripts" / "jarvislabs"
-    script_dir.mkdir(parents=True)
-    shutil.copy2(Path(__file__).with_name("remote_setup.sh"), script_dir / "remote_setup.sh")
 
 
 def _decode_json(text: str) -> Any:
@@ -222,17 +195,28 @@ def upload_wandb_env(machine_id: str, remote_root: str, api_key: str) -> None:
         temp_path.unlink(missing_ok=True)
 
 
-def setup_remote(machine_id: str, remote_root: str) -> None:
+def setup_remote(machine_id: str, remote_root: str, algorithm: str) -> None:
     script = f"{remote_root}/scripts/jarvislabs/remote_setup.sh"
-    jl(["exec", machine_id, "--", "sh", "-lc", f"chmod +x {shlex.quote(script)} && {shlex.quote(script)}"])
+    extras = {"masked_ppo": "rllib", "masked_dqn": "rllib", "recurrent_dqn": "rllib", "muzero": "muzero", "dreamerv3": "world_models", "plan2explore": "world_models"}
+    extra = extras[algorithm]
+    jl(["exec", machine_id, "--", "sh", "-lc", f"chmod +x {shlex.quote(script)} && {shlex.quote(script)} {extra}"])
 
 
-def train_overrides(args: argparse.Namespace) -> list[str]:
+def config_algorithm(config_path: Path) -> str:
+    for line in config_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("algorithm:"):
+            return line.partition(":")[2].split("#", 1)[0].strip().strip("'\"")
+    raise RuntimeError(f"algorithm is missing from {config_path}")
+
+
+def train_overrides(args: argparse.Namespace, algorithm: str) -> list[str]:
     overrides = list(args.overrides)
     gpu_requested = bool(args.gpu) and not args.cpu
     already_set = any(item.startswith("resources.gpus_per_learner=") for item in overrides)
-    if gpu_requested and not already_set:
+    if gpu_requested and algorithm not in {"muzero", "dreamerv3", "plan2explore"} and not already_set:
         overrides.append("resources.gpus_per_learner=1")
+    if gpu_requested and algorithm in {"dreamerv3", "plan2explore"} and not any(item.startswith("resources.device=") for item in overrides):
+        overrides.append("resources.device=cuda")
     return overrides
 
 
@@ -250,8 +234,8 @@ def remote_train_shell(remote_root: str, config: str, overrides: list[str], resu
     )
 
 
-def start_train(machine_id: str, remote_root: str, args: argparse.Namespace) -> str:
-    shell = remote_train_shell(remote_root, args.config, train_overrides(args), args.resume_from)
+def start_train(machine_id: str, remote_root: str, args: argparse.Namespace, algorithm: str) -> str:
+    shell = remote_train_shell(remote_root, args.config, train_overrides(args, algorithm), args.resume_from)
     payload = jl_json(["run", "--on", machine_id, "--no-follow", "--yes", "--", "bash", "-lc", shell])
     if not isinstance(payload, dict) or not payload.get("run_id"):
         raise RuntimeError(f"jl run did not return a run_id: {payload!r}")
@@ -339,8 +323,12 @@ def _self_check_helpers(root: Path) -> None:
         raise RuntimeError("tracking.mode override should disable W&B")
     gpu = argparse.Namespace(overrides=[], gpu="L4", cpu=False)
     cpu = argparse.Namespace(overrides=[], gpu=None, cpu=True)
-    if train_overrides(gpu) != ["resources.gpus_per_learner=1"] or train_overrides(cpu) != []:
+    if train_overrides(gpu, "masked_ppo") != ["resources.gpus_per_learner=1"] or train_overrides(cpu, "masked_ppo") != []:
         raise RuntimeError("GPU resource overrides are wrong")
+    if config_algorithm(root / "configs" / "muzero" / "reference.yaml") != "muzero":
+        raise RuntimeError("MuZero config detection is wrong")
+    if train_overrides(gpu, "muzero") != []:
+        raise RuntimeError("MuZero must not receive RLlib GPU overrides")
     json_command = command_with_json(["run", "--on", "1", "--", "bash", "-lc", "true"])
     if json_command.index("--json") > json_command.index("--"):
         raise RuntimeError("--json must be inserted before -- for jl run")
@@ -356,7 +344,7 @@ def cmd_self_check(_args: argparse.Namespace) -> int:
             [
                 dest / "engine" / "pyproject.toml",
                 dest / "configs" / "masked_ppo" / "reference.yaml",
-                dest / "notebooks" / "phase1_open_exploration_split_v1.yaml",
+                dest / "configs" / "seeds" / "phase1_open_exploration_split_v1.yaml",
                 dest / "scripts" / "jarvislabs" / "remote_setup.sh",
             ],
             error="staged payload missing",
@@ -378,18 +366,21 @@ def provision_machine(args: argparse.Namespace, root: Path) -> str:
     return machine_id
 
 
-def sync_code(machine_id: str, root: Path, args: argparse.Namespace) -> str:
+def sync_code(machine_id: str, root: Path, args: argparse.Namespace, algorithm: str) -> str:
+    home = remote_home(machine_id)
+    remote_root = f"{home}/{REMOTE_DIRNAME}"
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp) / REMOTE_DIRNAME
         stage_payload(root, staging)
-        jl(["upload", machine_id, str(staging)])
-    remote_root = f"{remote_home(machine_id)}/{REMOTE_DIRNAME}"
+        # Directory uploads copy their basename into the destination. Target its
+        # parent explicitly so reused checkouts do not become aresim/aresim.
+        jl(["upload", machine_id, str(staging), f"{home}/"])
     save_session(root, machine_id=machine_id, remote_root=remote_root)
     api_key = os.environ.get("WANDB_API_KEY")
     if api_key:
         upload_wandb_env(machine_id, remote_root, api_key)
     if not args.skip_setup:
-        setup_remote(machine_id, remote_root)
+        setup_remote(machine_id, remote_root, algorithm)
     return remote_root
 
 
@@ -411,11 +402,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     root = repo_root()
     load_local_env(root)
     validate_run(args, root)
+    algorithm = config_algorithm(root / args.config)
     machine_id = provision_machine(args, root)
     leave_running = False
     try:
-        remote_root = sync_code(machine_id, root, args)
-        run_id = start_train(machine_id, remote_root, args)
+        remote_root = sync_code(machine_id, root, args, algorithm)
+        run_id = start_train(machine_id, remote_root, args, algorithm)
         save_session(root, machine_id=machine_id, remote_root=remote_root, run_id=run_id)
         print(f"run {run_id}")
         if args.detach:

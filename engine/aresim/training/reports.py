@@ -3,7 +3,7 @@
 Pulls canonical training history from W&B and writes matplotlib figures plus exported
 metric tables under ``<run>/reports/``. Does not start Ray or the simulator.
 
-**Last updated:** September 12, 2026
+**Last updated:** October 13, 2026
 
 **Contains:** :func:`generate_report`, :func:`wandb_run_path`.
 
@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-# Stable W&B metric names from :func:`aresim.algorithms.ppo.train.canonicalize_rllib_metrics`.
+# Canonical PPO/DQN metrics plus MuZero loss and replay-weight diagnostics.
 TRAINING_METRICS = (
     "train/environment_steps",
     "train/episodes",
@@ -28,6 +28,26 @@ TRAINING_METRICS = (
     "learner/total_loss",
     "learner/policy_loss",
     "learner/value_loss",
+    "learner/reward_loss",
+    "learner/constraint_loss",
+    "learner/consistency_loss",
+    "learner/consistency_loss_unweighted",
+    "learner/consistency_target_std",
+    "learner/policy_target_age_mean",
+    "learner/policy_target_age_max",
+    "train/reanalysis_start_fraction",
+    "system/reanalysis_sampled_starts",
+    "system/reanalysis_search_roots",
+    "system/reanalysis_value_roots",
+    "learner/total_loss_unweighted",
+    "learner/policy_loss_unweighted",
+    "learner/value_loss_unweighted",
+    "learner/reward_loss_unweighted",
+    "learner/constraint_loss_unweighted",
+    "learner/importance_weight_mean",
+    "learner/importance_weight_min",
+    "learner/importance_weight_max",
+    "learner/effective_sample_size",
     "learner/entropy",
     "learner/approx_kl",
     "learner/clip_fraction",
@@ -38,11 +58,56 @@ TRAINING_METRICS = (
     "learner/q_mean",
     "learner/q_max",
     "learner/q_min",
-)
+    "train/search_simulations",
+    "train/replay_steps",
+    "train/learner_updates",
+    "system/elapsed_seconds",
+    "learner/reconstruction_loss",
+    "learner/dynamics_kl",
+    "learner/representation_kl",
+    "learner/continuation_loss",
+    "learner/legality_loss",
+    "learner/actor_loss",
+    "learner/disagreement_loss",
+    "learner/imagined_reward",
+    "learner/return_scale",
+    "learner/imagined_mask_density",
+    "learner/recurrent_learned_timesteps",
+    "learner/recurrent_burn_in_timesteps",
+    "learner/recurrent_padding_fraction",
+    "train/actual_replay_ratio",
+    "train/observed_positions",
+    "train/pretraining_environment_steps",
+    "train/cumulative_environment_steps",
+    "system/prefix_reconstruction_seconds",
+    "system/collector_reconstruction_seconds",
+
+) + tuple(f"learner/legality_{metric}/{action}" for metric in ("recall", "false_positive_rate", "positive_count", "negative_count") for action in range(10))
 
 PLOT_GROUPS: dict[str, tuple[tuple[str, ...], str]] = {
+    "world_model_losses": (("learner/reconstruction_loss", "learner/dynamics_kl", "learner/representation_kl", "learner/continuation_loss", "learner/legality_loss"), "World-model losses"),
+    "imagined_behavior": (("learner/actor_loss", "learner/value_loss", "learner/entropy", "learner/imagined_reward"), "Imagined behavior"),
+    "exploration": (("learner/disagreement_loss", "learner/imagined_reward", "train/observed_positions"), "Plan2Explore exploration"),
+    "recurrent_replay": (("learner/recurrent_learned_timesteps", "learner/recurrent_burn_in_timesteps", "learner/recurrent_padding_fraction"), "Recurrent DQN replay"),
+    "world_model_replay": (("train/actual_replay_ratio", "system/prefix_reconstruction_seconds", "system/collector_reconstruction_seconds"), "World-model replay and history cost"),
+    "phase_budget": (("train/environment_steps", "train/pretraining_environment_steps", "train/cumulative_environment_steps"), "Phase interaction budgets"),
     "training_returns": (("train/shaped_return", "train/episode_length"), "Training returns"),
-    "learner_losses": (("learner/total_loss", "learner/policy_loss", "learner/value_loss"), "Learner losses"),
+    "learner_losses": (("learner/total_loss", "learner/policy_loss", "learner/value_loss", "learner/reward_loss", "learner/constraint_loss", "learner/consistency_loss"), "Learner losses"),
+    "learner_losses_unweighted": (
+        ("learner/total_loss_unweighted", "learner/policy_loss_unweighted", "learner/value_loss_unweighted",
+         "learner/reward_loss_unweighted", "learner/constraint_loss_unweighted", "learner/consistency_loss_unweighted"),
+        "MuZero losses without replay importance weights",
+    ),
+    "replay_importance_weights": (
+        ("learner/importance_weight_mean", "learner/importance_weight_min", "learner/importance_weight_max"),
+        "MuZero replay importance weights",
+    ),
+    "replay_effective_sample_size": (("learner/effective_sample_size",), "MuZero effective replay batch size"),
+    "muzero_legality_recall": (tuple(f"learner/legality_recall/{a}" for a in (5, 6, 9)), "MuZero rare-action legality recall"),
+    "muzero_legality_false_positives": (tuple(f"learner/legality_false_positive_rate/{a}" for a in (5, 6, 9)), "MuZero rare-action legality false positives"),
+    "muzero_target_age": (("learner/policy_target_age_mean", "learner/policy_target_age_max"), "MuZero policy target age (learner updates)"),
+    "muzero_reanalysis_coverage": (("train/reanalysis_start_fraction",), "MuZero reanalysed fraction of learned starts"),
+    "muzero_consistency": (("learner/consistency_loss_unweighted", "learner/consistency_target_std"), "MuZero temporal consistency supervision"),
     "learner_diagnostics": (
         ("learner/entropy", "learner/explained_variance", "learner/approx_kl"),
         "Learner diagnostics",
@@ -103,13 +168,26 @@ def _plot_metric_group(history, metrics: tuple[str, ...], title: str, output: Pa
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    present = [name for name in metrics if name in history.columns and history[name].notna().any()]
+    series = {}
+    for name in metrics:
+        if name not in history.columns:
+            continue
+        values = history[name]
+        for metric, denominator in (("recall", "positive"), ("false_positive_rate", "negative")):
+            prefix = f"learner/legality_{metric}/"
+            if name.startswith(prefix):
+                count = f"learner/legality_{denominator}_count/{name.removeprefix(prefix)}"
+                if count in history.columns:
+                    values = values.where(history[count] > 0)
+        if values.notna().any():
+            series[name] = values
+    present = list(series)
     if not present:
         return False
     steps, xlabel = _step_series(history)
     figure, axis = plt.subplots(figsize=(8, 4))
     for name in present:
-        axis.plot(steps, history[name], label=name.split("/", 1)[-1])
+        axis.plot(steps, series[name], label=name.split("/", 1)[-1])
     axis.set_title(title)
     axis.set_xlabel(xlabel)
     axis.set_ylabel("value")
