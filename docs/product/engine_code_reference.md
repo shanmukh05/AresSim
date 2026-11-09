@@ -414,7 +414,6 @@ Neither adapter implements gameplay validation, state mutation, observation feat
 - `catalog.py` owns dependency-free policy IDs, display labels and live-controller kinds used by API policy integration; algorithm registration owns model/loader IDs and dependency extras.
 - `README.md` links the eight illustrated algorithm `DETAILS.md` documents; their `.drawio.png` files embed editable diagram XML.
 - `baselines/` groups the four built-in baseline policies (`random.py`, `random_valid.py`, `wait.py`, `scripted.py`). [`DETAILS.md`](../../engine/aresim/algorithms/baselines/DETAILS.md) explains each one. The scripted policy cannot access canonical `WorldState`.
-- `llm_dm/state.py` owns the common permitted observation encoder and public game rules; `memory.py` owns episode memory.
 - `common/masks.py` shares mask validation across baselines.
 - `common/config_decode.py` shares YAML-to-dataclass decoding and scalar validation for algorithm and experiment configs.
 - `common/tracking.py` owns W&B run-id helpers so training entry points do not invent ids.
@@ -439,9 +438,10 @@ Neither adapter implements gameplay validation, state mutation, observation feat
 - `muzero/replay.py` owns completed trajectories, per-position policy versions, priorities and bounded replay sampling.
 - `muzero/train.py` owns one learner, self-normalized importance-weighted loss with unweighted diagnostics, actual-step update credit, bounded policy lag, batched full-unroll reanalysis of selected actual-minibatch starts, rare-action positive legality weighting, temporal consistency and quiescent collector/replay checkpoints. Numbered rotation/resume sorts by numeric step; final is compared by its recorded step count. It performs no held-out evaluation.
 - `muzero/checkpoint.py` owns batched history packing, native sidecars and frozen sampled/greedy inference; loading a policy does not start Ray.
-- `muzero/DETAILS.md` documents configuration, execution, resume, inference and separate manual evaluation. See [parallel implementation and A30 evidence](../rl/muzero_parallel_2026-10-11.md).
+- `muzero/DETAILS.md` documents configuration, execution, resume, inference and separate manual evaluation. See parallel implementation and A30 evidence (archived report).
 - `llm_dm/config.py` owns independent Actor/LLM-Learner providers, shared budgets, history and learning-file imports.
 - `llm_dm/state.py` owns the common permitted observation encoder and public game rules; `memory.py` owns episode memory.
+- `llm_dm/focus.py` builds observed target options, retains the selected goal, computes observed routes, and retrieves applicable advice.
 - `llm_dm/providers/http.py` owns native LLM endpoints and TypeSafe Choice normalization; no TypeSafe SDK is required.
 - `llm_dm/agent.py` owns the shared `LLMDMAgent` and outcome lifecycle; legal Actor choices are never strategically overridden.
 - `llm_dm/rollout.py` owns `aresim.llm_dm.run.v1`, required learning rounds, advice carry-forward, evaluation and export.
@@ -484,7 +484,7 @@ When a field is added to authoritative state, decide explicitly whether the UI n
 
 ### `engine/aresim/integrations/policy.py`
 
-Bridges one live `AresEngine` session to a registered baseline, Decision Models, or checkpoint agent for UI Algorithm mode.
+Bridges one live `AresEngine` session to a registered baseline, llm_dm, or checkpoint agent for UI Algorithm mode.
 
 - Builds policy observations and legal-action masks from the current world state.
 - Decodes the chosen action ID back into an engine command.
@@ -512,7 +512,7 @@ Bridges one live `AresEngine` session to a registered baseline, Decision Models,
 | Change RL reward/task projection | `components/rewards.py`, `components/tasks.py` | Engine reward separation and adapter parity |
 | Change environment adapter shapes | `envs/` | Gymnasium/PettingZoo compliance and direct parity |
 | Add or change a baseline policy | `algorithms/` | Agent contracts, mask behavior, fixed-seed rollouts |
-| Add or change the Decision Models rover agent | `algorithms/llm_dm/` | Encoder, fake-client fallbacks, attach, rollout YAML |
+| Add or change the model-agent pipeline | `algorithms/llm_dm/` | Goals, focused Memory, prompts, providers, learning, and replay export |
 | Add or change a learned algorithm | `algorithms/ppo/`, `algorithms/dqn/` or `algorithms/muzero/` | Registry, experiment YAML, algorithm workflow |
 | Change rollout or trajectory semantics | `training/` | Alignment, integrity, round-trip, and gameplay-format separation |
 
@@ -576,7 +576,7 @@ Whenever `engine/` changes:
 
 ### October 6 pipeline corrections
 
-`training/provenance.py` freezes numerical configs, source hashes and seed contents. `training/selection.py` provides separate manual validation, best checkpoint preservation and success-gate utilities. October 7 trainers save rotating and final checkpoints without calling evaluation or selection; only the checkpoint interval schedules saves. `components/observations.py` adds crop-derived `LocalMemoryObservation`; the common encoder consumes its navigation/visited features. MuZero adds latent legality/continuation heads, replay priority refresh and reanalysis. Regression coverage lives in `engine/tests/test_pipeline_invariants.py`. See [the correction notes](../rl/pipeline_fixes_2026-10-06.md).
+`training/provenance.py` freezes numerical configs, source hashes and seed contents. `training/selection.py` provides separate manual validation, best checkpoint preservation and success-gate utilities. October 7 trainers save rotating and final checkpoints without calling evaluation or selection; only the checkpoint interval schedules saves. `components/observations.py` adds crop-derived `LocalMemoryObservation`; the common encoder consumes its navigation/visited features. MuZero adds latent legality/continuation heads, replay priority refresh and reanalysis. Regression coverage lives in `engine/tests/test_pipeline_invariants.py`. See the correction notes (archived report).
 
 For full recurrent/world-model training, transfer, inference and local verification details, see [Recurrent DQN, DreamerV3 and Plan2Explore](../../engine/aresim/algorithms/README.md).
 

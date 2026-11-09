@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-16
 
-See [pipeline corrections and the October 7 follow-up](pipeline_fixes_2026-10-06.md) for the versioned contracts, observed memory, frozen configuration, manual validation selection, and regression evidence. Start full-mission PPO training with `configs/masked_ppo/reference.yaml` on a CUDA host. Training saves checkpoints without automatic evaluation; run analysis separately afterward. The PPO folder keeps only smoke, dev, and reference presets; reduced delivery missions remain covered by regression fixtures.
+See pipeline corrections and the October 7 follow-up (archived report) for the versioned contracts, observed memory, frozen configuration, manual validation selection, and regression evidence. Start full-mission PPO training with `configs/masked_ppo/reference.yaml` on a CUDA host. Training saves checkpoints without automatic evaluation; run analysis separately afterward. The PPO folder keeps only smoke, dev, and reference presets; reduced delivery missions remain covered by regression fixtures.
 
 This is the canonical guide to the reinforcement-learning implementation in AresSim. It explains the implemented policies, action-masked PPO, mask-aware DQN, neural network, online sampling, learner updates, evaluation, metrics, checkpoints, and extension surface.
 
@@ -16,7 +16,7 @@ This is the canonical guide to the reinforcement-learning implementation in Ares
 | Uniform random | No | No; may select illegal actions | Implemented | Invalid-action and environment robustness baseline |
 | Random-valid | No | Yes | Implemented | Untrained legal-action baseline |
 | Scripted | No | Yes | Implemented | Deterministic partial-observation heuristic baseline |
-| llm_dm | Prompt advice via required LLM Learner | Yes, both Actor types | Implemented | Decision Model or LLM Actor + shared Memory; see [llm_dm workflow](../llm_dm/implementation.md) |
+| llm_dm | Prompt advice via required LLM Learner | Yes, both Actor types | Implemented | Decision Model or LLM Actor + focused goal Memory; see [llm_dm workflow](../llm_dm/implementation.md) |
 | Action-masked PPO | Yes, on-policy | Yes, in exploration, training, and inference | Implemented | First learned reference policy |
 | Action-masked DQN | Yes, off-policy | Yes, in selection, epsilon-greedy, and TD targets | Implemented | Sample-efficient discrete comparison |
 | MuZero | Yes, model-based | Yes, at the real search root | Implemented | Learned-model planning comparison |
@@ -40,7 +40,7 @@ engine/.venv/bin/pip install -e './engine[dev,rllib,notebook]'
 
 The `rllib` extra installs the environment dependencies, Ray with RLlib/Tune, PyTorch, W&B, YAML, plotting, and notebook support. Exact installed versions are recorded in each run manifest.
 
-Install `./engine[muzero]` for MuZero with PyTorch and Ray Core 2.58; RLlib/Tune are not required. Every MuZero training run uses Ray; smoke/dev use one CPU collector with one environment; the CUDA reference uses eight CPU collectors × four environments and batched search/reanalysis. See [parallel MuZero configuration and timing evidence](muzero_parallel_2026-10-11.md). Presets remain under `configs/muzero/`.
+Install `./engine[muzero]` for MuZero with PyTorch and Ray Core 2.58; RLlib/Tune are not required. Every MuZero training run uses Ray; smoke/dev use one CPU collector with one environment; the CUDA reference uses eight CPU collectors × four environments and batched search/reanalysis. See parallel MuZero configuration and timing evidence (archived report). Presets remain under `configs/muzero/`.
 
 Install `./engine[world_models]` for DreamerV3 and Plan2Explore (Torch + Ray Core, no RLlib/Tune). Recurrent DQN uses `./engine[rllib]`. New presets live under `configs/recurrent_dqn/`, `configs/dreamerv3/`, and `configs/plan2explore/{pretrain,adapt}/`; each has smoke/dev/reference YAMLs. See the [phase commands and budgets](../../engine/aresim/algorithms/README.md).
 
@@ -381,7 +381,7 @@ Nonterminal base terms are clipped to `[-2, 2]`; the potential contribution is a
 
 Reward code lives in [`components/rewards.py`](../../engine/aresim/components/rewards.py). Changing the selected RL reward never rewrites the engine/UI reward or replay history.
 
-The October 8 DQN reference isolates sample acquisition credit in `seed_3_sample_credit_030`, using a maximum 2.4 collection bonus for the unchanged 4 kg quota and retaining −0.025 time cost. Its [observed results](../../results/double_duelling_dqn/seed_3_sample_credit_030/learnings.md) show mission improvement for that learner seed. The October 10 MuZero reference adopted the same reward; the October 11 parallel trial was `seed_7_sample_credit_030_parallel`. The [October 13 checkpoint/loss corrections](muzero_learning_fixes_2026-10-13.md) used trial `seed_7_sample_credit_030_parallel_lossnorm`, which also completed no full validation missions. The [learning-path follow-up](muzero_learning_v3_2026-10-13.md) now uses `seed_7_sample_credit_030_learning_v3`; its task-learning benefit and CUDA throughput remain unverified. Enabling the bonus versions the shaped profile/breakdown to v3. At the zero default, the extra term is omitted and the v2 reward contract is preserved; sparse rewards also remain v2. See [run instructions](usage.md).
+The October 8 DQN reference isolates sample acquisition credit in `seed_3_sample_credit_030`, using a maximum 2.4 collection bonus for the unchanged 4 kg quota and retaining −0.025 time cost. Its [observed results](../../results/double_duelling_dqn/seed_3_sample_credit_030/learnings.md) show mission improvement for that learner seed. The October 10 MuZero reference adopted the same reward; the October 11 parallel trial was `seed_7_sample_credit_030_parallel`. The October 13 checkpoint/loss corrections (archived report) used trial `seed_7_sample_credit_030_parallel_lossnorm`, which also completed no full validation missions. The learning-path follow-up (archived report) now uses `seed_7_sample_credit_030_learning_v3`; its task-learning benefit and CUDA throughput remain unverified. Enabling the bonus versions the shaped profile/breakdown to v3. At the zero default, the extra term is omitted and the v2 reward contract is preserved; sparse rewards also remain v2. See [run instructions](usage.md).
 
 ## Training metrics and W&B
 

@@ -14,7 +14,7 @@ The policy head produces `[B,10]` masked logits and the value head produces `[B,
 
 The PNG figures contain editable draw.io XML: open the PNG directly in draw.io to revise the illustration. Shapes and numbers are grounded in the adjacent model/configuration files and `../common/encoder.py`.
 
-**October 7, 2026 update:** new presets use `local_memory` v2, capped delivery/task rewards v2 and frozen snapshots. Training saves rotating and final checkpoints without evaluation rollouts or validation selection. Evaluation and analysis run separately. Architecture details that explicitly name `local.v1` describe the retained legacy input. See [pipeline corrections](../../../../docs/rl/pipeline_fixes_2026-10-06.md) for the current contract.
+**October 7, 2026 update:** new presets use `local_memory` v2, capped delivery/task rewards v2 and frozen snapshots. Training saves rotating and final checkpoints without evaluation rollouts or validation selection. Evaluation and analysis run separately. Architecture details that explicitly name `local.v1` describe the retained legacy input. See pipeline corrections (archived report) for the current contract.
 
 Implementation reference for the built-in `masked_ppo` algorithm and `local_cnn_actor_critic` model. Covers data flow, PPO/GAE/losses, the Ray training loop, and checkpoint inference. Simulator rules, rewards, and legality live in `aresim.core` and `aresim.components`; this package wires them into Ray RLlib and PyTorch.
 

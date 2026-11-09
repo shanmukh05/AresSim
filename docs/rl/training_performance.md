@@ -19,7 +19,7 @@ Reference-sized models consumed four scripted simulator episodes from seeds 3, 3
 
 Plan2Explore replay packing improved from roughly 21–22 ms to 0.78–0.84 ms. World-model policy payloads fell from 53,283,176 to 19,839,176 bytes (63% fewer bytes). MuZero replay sampling changed little in this small population, and no material search/reanalysis acceleration is claimed from the timing variation.
 
-Raw measurements: [CPU before/after](performance_cpu_2026-11-07.json). Profiling artifacts for this session are `/tmp/ares-speed-reference-before/` and `/tmp/ares-speed-packed-after/`. These measurements do not establish long-budget mission learning or GPU throughput.
+Raw measurements were saved as `performance_cpu_2026-11-07.json`. This local artifact is not included in the checkout. Profiling artifacts for this session are `/tmp/ares-speed-reference-before/` and `/tmp/ares-speed-packed-after/`. These measurements do not establish long-budget mission learning or GPU throughput.
 
 ## What changed
 

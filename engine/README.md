@@ -65,11 +65,11 @@ parallel_environment = make_parallel_env()
 
 `AresEnvironment` composes the canonical engine with registered observation, action, reward, and task implementations. The defaults remain the local numerical observation, masked ten-action adapter, open-exploration task, and shaped RL reward. `AresGymEnv` unwraps exactly `rover_0`; `AresParallelEnv` exposes the same results through PettingZoo dictionaries. RL rewards are separate from the existing engine/UI reward retained in history and exposed as `engine_reward` in step info.
 
-The supported extension surface is the typed protocols in `aresim.components`, the context-aware `ComponentRegistry`, and the public factories. Custom components may use their own typed config captured by a registry factory; no source edits, inheritance, automatic plugin discovery, or YAML loading are required. See [Extend environment components](../docs/rl/usage.md#extend-environment-components) for a complete example and contract-test requirements.
+The supported extension surface is the typed protocols in `aresim.components`, the context-aware `ComponentRegistry`, and the public factories. Custom components may use their own typed config captured by a registry factory; no source edits, inheritance, automatic plugin discovery, or YAML loading are required. See [Extend environment components](../docs/rl/usage.md#extend-environment-components) for a complete example and verification requirements.
 
 ## Baseline rollouts
 
-The environment extra includes random, random-valid, Wait and scripted agents. The unified `llm_dm` algorithm uses a Decision Model or LLM Actor, shared episode Memory and a mandatory LLM Learner. Install `aresim[llm_dm]`; use native HTTPS providers with locally configured credentials. See [the implementation guide](../docs/llm_dm/implementation.md) for complete configs and commands.
+The environment extra includes random, random-valid, Wait and scripted agents. The unified `llm_dm` algorithm uses a Decision Model or LLM Actor, focused episode Memory and a mandatory LLM Learner. The Actor selects a persistent goal and each primitive action. Action requests receive only the current working context and applicable advice. Install `aresim[llm_dm]`; use native HTTPS providers with locally configured credentials. See [the implementation guide](../docs/llm_dm/implementation.md) for complete configs and commands.
 
 ```python
 from aresim.training import EpisodeSpec, RolloutConfig, RolloutRunner, TrajectoryWriter

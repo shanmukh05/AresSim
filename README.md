@@ -5,12 +5,12 @@
 <h1 align="center">AresSim</h1>
 
 <p align="center">
-  A deterministic Mars survival simulation — playable in the browser, trainable as an RL environment.
+  A deterministic Mars simulation for human play, reinforcement learning, and model agents.
 </p>
 
-AresSim is a Phase 1 Mars civilization-building environment: one unmanned rover, one landing build pad, and a seeded `32×32` world. Python owns every gameplay rule. The React UI only displays and dispatches; Gymnasium, PettingZoo, and RLlib adapters wrap the same engine without duplicating it.
+AresSim has one rover, one landing pad, and a seeded `32×32` world. Python controls all game rules. The React UI displays the game and sends actions. Gymnasium, PettingZoo, and RLlib use the same engine.
 
-Same seed + same commands → same checksums.
+The same seed and commands produce the same state checksums.
 
 Walkthrough of the environment: [AresSim on TensorWrites](https://www.tensorwrites.com/posts/aressim-env).
 
@@ -24,9 +24,10 @@ Walkthrough of the environment: [AresSim on TensorWrites](https://www.tensorwrit
 
 One simulator supports human play, scripted baselines, and learned policies:
 
-- **Play** a survival loop: scout terrain, scan, extract ice and ore, haul cargo, service the pad, and build while battery, health, power, weather, and livability decay.
+- **Play:** Explore terrain, scan rocks for samples, extract ice, deliver cargo, service the pad, and build. Monitor battery, health, power, and colony livability.
 - **Inspect** the same episode as a player, an analyst, or a policy: Manual, Algorithm, and Replay modes share snapshots from the Python API.
-- **Train** PPO, DQN, Recurrent DQN, MuZero, DreamerV3, or Plan2Explore with checked-in YAML, W&B metrics, native checkpoints, and frozen evaluation on fixed seed splits.
+- **Train:** Use PPO, DQN, Recurrent DQN, MuZero, DreamerV3, or Plan2Explore. YAML files set the run parameters. W&B records training metrics.
+- **Run model agents:** Use `llm_dm` with a Decision Model or LLM Actor and a required LLM Learner. The Actor selects a goal and each action. The Learner reviews completed games and proposes advice.
 - **Record** portable trajectories (`aresim.trajectory.episode.v1`) from the UI or from `RolloutRunner`, then reload them in Replay.
 - **Attach** a baseline or any learned-policy checkpoint in Algorithm mode; inference stays on the API host, and Python still validates every action.
 
@@ -42,7 +43,7 @@ The open-exploration task has no mission-complete victory. The resource-mission 
 - **Training stack** — RLlib PPO and feedforward/recurrent DQN; native PyTorch/Ray MuZero, DreamerV3 and Plan2Explore; shared symbolic observations, UI-loadable checkpoints and W&B metrics
 - **Baselines** — Wait, uniform random, random-valid, and a scripted local-observation heuristic, all on the same `Agent` contract as PPO and DQN
 
-See the [recurrent/world-model guide](engine/aresim/algorithms/README.md) for the three new algorithms, Plan2Explore pretrain/adapt commands, presets, and local verification limits.
+See the [algorithm guide](engine/aresim/algorithms/README.md) for all policies. See [LLM-DM details](engine/aresim/algorithms/llm_dm/DETAILS.md) for model prompts, Memory, learning, and replay workflows.
 
 ## Flexibility
 
@@ -54,11 +55,11 @@ The engine is the source of truth. New behavior plugs in at registries; adapters
 | Rollout agent | Same `Agent` contract as Wait / PPO checkpoints |
 | Learned algorithm | `TrainingRegistry` algorithm / model / loader / runner registration + typed YAML |
 | Framework | `make_env`, `make_gym_env`, `make_parallel_env` — one transition, three APIs |
-| Install | Base extra is FastAPI only; `env`, `rllib`, `muzero`, `world_models`, and `notebook` stay optional |
+| Install | Base extra is FastAPI only; `env`, `rllib`, `muzero`, `world_models`, `llm_dm`, and `notebook` stay optional |
 
 Unknown YAML fields, unsafe tags, and incompatible batch sizes fail before Ray workers start. `--set path=value` overrides a config without editing the file. Custom components do not require source edits, inheritance, or plugin discovery.
 
-Later milestones (multi-rover and additional LLM/controller strategies) are designed to reuse this core rather than fork it. See [Implementation Checklist](docs/project/implementation_checklist.md).
+Future multi-rover and hybrid controllers must use the same engine. See [Implementation Checklist](docs/project/implementation_checklist.md).
 
 ## Repository layout
 
@@ -111,6 +112,27 @@ engine/.venv/bin/aresim-rl train configs/masked_dqn/smoke.yaml
 
 See the [RL usage guide](docs/rl/usage.md) for W&B, evaluation, trajectories, and extension contracts. For cloud GPUs, use the [Vast.ai scripts and run guide](docs/rl/vastai.md). The [illustrated algorithm guide](engine/aresim/algorithms/README.md) maps each policy’s inputs, outputs and training steps.
 
+## Quick start — model agents
+
+Install the model-agent dependencies. Run the offline check first:
+
+```bash
+engine/.venv/bin/pip install -e './engine[llm_dm]'
+engine/.venv/bin/aresim-rl rollout configs/llm_dm/fake_smoke.yaml
+```
+
+For a live run, set `JEV_API_KEY` and `OPENAI_API_KEY` in `.env.local`. The main profile uses Jev as Actor and GPT-6 Luna as Learner:
+
+```bash
+engine/.venv/bin/aresim-rl rollout configs/llm_dm/10-games.yaml --env-file .env.local
+```
+
+Edit `experiment_name`, `episodes`, and `max_episode_steps` in the config. The episode list sets the game count. The filename does not set it. Use `configs/llm_dm/llm-actor.yaml` to select an LLM Actor.
+
+Focused Memory supplies the current state, the active goal route, recent outcomes, and applicable advice. All compatible lessons remain available for goal selection. The Learner updates advice between games. It does not change model weights. A live run is needed to measure game performance.
+
+Open `results/llm_dm/<experiment_name>/summary.log` first. The run also saves `manifest.json`, `games.jsonl`, `learning.jsonl`, and `selected-bundle.json`. Each game has one JSON file in `replays/`. The file updates during play and can be imported into the UI. Repeated experiment names get a numeric suffix.
+
 ## Documentation
 
 Start at [`docs/README.md`](docs/README.md). Suggested order:
@@ -118,7 +140,8 @@ Start at [`docs/README.md`](docs/README.md). Suggested order:
 1. New to the product: [Environment Rules](docs/product/environment_rules.md) → [UI Design](docs/product/ui_design.md)
 2. Working on the backend: [Engine Code Reference](docs/product/engine_code_reference.md)
 3. Starting RL work: [Usage](docs/rl/usage.md) → [Algorithms](docs/rl/rl_quickstart.md)
-4. Status: [Implementation Checklist](docs/project/implementation_checklist.md)
+4. Model agents: [LLM-DM details](engine/aresim/algorithms/llm_dm/DETAILS.md) → [Run guide](docs/llm_dm/implementation.md)
+5. Status: [Implementation Checklist](docs/project/implementation_checklist.md)
 
 ## Contributing
 

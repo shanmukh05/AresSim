@@ -1,6 +1,6 @@
 # AresSim RL Usage Guide
 
-Updated October 7, 2026: read [pipeline corrections](pipeline_fixes_2026-10-06.md) before starting another experiment. New presets use observed navigation memory, reward/task v2 and frozen environment snapshots. Training saves periodic and final checkpoints without evaluation rollouts, validation selection or success-gate checks. Use `configs/masked_ppo/reference.yaml` directly for a fresh full-mission PPO run; no smaller delivery preset is required. Historical checkpoints require an explicit `--allow-environment-mismatch` for diagnostic evaluation and cannot resume under changed semantics.
+Updated October 7, 2026: read pipeline corrections (archived report) before starting another experiment. New presets use observed navigation memory, reward/task v2 and frozen environment snapshots. Training saves periodic and final checkpoints without evaluation rollouts, validation selection or success-gate checks. Use `configs/masked_ppo/reference.yaml` directly for a fresh full-mission PPO run; no smaller delivery preset is required. Historical checkpoints require an explicit `--allow-environment-mismatch` for diagnostic evaluation and cannot resume under changed semantics.
 
 MuZero is available through `aresim-rl train configs/muzero/smoke.yaml` after installing `./engine[muzero]`. It uses a dedicated PyTorch trainer with the same experiment, checkpoint, and evaluation commands; see the [MuZero workflow](../../engine/aresim/algorithms/muzero/DETAILS.md). The `dev.yaml` and CUDA `reference.yaml` presets live beside the smoke config.
 
@@ -17,7 +17,7 @@ Practical guide for running environments, training PPO, DQN, Recurrent DQN, MuZe
 | [Experiment YAML](#experiment-yaml) | Checked-in configs and key fields |
 | [Train from Python](#train-from-python) | `load_experiment`, `run_experiment`, checkpoints |
 | [After training](#after-training) | Evaluate, compare checkpoints, inspect, and report |
-| [UI policy inference](#ui-policy-inference) | Attach baselines, Decision Models, or learned-policy checkpoints in Algorithm mode |
+| [UI policy inference](#ui-policy-inference) | Attach baselines, llm_dm, or RL checkpoints in Algorithm mode |
 | [Create an environment](#create-an-environment) | Framework-neutral, Gymnasium, PettingZoo factories |
 | [Run baseline rollouts](#run-baseline-rollouts) | Deterministic episodes with built-in agents |
 | [Record trajectories](#record-trajectories) | `aresim.trajectory.v1` datasets and validation |
@@ -27,9 +27,9 @@ Practical guide for running environments, training PPO, DQN, Recurrent DQN, MuZe
 
 **Notebooks**
 
-- [Masked PPO training](../../notebooks/masked_ppo_training.ipynb) — end-to-end learned-policy training in Jupyter
-- [Algorithm pipeline](../../notebooks/rl_algorithm_pipeline.ipynb) — baseline rollout, trajectory, and determinism smoke test
-- [Evaluation report template](../../notebooks/evaluation_report_template.ipynb) — optional manual W&B analysis notebook (not executed by the CLI)
+- Masked PPO training (`masked_ppo_training.ipynb`, optional local notebook) — end-to-end learned-policy training in Jupyter
+- Algorithm pipeline (`rl_algorithm_pipeline.ipynb`, optional local notebook) — baseline rollout, trajectory, and determinism smoke test
+- Evaluation report template (`evaluation_report_template.ipynb`, optional local notebook) — optional manual W&B analysis notebook (not executed by the CLI)
 
 ---
 
@@ -82,9 +82,9 @@ Masked PPO, mask-aware DQN, and MuZero are the implemented learned algorithms. T
 | [`configs/plan2explore/pretrain/smoke.yaml`](../../configs/plan2explore/pretrain/smoke.yaml) | 256 | disabled | Reward-free disagreement exploration smoke |
 | [`configs/plan2explore/adapt/smoke.yaml`](../../configs/plan2explore/adapt/smoke.yaml) | 256 | disabled | Separate task adaptation; requires initializer |
 | [`configs/llm_dm/fake_smoke.yaml`](../../configs/llm_dm/fake_smoke.yaml) | 32 (rollout) | n/a | Offline llm_dm Actor/Memory/Learner smoke |
-| [`configs/llm_dm/10-games.yaml`](../../configs/llm_dm/10-games.yaml) | 128 per game | n/a | Hybrid ten-game learning run (Actor and Learner credentials required) |
+| [`configs/llm_dm/10-games.yaml`](../../configs/llm_dm/10-games.yaml) | From config | n/a | Jev Actor and LLM Learner; the episode list sets the game count |
 
-The llm_dm Learner improves prompt advice between games; model weights are unchanged. See the [llm_dm workflow](../llm_dm/implementation.md). Roll it out with:
+The llm_dm Actor selects a goal and each primitive action. Focused Memory supplies current facts and applicable advice. The Learner proposes advice between games. Model weights stay fixed. See the [llm_dm workflow](../llm_dm/implementation.md). Roll it out with:
 
 ```bash
 engine/.venv/bin/aresim-rl rollout configs/llm_dm/fake_smoke.yaml
@@ -115,11 +115,11 @@ The built-in PPO/DQN collectors use a compact pre-step reward snapshot and skip 
 
 **DQN reference update, October 8:** run `seed_3_sample_credit_030` with learner seed 3, 28 CPU environment runners and one CUDA learner. It preserves the seed_3 budget of 2,097,152 steps, epsilon schedule, mission, maps, and DQN hyperparameters. The single reward change is `environment.reward_overrides.samples_collected: 0.30`: +0.30 per 0.5 kg acquired, capped at the 4 kg sample quota (maximum 2.4). Acquisition is delivered plus onboard sample mass, so Unload cannot reset the bonus. Partial quota increments receive proportional credit. `new_scan` remains zero; scanning excess rocks earns no acquisition bonus. The new shaped profile/breakdown are `aresim.reward.shaped_train.v3` / `aresim.reward.mission.v3`; zero-default and sparse rewards retain v2. PPO presets retain zero acquisition credit; the October 10 MuZero reference now enables the same bonus. DQN’s sample-credit run completed 9/32 greedy validation missions; MuZero’s learning quality remains unverified. See [seed_3 evidence and next experiment](../../results/double_duelling_dqn/seed_3/learnings.md).
 
-**MuZero reference update, October 11:** `configs/muzero/reference.yaml` uses the sole Ray collection path with eight CPU collectors × four environments and one CUDA learner in fresh trial `seed_7_sample_credit_030_parallel`. Batched MCTS/reanalysis preserve the architecture, gamma 0.995, 50 simulations/action, 0.1 updates/step, 2,097,152-step budget and corrected reward. Default batch size remains 32. Checkpoints save at quiescent collection-wave boundaries every 81,920 requested steps, retaining three intermediate snapshots plus final and preserving unfinished trajectories for resume. A bounded same-A30 batch-256/eight-thread comparison measured 13.52 → 111.26 steps/s, about 8.2× faster. CPU/Ray partial resume and CUDA checkpoint/RNG restore passed; mission-learning acceptance remains pending. See [implementation, verification and commands](muzero_parallel_2026-10-11.md). Training performs no automatic evaluation.
+**MuZero reference update, October 11:** `configs/muzero/reference.yaml` uses the sole Ray collection path with eight CPU collectors × four environments and one CUDA learner in fresh trial `seed_7_sample_credit_030_parallel`. Batched MCTS/reanalysis preserve the architecture, gamma 0.995, 50 simulations/action, 0.1 updates/step, 2,097,152-step budget and corrected reward. Default batch size remains 32. Checkpoints save at quiescent collection-wave boundaries every 81,920 requested steps, retaining three intermediate snapshots plus final and preserving unfinished trajectories for resume. A bounded same-A30 batch-256/eight-thread comparison measured 13.52 → 111.26 steps/s, about 8.2× faster. CPU/Ray partial resume and CUDA checkpoint/RNG restore passed; mission-learning acceptance remains pending. See implementation, verification and commands (archived report). Training performs no automatic evaluation.
 
-**MuZero checkpoint/loss corrections, October 13:** that trial was `seed_7_sample_credit_030_parallel_lossnorm`. Numeric checkpoint ordering now preserves the newest steps across digit widths and resumes the newest snapshot even when final is older. The learner divides weighted losses by total importance weight and reports unweighted losses, weight statistics and effective sample size. Manual reports export/plot these fields. The model, reward, search and replay sampling settings remain unchanged. See [math and verification](muzero_learning_fixes_2026-10-13.md). Previous loss magnitudes are not directly comparable.
+**MuZero checkpoint/loss corrections, October 13:** that trial was `seed_7_sample_credit_030_parallel_lossnorm`. Numeric checkpoint ordering now preserves the newest steps across digit widths and resumes the newest snapshot even when final is older. The learner divides weighted losses by total importance weight and reports unweighted losses, weight statistics and effective sample size. Manual reports export/plot these fields. The model, reward, search and replay sampling settings remain unchanged. See math and verification (archived report). Previous loss magnitudes are not directly comparable.
 
-**MuZero learning-path follow-up, October 13:** the current reference is `seed_7_sample_credit_030_learning_v3` with the unchanged full 2,097,152-step budget. It refreshes all real policy positions in selected minibatch unrolls, balances positive Scan/Extract/Unload legality labels and adds temporal consistency against stopped recorded-history targets. Reports include target age/coverage, consistency and legality recall/false-positive counts. Existing checks and tiny Ray resume pass; no CUDA training or benchmark was launched, and the temporary instance was destroyed at the user's request. See [settings, verification and ablations](muzero_learning_v3_2026-10-13.md).
+**MuZero learning-path follow-up, October 13:** the current reference is `seed_7_sample_credit_030_learning_v3` with the unchanged full 2,097,152-step budget. It refreshes all real policy positions in selected minibatch unrolls, balances positive Scan/Extract/Unload legality labels and adds temporal consistency against stopped recorded-history targets. Reports include target age/coverage, consistency and legality recall/false-positive counts. Existing checks and tiny Ray resume pass; no CUDA training or benchmark was launched, and the temporary instance was destroyed at the user's request. See settings, verification and ablations (archived report).
 
 The −0.025 cost still applies to every nonterminal action; `5 × (1 − 0.995)` removes the failure/time-cost incentive for postponing an otherwise identical failure. Wait/Service legality, mission requirements, and engine/UI scores are unchanged. The new trial rejects an existing output directory, preserving the original seed_3 artifacts. Launch on the CUDA host:
 
@@ -312,7 +312,7 @@ agent = make_checkpoint_agent(run_directory / "checkpoints/final/checkpoint.json
 | `registry` | built-in | Custom `TrainingRegistry` for extended algorithms |
 | `component_registry` | built-in | Custom environment component registry |
 
-For a notebook-friendly flow with explicit control, see [Masked PPO training](../../notebooks/masked_ppo_training.ipynb).
+For a notebook-friendly flow with explicit control, see Masked PPO training (`masked_ppo_training.ipynb`, optional local notebook).
 
 The former `evaluate` training argument has been removed. Training does not generate `checkpoints/best` or enforce `evaluation.minimum_success_rate`; those are manual analysis operations. A completed training run means the training budget finished, not that its policy passed a validation gate. The usual `checkpoint.keep` rotation still applies, so increase it before training if later analysis needs more saved snapshots.
 
@@ -502,7 +502,7 @@ Built-in agent registry names (see [baseline workflow](../../engine/aresim/algor
 | `random_valid` | Uniform over legal actions only |
 | `wait` | Always action 0 (Wait) |
 | `scripted` | Deterministic partial-observation heuristic |
-| `llm_dm` | Decision Model or LLM Actor with shared observed Memory and a required LLM Learner; honors legal choices, carries prior advice forward, and writes essential logs/replays under `results/llm_dm/`. See [llm_dm workflow](../llm_dm/implementation.md) |
+| `llm_dm` | Decision Model or LLM Actor with persistent goals, focused Memory and a required LLM Learner; retains prior advice and retrieves it when applicable, and writes essential logs/replays under `results/llm_dm/`. See [llm_dm workflow](../llm_dm/implementation.md) |
 
 ```python
 from aresim.training import EpisodeSpec, RolloutConfig, RolloutRunner

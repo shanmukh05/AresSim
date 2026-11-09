@@ -1,8 +1,8 @@
 # Literature Survey: LLM Agents for AresSim
 
-Implementation status (2026-11-08): the shipped `llm_dm` pipeline supports a Decision Model or LLM Actor with the same observation/Memory contracts and a mandatory LLM Learner. The historical research comparisons below motivate this shared experience-driven workflow; see the [implementation guide](implementation.md) for current code, configuration and contracts.
+Implementation status (2026-11-09): `llm_dm` supports a Decision Model or LLM Actor. It uses persistent goals, focused Memory, and a required LLM Learner. The historical research comparisons below motivate this shared experience-driven workflow; see the [implementation guide](implementation.md) for current code, configuration and contracts.
 
-Reviewed: **2026-11-07**. Scope: a frozen LLM acting in AresSim's partially observed, turn-based rover resource mission, with controlled history and a mandatory first-release Learner for between-episode experience learning. This replaces the earlier general game-agent survey. The [AresSim LLM Agent Implementation Plan](implementation.md) is the sole authority for schemas, provider behavior, build order, and acceptance criteria.
+Reviewed: **2026-11-07**. Scope: a frozen LLM acting in AresSim's partially observed, turn-based rover resource mission, with controlled history and a mandatory first-release Learner for between-episode experience learning. This replaces the earlier general game-agent survey. Use [algorithm details](../../engine/aresim/algorithms/llm_dm/DETAILS.md) for current contracts. The research review date is unchanged.
 
 This is a focused primary-source review, not an exhaustive survey or a reproduced benchmark. Sources were checked through original papers, author project material, conference records, and official provider documentation. Method/result inspection was prioritized for ReAct, Reflexion, ExpeL, HiAgent, ReasoningBank, ACE, BALROG, MemoryArena, and REAPER; some adjacent works below were reviewed at abstract/method-overview level. Source versions are stated where relevant. Results belong to their original settings. Every proposed AresSim comparison is our inference, not a published result.
 
@@ -47,7 +47,7 @@ The evidence should answer four questions:
 
 **Limit:** Compression and subgoal control add model calls and can lose important facts. These tasks do not show that language summaries beat exact spatial tracking in a coordinate-observable rover world.
 
-**AresSim implication:** Keep within-episode history distinct from strategic lessons. Compare recent transitions and deterministic facts before an LLM summary. Later subgoal chunks might cover scouting, gathering, returning, and unloading, with completion grounded in actual observations. Count every summarization/retrieval call.
+**AresSim implication:** Keep within-episode history distinct from strategic lessons. Compare recent transitions and deterministic facts before an LLM summary. Focused mode now uses Actor-selected goals for exploration, collection, delivery, service, and recovery. Actual observations determine progress. This adapts the research idea; it does not establish the same performance gains. Count every summarization/retrieval call.
 
 ### MemoryArena — useful recall must affect subsequent actions
 

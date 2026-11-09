@@ -1,13 +1,13 @@
 # AresSim Implementation Checklist
 
-**Last updated:** October 16, 2026
+**Last updated:** November 9, 2026
 **Status:** Living project checklist
 
 This document gives a high-level view of what is implemented and what remains. Detailed behavior and architecture stay in the linked reference documents.
 
 ## Status rules
 
-- `[x]` means the feature exists in code and has automated coverage appropriate to its current stage.
+- `[x]` means the feature exists in code. Verification can use manual checks and simulator runs. This mark does not establish model performance.
 - `[ ]` means the feature is planned or proposed but is not yet implemented.
 - Update this checklist whenever a milestone changes status. A documentation design alone does not count as implementation.
 
@@ -35,7 +35,7 @@ This document gives a high-level view of what is implemented and what remains. D
 - [x] Ambient Martian day/night backdrop with Sun, moons, planets, and reduced-motion handling.
 - [x] Manual play, server-driven Algorithm autoplay (baselines + all six learned checkpoint algorithms), and backend-owned Replay flow.
 
-Algorithm mode attaches registered baselines, Decision Models, or a masked PPO/DQN checkpoint sidecar through `POST /api/sessions/{id}/attach-policy` and steps with `POST /api/sessions/{id}/agent-step`. Inference stays on the API host; the UI sends algorithm selection and an optional dev-time checkpoint path. Decision Models requires `aresim[llm_dm]` and an API key.
+Algorithm mode attaches registered baselines, llm_dm, or a supported RL checkpoint through `POST /api/sessions/{id}/attach-policy` and steps with `POST /api/sessions/{id}/agent-step`. Inference stays on the API host; the UI sends algorithm selection and an optional dev-time checkpoint path. llm_dm requires `aresim[llm_dm]`, a frozen bundle config, and the selected Actor credentials.
 
 ## 3. RL-ready environment — completed
 
@@ -65,14 +65,14 @@ Algorithm mode attaches registered baselines, Decision Models, or a masked PPO/D
 - [ ] Verify the implemented action-masked PPO RLModule, learner update, and frozen evaluation with the full dev acceptance run.
 - [ ] Verify the implemented canonical W&B logging, local report plots, and reproducibility artifacts with the full dev acceptance run.
 - [x] Verify native RLlib checkpoint loading through the shared `Agent` interface with the full dev acceptance run.
-- [x] Wire UI Algorithm mode to server-side policy attach and agent-step (baselines, Decision Models, masked PPO/DQN checkpoint path).
+- [x] Wire UI Algorithm mode to server-side policy attach and agent-step (baselines, llm_dm, and supported RL checkpoints).
 - [x] Add mask-aware DQN through RLlib (selection, epsilon-greedy, and TD-target masking).
 - [x] Verify corrected-reward MuZero reference wiring on CPU with the reference architecture and 50 simulations/action: collection, learner updates, checkpoint reload and legal sampled inference; long-budget CUDA mission learning remains pending.
-- [x] Collate MuZero replay histories on CPU before batched device transfer; local pipeline checks and CUDA tensor/update equivalence pass. An idle A30 batch-256 learner improved from 140 to 68 ms; bounded CUDA training completed 4,208 steps/420 updates and legal sampled checkpoint reload. See [world-model scaling analysis](../rl/world_model_scaling_2026-10-11.md); parallel search is implemented below, while long-budget learning acceptance remains pending.
+- [x] Collate MuZero replay histories on CPU before batched device transfer; local pipeline checks and CUDA tensor/update equivalence pass. An idle A30 batch-256 learner improved from 140 to 68 ms; bounded CUDA training completed 4,208 steps/420 updates and legal sampled checkpoint reload. See world-model scaling analysis (archived report); parallel search is implemented below, while long-budget learning acceptance remains pending.
 - [x] Reassess Ray/RLlib and native model-based backends for MuZero, DreamerV3, Plan2Explore and JEPA; inspect installed RLlib 2.58 and verify Dreamer structured-observation/curiosity integration limits.
-- [x] Make Ray Core the sole MuZero collection path (no backend selector or serial/local fallback), with batched MCTS/reanalysis, bounded policy age and preserved update credit, with partial-episode CPU/Ray/CUDA resume verification. A bounded same-A30 comparison measured 13.52 → 111.26 steps/s (8.2×), exceeding the 5× diagnostic promotion gate; long-budget throughput and held-out learning remain unverified. See [implementation and evidence](../rl/muzero_parallel_2026-10-11.md).
-- [x] Correct MuZero checkpoint rotation/resume by numeric step and use self-normalized importance-weighted loss with unweighted loss, weight statistics and effective-sample-size reporting. Existing checks and real-replay gradient/ordering diagnostics pass; task-learning improvement remains unverified. See [October 13 corrections](../rl/muzero_learning_fixes_2026-10-13.md).
-- [x] Implement actual-minibatch full-unroll MuZero reanalysis, positive rare-action legality weighting and stopped-target temporal consistency with target age/coverage/legality diagnostics. Existing checks and tiny Ray partial resume pass; no GPU benchmark/training launched. See [learning-path settings and verification](../rl/muzero_learning_v3_2026-10-13.md).
+- [x] Make Ray Core the sole MuZero collection path (no backend selector or serial/local fallback), with batched MCTS/reanalysis, bounded policy age and preserved update credit, with partial-episode CPU/Ray/CUDA resume verification. A bounded same-A30 comparison measured 13.52 → 111.26 steps/s (8.2×), exceeding the 5× diagnostic promotion gate; long-budget throughput and held-out learning remain unverified. See implementation and evidence (archived report).
+- [x] Correct MuZero checkpoint rotation/resume by numeric step and use self-normalized importance-weighted loss with unweighted loss, weight statistics and effective-sample-size reporting. Existing checks and real-replay gradient/ordering diagnostics pass; task-learning improvement remains unverified. See October 13 corrections (archived report).
+- [x] Implement actual-minibatch full-unroll MuZero reanalysis, positive rare-action legality weighting and stopped-target temporal consistency with target age/coverage/legality diagnostics. Existing checks and tiny Ray partial resume pass; no GPU benchmark/training launched. See learning-path settings and verification (archived report).
 - [ ] Complete MuZero reference acceptance: the dedicated PyTorch model/search/replay path, smoke run, resume, frozen evaluation, and UI attach are implemented; long-budget held-out comparison remains.
 - [x] Extract shared RLlib environment/metrics/Tune plumbing, common encoder dimensions/inventories, and registered config/runner dispatch; preserve existing public aliases and sidecar formats.
 - [x] Add masked Recurrent DQN through RLlib with LSTM sequence replay/burn-in, seeded replay checkpoint state, native budget-extension resume and frozen/UI inference; CPU smoke verified.
@@ -88,9 +88,9 @@ The [recurrent and world-model guide](../../engine/aresim/algorithms/README.md) 
 - [x] Add crop-derived resource/home memory and visited-cell observations.
 - [ ] Complete controlled comparisons of memory, stateless observations and recurrence.
 - [ ] Add JEPA representation learning and reusable encoder artifacts.
-- [ ] Add learned world-model experiments without replacing authoritative simulator transitions.
+- [ ] Run larger world-model experiments and measure mission performance. Keep authoritative simulator transitions.
 - [ ] Add offline learning and behavior-cloning experiments where useful.
-- [x] Consolidate llm_dm: Decision Model or LLM Actor, shared observed Memory, required LLM Learner, persistent advice, bounded providers, compact logs and native replay export.
+- [x] Consolidate llm_dm: Decision Model or LLM Actor, persistent goals, focused observed Memory, required LLM Learner, applicable advice, bounded providers, compact logs and native replay export.
 - [ ] Add LLM + scripted, LLM + RL, JEPA + RL, and world-model + RL hybrids.
 
 ## 7. Multi-rover environment — later
@@ -141,7 +141,7 @@ The [recurrent and world-model guide](../../engine/aresim/algorithms/README.md) 
 - [x] Keep training fast: checkpoint saving only, no periodic/final evaluation or automatic reports; retain manual evaluation commands.
 - [ ] Demonstrate robust full-mission learning across multiple learner seeds under the frozen v2 contracts.
 
-Details and local verification: [pipeline corrections](../rl/pipeline_fixes_2026-10-06.md).
+Details and local verification: pipeline corrections (archived report).
 
 ## November 7, 2026 cleanup and GPU tooling
 

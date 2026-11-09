@@ -142,7 +142,7 @@ python3 scripts/jarvislabs/cloud_train.py run --on MACHINE_ID --gpu L4 --skip-se
   --config configs/masked_ppo/reference.yaml
 ```
 
-`--gpu` on a reused RLlib instance still sets `resources.gpus_per_learner=1` unless you pass `--set resources.gpus_per_learner=...` yourself. MuZero uses its config's `resources.device: cuda` setting instead. Extra `--set` flags are forwarded to `aresim-rl train` unchanged. MuZero’s extra includes Ray Core; its reference reserves eight CPUs for collectors and one driver-owned GPU. The [parallel implementation](muzero_parallel_2026-10-11.md) records measured A30 performance. Resume can change the machine ID; the helper uses the returned ID for upload and launch.
+`--gpu` on a reused RLlib instance still sets `resources.gpus_per_learner=1` unless you pass `--set resources.gpus_per_learner=...` yourself. MuZero uses its config's `resources.device: cuda` setting instead. Extra `--set` flags are forwarded to `aresim-rl train` unchanged. MuZero’s extra includes Ray Core; its reference reserves eight CPUs for collectors and one driver-owned GPU. The parallel implementation (archived report) records measured A30 performance. Resume can change the machine ID; the helper uses the returned ID for upload and launch.
 
 | Flag | Purpose |
 |---|---|

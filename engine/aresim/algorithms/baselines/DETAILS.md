@@ -81,4 +81,4 @@ In the UI, Algorithm mode attaches the same registry names through `POST /api/se
 
 ### October 6, 2026: scripted v2
 
-The scripted baseline now accepts public task quotas and capacity from its environment configuration. On resource missions it returns with the required cargo, skips optional Build priority, avoids exhausted/unneeded resource targets, and uses observed home memory when available. It does not designate an arbitrary off-pad attachment point as home. These behavioral changes are identified by `aresim.agent.scripted.v2`; historical v1 totals remain historical. See [pipeline corrections](../../../../docs/rl/pipeline_fixes_2026-10-06.md).
+The scripted baseline now accepts public task quotas and capacity from its environment configuration. On resource missions it returns with the required cargo, skips optional Build priority, avoids exhausted/unneeded resource targets, and uses observed home memory when available. It does not designate an arbitrary off-pad attachment point as home. These behavioral changes are identified by `aresim.agent.scripted.v2`; historical v1 totals remain historical. See pipeline corrections (archived report).

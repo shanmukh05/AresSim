@@ -10,10 +10,10 @@ The environment owns observations, action legality, rewards and termination. Eve
 | MuZero | History representation + learned dynamics + batched PUCT | [MuZero](muzero/DETAILS.md) |
 | DreamerV3 | Categorical recurrent world model + imagined actor/critic | [DreamerV3](dreamerv3/DETAILS.md) |
 | Plan2Explore | Dreamer model + disagreement ensemble; pretrain then adapt | [Plan2Explore](plan2explore/DETAILS.md) |
-| llm_dm | Decision Model or LLM Actor + shared Memory + mandatory LLM Learner | [llm_dm](llm_dm/DETAILS.md) |
+| llm_dm | Decision Model or LLM Actor; persistent goals, focused Memory and a required LLM Learner | [llm_dm](llm_dm/DETAILS.md) |
 | Baselines | Wait, random, random-valid and scripted; inference only | [Baselines](baselines/DETAILS.md) |
 
-Each learned algorithm's details include a tensor-dimension architecture PNG and a training-flow PNG. The llm_dm details embed its workflow diagrams; baselines have inference-flow PNGs. All PNGs embed editable draw.io XML and live in each algorithm’s `diagrams/` folder. Dimensions are the default/reference configuration; smoke presets intentionally use smaller models.
+Each RL algorithm's details include a tensor-dimension architecture PNG and a training-flow PNG. The llm_dm details embed its workflow diagrams; baselines have inference-flow PNGs. All PNGs embed editable draw.io XML and live in each algorithm’s `diagrams/` folder. Dimensions are the default/reference configuration; smoke presets intentionally use smaller models.
 
 ## Shared ownership
 

@@ -16,24 +16,16 @@ Canonical and planned project docs, grouped by purpose. Historical research note
 | Document | Purpose |
 |---|---|
 | [RL Algorithms, Training, and Evaluation](rl/rl_quickstart.md) | Implemented policies, all six learned algorithms, network architecture, online sampling, W&B, checkpoints, and evaluation |
-| [RL Usage Guide](rl/usage.md) | CLI training, W&B setup, baselines, trajectories, Decision Models, and extension contracts |
+| [RL Usage Guide](rl/usage.md) | CLI training, W&B setup, baselines, trajectories, model agents, and extension contracts |
 | [Results layout](../results/README.md) | Consolidated algorithm folders, trial naming and preserved historical provenance |
-| [Pipeline corrections and verification](rl/pipeline_fixes_2026-10-06.md) | Reward v2, observed memory, frozen provenance, MuZero fixes, checkpoint-only training, and diagnostic evidence |
-| [PPO seed 33/35 follow-up](rl/ppo_followup_2026-10-07.md) | Sampled-versus-greedy failure, successful mission learning, survival traps, and next experiments |
 | [DQN seed 3 follow-up](../results/double_duelling_dqn/seed_3/learnings.md#october-8-follow-up-what-actually-remains-broken) | Frozen Q/action probes, learned camping, and the implemented capped sample-credit experiment |
 | [MuZero workflow](../engine/aresim/algorithms/muzero/DETAILS.md) | Learned search model, replay, training, checkpoints, and inference |
-| [MuZero checkpoint and loss corrections](rl/muzero_learning_fixes_2026-10-13.md) | Numeric checkpoint ordering, stable weighted loss, unweighted/replay diagnostics and fresh-run command |
-| [MuZero learning-path changes](rl/muzero_learning_v3_2026-10-13.md) | Full-unroll replay reanalysis, rare-action legality balancing, temporal consistency and local verification |
-| [Parallel MuZero implementation](rl/muzero_parallel_2026-10-11.md) | Ray collectors, batched search/reanalysis, partial-episode resume, A30 measurements and run commands |
-| [World-model execution and framework choice](rl/world_model_scaling_2026-10-11.md) | MuZero timing evidence, Ray/RLlib alternatives, batched search, and Dreamer/Plan2Explore/JEPA integration |
+| [Training performance](rl/training_performance.md) | Current collection, replay, and learner performance notes |
 | [Train on Vast.ai](rl/vastai.md) | Bounded GPU setup/training, scoped self-stop, allowlisted artifacts and recovery |
 | [Illustrated algorithm guide](../engine/aresim/algorithms/README.md) | Architecture dimensions, training steps and inference flows for every implemented policy |
 | [Train on JarvisLabs](rl/jarvislabs.md) | GPU/CPU instances, code upload, remote setup, and `results/` download |
-| [Masked PPO training notebook](../notebooks/masked_ppo_training.ipynb) | End-to-end learned-policy training in Jupyter |
-| [Algorithm Pipeline Notebook](../notebooks/rl_algorithm_pipeline.ipynb) | Baseline rollout, trajectory, validation, and determinism smoke test |
-| [Evaluation Report Template](../notebooks/evaluation_report_template.ipynb) | Optional manual W&B analysis notebook |
 | [Agent Data, RL, and LLM Proposal](rl/agent_data_rl_llm_proposal.md) | Observations, actions, adapters, datasets, LLM interface |
-| [AresSim llm_dm — Implementation Guide](llm_dm/implementation.md) | Sole hybrid pipeline reference: Decision Model or LLM Actor, shared Memory, required LLM Learner, reuse, providers, replays and verification |
+| [AresSim llm_dm — Implementation Guide](llm_dm/implementation.md) | Run guide for model agents; links to full contracts and diagrams beside the source |
 | [LLM Agents for AresSim — Literature Survey](llm_dm/literature_survey.md) | Primary-source review, limitations, AresSim experiments, and relevant 2026 work |
 | [Algorithm Literature Survey](rl/algorithm_literature_survey.md) | Algorithms worth testing and research priorities |
 | [Recurrent DQN, DreamerV3, and Plan2Explore](../engine/aresim/algorithms/README.md) | Illustrated algorithm details, shared ownership, phase commands and masks/memory |

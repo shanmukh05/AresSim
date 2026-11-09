@@ -1315,7 +1315,11 @@ Active REST routes:
 - `POST /api/replays/{replayId}/jump`
 - `POST /api/replays/{replayId}/reset`
 
-The Gymnasium and PettingZoo adapters are optional in-process Python APIs; they do not add REST routes or alter frontend snapshot/save contracts. Their policy input is always local and their RL-facing shaped/sparse rewards remain separate from engine/UI rewards. External truncation, seeded baseline rollouts, unified UI-loadable trajectories, fixed evaluation splits, and RLlib PPO/DQN and dedicated MuZero training are implemented through the same environment boundary. W&B owns training metrics, while checkpoints, fixed-seed evaluation, trajectories, and Jupyter analysis remain reproducibility artifacts. The project still has no model-serving endpoint, database, authentication, WebSocket, server-side save library, multi-rover mechanics, or further learned algorithms beyond PPO, DQN and MuZero. Future additions must reuse the canonical environment instead of duplicating its rules and are described in [Agent Data, RL, and LLM Architecture Proposal](../rl/agent_data_rl_llm_proposal.md) and [RL Algorithms, Training, and Evaluation](../rl/rl_quickstart.md).
+Gymnasium and PettingZoo use the same Python engine. They do not add REST routes or change save formats. Policy inputs contain permitted observations and legal-action masks. RL rewards remain separate from UI rewards.
+
+Six RL algorithms are implemented: PPO, DQN, Recurrent DQN, MuZero, DreamerV3, and Plan2Explore. The `llm_dm` pipeline adds a Decision Model or LLM Actor, focused Memory, and a required LLM Learner. W&B records training metrics. Checkpoints, evaluation files, and native game replays record run results.
+
+The project has no separate model-serving endpoint, database, authentication, WebSocket, server-side save library, or multi-rover mechanics. New agents must use the existing engine. See [agent architecture](../rl/agent_data_rl_llm_proposal.md) and [RL algorithms](../rl/rl_quickstart.md).
 
 ## 26. Update Checklist
 
@@ -1343,4 +1347,4 @@ When environment behavior changes, update this document and the implementation t
 
 ### RL corrections, October 6, 2026
 
-The simulator rules above remain authoritative for real actions. The RL wrapper now uses `phase1_resource_mission_v2` and reward profiles v2. Pad safety gates mission success and earns no repeatable progress. Learner gamma, task quotas and numerical configuration are frozen per run. Learned-policy presets use observed navigation memory; external truncation does not change task reward. See [pipeline corrections](../rl/pipeline_fixes_2026-10-06.md) for the maintained training/evaluation contracts and verification.
+The simulator rules above remain authoritative for real actions. The RL wrapper now uses `phase1_resource_mission_v2` and reward profiles v2. Pad safety gates mission success and earns no repeatable progress. Learner gamma, task quotas and numerical configuration are frozen per run. Learned-policy presets use observed navigation memory; external truncation does not change task reward. See pipeline corrections (archived report) for the maintained training/evaluation contracts and verification.

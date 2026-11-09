@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-12
 
-LLM scope update (2026-11-07): the [AresSim LLM Agent Implementation Plan](../llm_dm/implementation.md) is the sole implementation reference for the new `llm` policy. Its direct primitive-action actor and versioned contracts supersede the strategic-subgoal/tool proposals below for that implementation. This older document remains background for the broader agent-data architecture.
+Current status (2026-11-09): `llm_dm` is implemented. Its Actor selects observed goals and primitive actions. Focused Memory supplies relevant context. A required LLM Learner proposes advice between games. Use [algorithm details](../../engine/aresim/algorithms/llm_dm/DETAILS.md) for current contracts. The proposals below are background, not current implementation requirements.
 
 Status: The framework-neutral environments, baselines, truncation, deterministic rollouts, unified trajectories, fixed seed splits, RLlib masked PPO, mask-aware DQN, checkpoint evaluation, canonical metrics, and reports are implemented. Goal-bearing tasks, recurrent policies, advanced representation learning, and multiple rovers remain proposed. Existing simulation semantics remain governed by [Environment Rules Reference](../product/environment_rules.md), trajectory usage by [RL Usage Guide](usage.md), and learned-policy implementation by [RL Algorithms, Training, and Evaluation](rl_quickstart.md).
 
@@ -1027,9 +1027,9 @@ For every algorithm/configuration:
 
 ## 13. How to use LLMs
 
-### 13.1 Implemented: llm_dm Actor/Memory/Learner, recommended later: planner
+### 13.1 Implemented: llm_dm with focused goals and Memory
 
-The implemented `llm_dm` pipeline supports a Decision Model or LLM Actor over `aresim.action.rover.v1`, with identical permitted State, outcome-driven Memory and persistent learning context. A mandatory LLM Learner reviews completed games and stages advice for later games. See the [llm_dm workflow](../llm_dm/implementation.md) for contracts, configuration and replay exports. The former standalone Decision Models encoder and action overrides have been removed.
+The implemented `llm_dm` pipeline supports a Decision Model or LLM Actor over `aresim.action.rover.v1`, with the same permitted observations and focused Memory. The Actor selects a persistent goal and each primitive action. All compatible lessons remain available for goal selection. Action requests receive applicable advice. A mandatory LLM Learner reviews completed games and stages advice for later games. See the [llm_dm workflow](../llm_dm/implementation.md) for contracts, configuration and replay exports. The former standalone Decision Models encoder and action overrides have been removed.
 
 The stronger long-horizon hybrid remains:
 
