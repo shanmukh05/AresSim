@@ -63,11 +63,7 @@ class SequenceBatch:
     prefix_observations: dict[str, Tensor] | None
     prefix_previous_actions: Tensor | None
     prefix_lengths: Tensor
-
-
-def _observations(histories: list[list[dict[str, object]]], device) -> dict[str, Tensor]:
-    return {name: torch.as_tensor(np.stack([np.stack([np.asarray(obs[name]) for obs in history]) for history in histories]), device=device)
-            for name in histories[0][0]}
+    prefix_positions: Tensor | None = None
 
 
 class SequenceReplay:
@@ -77,10 +73,17 @@ class SequenceReplay:
         self.capacity = capacity
         self.episodes: OrderedDict[str, EpisodeRecord] = OrderedDict()
         self.steps = 0
+        self._columns = {}
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state.pop("_columns", None)
+        return state
 
     def add(self, chunk: ReplayChunk) -> None:
         chunk.episode.validate()
         suffix = chunk.episode
+        getattr(self, "_columns", {}).pop(suffix.episode_id, None)
         previous = self.episodes.get(suffix.episode_id)
         if previous is None:
             if chunk.start != 0:
@@ -107,6 +110,7 @@ class SequenceReplay:
             if episode.closed:
                 self.steps -= len(episode.actions)
                 del self.episodes[key]
+                getattr(self, "_columns", {}).pop(key, None)
         if self.steps > self.capacity:
             raise ValueError("replay capacity cannot contain active episode histories")
 
@@ -129,11 +133,23 @@ class SequenceReplay:
         choices = rng.choice(len(episodes), batch_size, p=sizes / sizes.sum())
         selected = [episodes[int(index)] for index in choices]
         starts = [int(rng.integers(len(ep.actions))) for ep in selected]
-        windows = [_window(ep, start, length) for ep, start in zip(selected, starts, strict=True)]
-        prefix_obs, prefix_prev = _prefix_tensors(selected, starts, device)
-        tensors = _window_tensors(windows, device)
-        return SequenceBatch(**tensors, prefix_observations=prefix_obs, prefix_previous_actions=prefix_prev,
-                             prefix_lengths=torch.tensor(starts, device=device))
+        columns = [self._episode_columns(ep) for ep in selected]
+        return _sequence_batch(columns, np.asarray(starts), length, device)
+
+    def _episode_columns(self, episode: EpisodeRecord) -> dict:
+        cache = getattr(self, "_columns", None)
+        if cache is None:
+            self._columns = cache = {}
+        count = len(episode.actions)
+        stored = cache.get(episode.episode_id)
+        if stored is None or stored[0] != count:
+            columns = {"observations": {name: np.stack([np.asarray(obs[name]) for obs in episode.observations])
+                                        for name in episode.observations[0]},
+                       "masks": np.stack(episode.masks)}
+            for name in ("actions", "rewards", "reward_valid", "terminated", "truncated"):
+                columns[name] = np.asarray(getattr(episode, name))
+            cache[episode.episode_id] = count, columns
+        return cache[episode.episode_id][1]
 
     def for_adaptation(self) -> SequenceReplay:
         """Keep pretraining experience as representation data without task labels or active IDs."""
@@ -145,43 +161,42 @@ class SequenceReplay:
         return replay
 
 
-def _padded(values: list, start: int, length: int, default) -> list:
-    return [values[t] if t < len(values) else default for t in range(start, start + length)]
+def _sequence_batch(columns: list[dict], starts: np.ndarray, length: int, device) -> SequenceBatch:
+    """Gather raw columns with the original padding, previous-action and ending semantics."""
+    counts = np.asarray([len(row["actions"]) for row in columns])
+    positions = starts[:, None] + np.arange(length + 1)
+    indices = np.minimum(positions, counts[:, None])
 
+    def observations(at):
+        return {name: torch.as_tensor(np.stack([row["observations"][name][index] for row, index in zip(columns, at, strict=True)]), device=device)
+                for name in columns[0]["observations"]}
 
-def _previous(episode: EpisodeRecord, positions: list[int]) -> list[int]:
-    return [episode.actions[t - 1] if t > 0 else 10 for t in positions]
+    def gather(name, at):
+        return np.stack([row[name][index] for row, index in zip(columns, at, strict=True)])
 
+    def previous(at):
+        values = gather("actions", np.maximum(at - 1, 0))
+        return torch.as_tensor(np.where(at > 0, values, 10), dtype=torch.long, device=device)
 
-def _window(episode: EpisodeRecord, start: int, length: int) -> dict:
-    count = len(episode.actions)
-    positions = [min(start + k, count) for k in range(length + 1)]
-    return {"observations": [episode.observations[t] for t in positions],
-            "masks": [episode.masks[t] for t in positions], "previous_actions": _previous(episode, positions),
-            "actions": _padded(episode.actions, start, length, 0),
-            "rewards": _padded(episode.rewards, start, length, 0.0),
-            "reward_valid": _padded(episode.reward_valid, start, length, False),
-            "terminated": _padded(episode.terminated, start, length, True),
-            "truncated": _padded(episode.truncated, start, length, False),
-            "valid": [start + k < count for k in range(length)],
-            "observation_valid": [start + k <= count for k in range(length + 1)]}
-
-
-def _prefix_tensors(episodes: list[EpisodeRecord], starts: list[int], device):
-    maximum = max(starts)
-    if maximum == 0:
-        return None, None
-    histories = [[ep.observations[min(t, start)] for t in range(maximum)] for ep, start in zip(episodes, starts, strict=True)]
-    # The padded prefix is ignored after each row's true start position.
-    previous = [_previous(ep, [min(t, start) for t in range(maximum)]) for ep, start in zip(episodes, starts, strict=True)]
-    return _observations(histories, device), torch.tensor(previous, device=device)
-
-
-def _window_tensors(windows: list[dict], device) -> dict:
-    dtypes = {"masks": torch.bool, "actions": torch.long, "previous_actions": torch.long,
-              "rewards": torch.float32, "reward_valid": torch.bool, "terminated": torch.bool,
-              "truncated": torch.bool, "valid": torch.bool, "observation_valid": torch.bool}
-    tensors = {key: torch.as_tensor(np.asarray([row[key] for row in windows]), dtype=dtype, device=device)
-               for key, dtype in dtypes.items()}
-    tensors["observations"] = _observations([row["observations"] for row in windows], device)
-    return tensors
+    valid = positions[:, :-1] < counts[:, None]
+    values = {}
+    for name, dtype, default in (("actions", torch.long, 0), ("rewards", torch.float32, 0.),
+                                  ("reward_valid", torch.bool, False), ("terminated", torch.bool, True),
+                                  ("truncated", torch.bool, False)):
+        raw = gather(name, np.minimum(indices[:, :-1], counts[:, None] - 1))
+        values[name] = torch.as_tensor(np.where(valid, raw, default), dtype=dtype, device=device)
+    maximum = int(starts.max())
+    prefix_indices = np.minimum(np.arange(maximum)[None, :], starts[:, None])
+    rows, times = np.nonzero(np.arange(maximum)[None, :] < starts[:, None])
+    prefix = {name: torch.as_tensor(np.concatenate([row["observations"][name][:start] for row, start in zip(columns, starts, strict=True)]), device=device)
+              for name in columns[0]["observations"]} if maximum else None
+    # Only encoder inputs are packed; RSSM rows and RNG draws retain their original layout.
+    return SequenceBatch(observations=observations(indices),
+        masks=torch.as_tensor(gather("masks", indices), dtype=torch.bool, device=device),
+        previous_actions=previous(indices), **values,
+        valid=torch.as_tensor(valid, device=device),
+        observation_valid=torch.as_tensor(positions <= counts[:, None], device=device),
+        prefix_observations=prefix,
+        prefix_previous_actions=previous(prefix_indices) if maximum else None,
+        prefix_lengths=torch.as_tensor(starts, device=device),
+        prefix_positions=torch.as_tensor(rows * maximum + times, dtype=torch.long, device=device) if maximum else None)

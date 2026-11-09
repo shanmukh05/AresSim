@@ -22,12 +22,13 @@ import io
 import json
 import math
 import os
+import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
 
 import numpy as np
 from gymnasium import Space, spaces
@@ -36,6 +37,7 @@ from ..defaults import DEFAULT_ENGINE_CONFIG
 from ..gameplay import (
     TRAJECTORY_EPISODE_SCHEMA,
     TRAJECTORY_REPLAY_SCHEMA,
+    TrajectoryRecorder,
     JsonObject,
     create_trajectory_episode,
     normalize_gameplay_payload,
@@ -656,6 +658,126 @@ def _validate_trajectory_episode_payload(payload: object, file_name: str) -> Jso
         raise TrajectoryValidationError("trajectory episode is malformed or invalid") from error
 
 
+class EpisodeWriter(Protocol):
+    """Persist completed episodes and return the artifact that indexes them."""
+
+    def write_episode(self, episode: EpisodeTrajectory[Any, Any]) -> None: ...
+
+    def finalize(self, *, max_episode_steps: int) -> Path: ...
+
+
+@runtime_checkable
+class ProgressiveEpisodeWriter(Protocol):
+    """Optional live export capability, called only by the runner after real state changes."""
+
+    def begin_episode(self, episode_id: str, policy_id: str, recorder: TrajectoryRecorder) -> None: ...
+
+    def write_progress(self, recorder: TrajectoryRecorder) -> None: ...
+
+
+def write_trajectory_episode(path: Path, episode: EpisodeTrajectory[Any, Any]) -> Path:
+    """Save one lossless, UI-loadable episode without a redundant dataset shard."""
+    if episode.replay is None:
+        raise ValueError("trajectory episode has no replay projection")
+    policy = {
+        **_episode_payload(episode),
+        "environment_config": episode.environment_config,
+        "observation_space": describe_space(episode.observation_space),
+        "action_space": describe_space(episode.action_space),
+        "action_mask_space": describe_space(episode.action_mask_space),
+    }
+    serialized_policy = _json_value(policy)
+    if not isinstance(serialized_policy, dict):
+        raise TypeError("trajectory episode policy must serialize to a JSON object")
+    artifact = create_trajectory_episode(
+        DEFAULT_ENGINE_CONFIG.replay,
+        episode.replay,
+        episode_id=episode.episode_id,
+        source="rollout",
+        policy=serialized_policy,
+        policy_id=episode.policy_id,
+        agent_seed=episode.agent_seed,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_suffix(".json.partial")
+    partial.write_text(_canonical_json(artifact) + "\n", encoding="utf-8")
+    os.replace(partial, path)
+    return path
+
+
+class ReplayDirectoryWriter:
+    """Continuously replace one UI-importable JSON per game, then finalize its policy data.
+
+    Uses the same recorder/export schema as the UI Save action. Atomic replacement
+    lets another process copy a complete prefix while the next decision is running.
+    """
+
+    def __init__(self, directory: Path, *, prefix: str = "", metadata: dict[str, object] | None = None) -> None:
+        if prefix and not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
+            raise ValueError("replay filename prefix must be a safe slug")
+        self.directory, self.prefix = directory, prefix
+        self.metadata = {} if metadata is None else dict(metadata)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.entries: dict[str, dict[str, object]] = {}
+        self._current: tuple[str, str] | None = None
+
+    def _relative(self, episode_id: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", episode_id):
+            raise ValueError("replay episode id must be a safe slug")
+        return f"replays/{self.prefix}{episode_id}.json"
+
+    def begin_episode(self, episode_id: str, policy_id: str, recorder: TrajectoryRecorder) -> None:
+        """Publish the actual initial snapshot before waiting for the first model call."""
+        if episode_id in self.entries:
+            raise ValueError("duplicate replay episode id")
+        self._current = episode_id, policy_id
+        self.entries[episode_id] = {
+            "source_episode_id": episode_id, "path": self._relative(episode_id),
+            "environment_seed": recorder.initial_snapshot["seed"], "steps": 0, "complete": False,
+        }
+        self.write_progress(recorder)
+
+    def write_progress(self, recorder: TrajectoryRecorder) -> None:
+        """Publish a valid replay prefix; this does not expose replay state to the agent."""
+        if self._current is None:
+            raise RuntimeError("begin_episode is required before publishing progress")
+        episode_id, policy_id = self._current
+        relative = self._relative(episode_id)
+        projection = recorder.export_replay_projection(Path(relative).name, "algorithm", policy_id)
+        artifact = create_trajectory_episode(
+            recorder.replay_config, projection, episode_id=episode_id,
+            source="rollout", policy=None, policy_id=policy_id,
+        )
+        path = self.directory / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_suffix(".json.partial")
+        partial.write_text(_canonical_json(artifact) + "\n", encoding="utf-8")
+        os.replace(partial, path)
+        self.entries[episode_id]["steps"] = len(recorder.steps)
+
+    def write_episode(self, episode: EpisodeTrajectory[Any, Any]) -> None:
+        """Replace the live prefix with the same complete, lossless native episode format."""
+        relative = self._relative(episode.episode_id)
+        write_trajectory_episode(self.directory / relative, episode)
+        self.entries[episode.episode_id] = {
+            "source_episode_id": episode.episode_id, "path": relative,
+            "environment_seed": episode.environment_seed, "steps": episode.length, "complete": True,
+        }
+        self._current = None
+
+    def finalize(self, *, max_episode_steps: int) -> Path:
+        """Index the native JSON files without producing duplicate dataset shards."""
+        path = self.directory / "manifest.json"
+        partial = path.with_suffix(".json.partial")
+        partial.write_text(_canonical_json({
+            "schema_version": "aresim.replay_collection.v1", "max_episode_steps": max_episode_steps,
+            "metadata": self.metadata,
+            "episodes": list(self.entries.values()),
+        }) + "\n", encoding="utf-8")
+        os.replace(partial, path)
+        return path
+
+
 class TrajectoryWriter:
     """Write atomic policy shards, replayable episode artifacts, and a manifest."""
 
@@ -710,34 +832,11 @@ class TrajectoryWriter:
         """Write one standalone, lossless, UI-loadable trajectory episode."""
         if not self.include_episode_artifacts:
             return None
-        if episode.replay is None:
-            raise ValueError("trajectory episode has no replay projection")
         episode_directory = self.output_directory / "episodes"
         episode_directory.mkdir(exist_ok=True)
         relative = PurePosixPath("episodes") / f"episode-{self._episode_count:06d}.json"
         final_path = self.output_directory.joinpath(*relative.parts)
-        partial_path = final_path.with_suffix(".json.partial")
-        policy = {
-            **_episode_payload(episode),
-            "environment_config": episode.environment_config,
-            "observation_space": describe_space(episode.observation_space),
-            "action_space": describe_space(episode.action_space),
-            "action_mask_space": describe_space(episode.action_mask_space),
-        }
-        serialized_policy = _json_value(policy)
-        if not isinstance(serialized_policy, dict):
-            raise TypeError("trajectory episode policy must serialize to a JSON object")
-        artifact = create_trajectory_episode(
-            DEFAULT_ENGINE_CONFIG.replay,
-            episode.replay,
-            episode_id=episode.episode_id,
-            source="rollout",
-            policy=serialized_policy,
-            policy_id=episode.policy_id,
-            agent_seed=episode.agent_seed,
-        )
-        partial_path.write_text(_canonical_json(artifact) + "\n", encoding="utf-8")
-        os.replace(partial_path, final_path)
+        write_trajectory_episode(final_path, episode)
         digest = hashlib.sha256(final_path.read_bytes()).hexdigest()
         self._episode_artifacts.append({
             "episode_id": episode.episode_id,
@@ -1236,6 +1335,9 @@ def validate_trajectory_dataset(path: Path | str) -> TrajectoryManifest:
 
 __all__ = [
     "EpisodeTrajectory",
+    "EpisodeWriter",
+    "ProgressiveEpisodeWriter",
+    "ReplayDirectoryWriter",
     "TRAJECTORY_SCHEMA",
     "TrajectoryManifest",
     "TrajectoryValidationError",
@@ -1246,4 +1348,5 @@ __all__ = [
     "validate_episode",
     "validate_trajectory_episode",
     "validate_trajectory_dataset",
+    "write_trajectory_episode",
 ]

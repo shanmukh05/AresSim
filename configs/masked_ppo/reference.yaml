@@ -1,5 +1,5 @@
 schema_version: aresim.experiment.v1
-experiment_id: rllib_masked_ppo_reference
+experiment_id: ppo
 trial_id: seed_35
 algorithm: masked_ppo
 model: local_cnn_actor_critic

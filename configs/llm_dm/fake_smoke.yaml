@@ -1,0 +1,39 @@
+schema_version: aresim.llm_dm.run.v1
+agent: llm_dm
+experiment_name: fake-smoke
+execution_mode: smoke
+transport: fake
+split: smoke
+max_episode_steps: 32
+output_directory: results/llm_dm
+history:
+  mode: focused
+  goal_horizon: 8
+  stall_steps: 6
+  target_limit: 6
+  advice_limit: 3
+actor:
+  provider: decision_models
+  model: jev-1.14.0
+  credential_env: JEV_API_KEY
+  output_mode: choice
+learner:
+  enabled: true
+  provider: fake
+  model: offline-smoke-v1
+  max_output_tokens: 2048
+  batch_episodes: 1
+  max_rounds: 1
+  evaluation_episodes:
+  - id: comparison-a
+    environment_seed: 0
+    agent_seed: 0
+budgets:
+  max_provider_attempts: 256
+  max_total_tokens: 5000000
+  max_wall_seconds: 300
+  max_usd: 1.0
+episodes:
+- id: development-a
+  environment_seed: 1447
+  agent_seed: 0

@@ -8,9 +8,9 @@ The shared encoder consumes terrain `[B,8,8]`, five numerical spatial channels `
 
 Four encoded frames concatenate their 256-wide features with 11-way previous-action vectors (including the no-action sentinel), producing `4×(256+11)=1068` representation inputs. The learned latent is `[B,256]`; dynamics takes 266 inputs after concatenating an action. Policy and legality heads have ten outputs; value and transition-reward heads have `2×300+1=601` support logits. The reference uses 50 PUCT simulations, five training unroll steps and an optional 128-wide training-only consistency projection.
 
-![Architecture and tensor dimensions](architecture.drawio.png)
+![Architecture and tensor dimensions](diagrams/architecture.drawio.png)
 
-![Training and checkpoint flow](training.drawio.png)
+![Training and checkpoint flow](diagrams/training.drawio.png)
 
 The PNG figures contain editable draw.io XML: open the PNG directly in draw.io to revise the illustration. Shapes and numbers are grounded in the adjacent model/configuration files and `../common/encoder.py`.
 
@@ -67,10 +67,14 @@ engine/.venv/bin/aresim-rl train configs/muzero/smoke.yaml \
 
 # Separate manual analysis: greedy plus configured sampled repeats per map.
 engine/.venv/bin/aresim-rl evaluate \
-  results/muzero_reference/seed_7_sample_credit_030_learning_v3 \
+  results/muzero/seed_7_sample_credit_030_learning_v3 \
   --checkpoint final --split validation --action-mode both
 ```
 
 New training configs reject the retired backend selector; historical frozen checkpoint metadata can still be read for inference. Resume permits extending only the total step budget; the remaining frozen contract must match. Owned Ray actors/runtime close on exit, while a caller-owned runtime stays available. Training never selects a best checkpoint or rolls out held-out seeds. Evaluation creates `evaluation/` only when requested separately.
 
 In the UI select **MuZero** and provide the absolute `checkpoint.json` path. Inference needs the MuZero model dependencies but does not start Ray or restore collectors. W&B uses the existing real-step axis. The config folder retains only smoke, dev and reference; there are no new temporary presets.
+
+## Training performance — November 7, 2026
+
+See the [measured pipeline optimizations and GPU benchmark commands](../../../../docs/rl/training_performance.md). Search/learning budgets and model widths are unchanged; CPU component timings do not establish CUDA throughput. Native checkpoint formats are preserved.

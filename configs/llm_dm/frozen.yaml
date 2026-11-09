@@ -1,0 +1,22 @@
+# ARESIM_LLM_DM_BUNDLE points to a completed run's selected-bundle.json.
+# To attach in Algorithm mode, set backend ARESIM_LLM_DM_CONFIG to this file.
+schema_version: aresim.llm_dm.run.v1
+agent: llm_dm
+experiment_name: frozen-evaluation
+execution_mode: frozen_evaluation
+transport: live
+split: validation
+policy_bundle: ${ARESIM_LLM_DM_BUNDLE}
+learnings_file: null # Optional extra advice; derives a new policy identity without changing the source bundle.
+output_directory: results/llm_dm
+max_episode_steps: 1200
+budgets:
+  max_provider_attempts: 2400
+  max_total_tokens: 50000000
+  max_wall_seconds: 3600
+  max_usd: 2.0
+  price_sheet: prices.json
+episodes:
+  - id: validation-a
+    environment_seed: 24
+    agent_seed: 0

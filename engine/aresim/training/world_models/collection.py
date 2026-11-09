@@ -14,8 +14,36 @@ from ...core.engine import state_checksum
 from ...algorithms.dreamerv3.model import WorldModel
 from ...algorithms.dreamerv3.behavior import ActorCritic
 from ...algorithms.dreamerv3.checkpoint import WorldModelAgent
+from ...algorithms.baselines.scripted import ScriptedAgent
 from ..provenance import environment_config, experiment_seeds
 from .replay import EpisodeRecord, ReplayChunk
+
+
+def movement_cycle_penalty(episode: EpisodeRecord, observation: dict, scale: float) -> float:
+    """Charge only repeated 2–4 move cycles without collection, delivery or recovery.
+
+    Three full repeats distinguish oscillation from ordinary return-path backtracking.
+    Only public observations are consulted, and productive actions are exempt.
+    """
+    if not scale:
+        return 0.0
+    observations = episode.observations + [observation]
+    for period in (2, 3, 4):
+        count = 3 * period
+        if len(episode.actions) < count or any(a not in (1, 2, 3, 4) for a in episode.actions[-count:]):
+            continue
+        window = observations[-count - 1:]
+        positions = [tuple(obs["self"][:2]) for obs in window]
+        if any(positions[i] != positions[i - period] for i in range(period, len(positions))):
+            continue
+        # Cargo changes, objective progress, and battery/health recovery break a cycle.
+        productive = any(np.any(np.asarray(after["self"])[2:4] > np.asarray(before["self"])[2:4] + 1e-6)
+                         or not np.array_equal(after["self"][4:7], before["self"][4:7])
+                         or np.any(np.asarray(after["objectives"])[:4, 0] > np.asarray(before["objectives"])[:4, 0] + 1e-6)
+                         for before, after in zip(window, window[1:]))
+        if not productive:
+            return float(scale)
+    return 0.0
 
 
 @dataclass
@@ -45,6 +73,11 @@ class Collector:
         self.model = WorldModel(spec.model_config, self.environments[0].observation_space)
         self.behavior = ActorCritic(self.model.feature_size, spec.model_config)
         self.agents = [WorldModelAgent(self.model, self.behavior, spec.algorithm) for _ in range(count)]
+        fraction = getattr(spec.algorithm_config, "demonstration_fraction", 0.0)
+        # Assign whole episodes evenly over the complete collection pool.
+        total = count * spec.resources.num_collectors
+        self.demonstrations = [((index * spec.resources.num_collectors + collector_id) < int(total * fraction)) for index in range(count)]
+        self.teachers = [ScriptedAgent(config.task_config, config.engine.payload.capacity_kg) for _ in range(count)]
         self.rngs = [np.random.default_rng(np.random.SeedSequence([spec.learner_seed, collector_id, index])) for index in range(count)]
         self.counters = [-1] * count
         self.episodes = []
@@ -58,8 +91,7 @@ class Collector:
     def _restore(self, state: dict, snapshot: dict | None) -> None:
         if len(state["episodes"]) != len(self.environments) or snapshot is None:
             raise ValueError("collector restore has incompatible environment count or missing snapshot")
-        self.model.load_state_dict(snapshot["model"])
-        self.behavior.load_state_dict(snapshot["behavior"])
+        self._load_policy(snapshot)
         self.version = state["version"]
         self.counters = state["counters"]
         self.episodes = state["episodes"]
@@ -70,7 +102,10 @@ class Collector:
     def _restore_environment(self, index: int, state: dict) -> None:
         environment = self.environments[index]
         result = environment.reset(seed=self.episode_seeds[index])
+        self.teachers[index].reset(self.episode_seeds[index])
         for action in self.episodes[index].actions:
+            if self.demonstrations[index]:
+                self.teachers[index].act(result.observation, result.action_mask)
             result = environment.step(action)
             if result.terminated or result.truncated:
                 raise ValueError("collector active episode contains a terminal action")
@@ -92,6 +127,7 @@ class Collector:
         seed = int(self.rngs[index].choice(self.seeds))
         self.episode_seeds[index] = seed
         reset = self.environments[index].reset(seed=seed)
+        self.teachers[index].reset(seed)
         agent_seed = int(np.random.SeedSequence([self.spec.learner_seed, self.collector_id, index, self.counters[index]]).generate_state(1, dtype=np.uint64)[0]) % (2**63 - 1)
         self.agents[index].reset(agent_seed)
         identity = f"{self.spec.experiment_id}:{self.spec.trial_id}:{self.collector_id}:{index}:{self.counters[index]}"
@@ -101,17 +137,20 @@ class Collector:
         if self.version == version:
             return 0.0
         started = time.monotonic()
-        self.model.load_state_dict(snapshot["model"])
-        self.behavior.load_state_dict(snapshot["behavior"])
+        self._load_policy(snapshot)
         for index, (agent, episode) in enumerate(zip(self.agents, self.episodes, strict=True)):
-            agent.reset_memory()
             generator = torch.Generator().manual_seed(int(np.random.SeedSequence([
                 self.spec.learner_seed, self.collector_id, index, self.counters[index], version]).generate_state(1)[0]))
-            for observation, action in zip(episode.observations[:-1], episode.actions, strict=True):
-                WorldModelAgent.observe_many([agent], [observation], reconstruction_generator=generator)
-                agent.previous_action = action
+            agent.reconstruct(episode.observations[:-1], episode.actions, generator)
         self.version = version
         return time.monotonic() - started
+
+    def _load_policy(self, snapshot: dict) -> None:
+        """Load strict inference submodules, accepting historical full-model snapshots too."""
+        for prefix, module, source in (("encoder.", self.model.encoder, snapshot["model"]),
+                                       ("rssm.", self.model.rssm, snapshot["model"]),
+                                       ("actor.", self.behavior.actor, snapshot["behavior"])):
+            module.load_state_dict({key[len(prefix):]: value for key, value in source.items() if key.startswith(prefix)})
 
     @staticmethod
     def _chunk(episode: EpisodeRecord, start: int) -> ReplayChunk:
@@ -130,6 +169,10 @@ class Collector:
             started = time.monotonic()
             actions = WorldModelAgent.act_many([self.agents[i] for i in indices],
                 [self.episodes[i].observations[-1] for i in indices], [self.episodes[i].masks[-1] for i in indices], uniform=warmup)
+            for offset, index in enumerate(indices):
+                if self.demonstrations[index]:
+                    actions[offset] = self.teachers[index].act(self.episodes[index].observations[-1], self.episodes[index].masks[-1])
+                    self.agents[index].previous_action = actions[offset]
             inference_seconds += time.monotonic() - started
             started = time.monotonic()
             self._advance(indices, actions, starts, chunks, metrics)
@@ -146,7 +189,8 @@ class Collector:
                 raise RuntimeError("collector selected an illegal real action")
             result = self.environments[index].step(action)
             episode.actions.append(action)
-            episode.rewards.append(0.0 if self.pretraining else float(result.reward))
+            penalty = movement_cycle_penalty(episode, result.observation, getattr(self.spec.algorithm_config, "cycle_penalty", 0.0))
+            episode.rewards.append(0.0 if self.pretraining else float(result.reward) - penalty)
             episode.reward_valid.append(not self.pretraining)
             episode.terminated.append(result.terminated)
             episode.truncated.append(result.truncated)
@@ -156,7 +200,10 @@ class Collector:
             if result.terminated or result.truncated:
                 episode.closed = True
                 chunks.append(self._chunk(episode, starts[index]))
-                metrics.append(self._episode_metrics(episode, result))
+                values = self._episode_metrics(episode, result)
+                if self.demonstrations[index]:
+                    values = {key.replace("train/", "demonstrations/", 1): value for key, value in values.items()}
+                metrics.append(values)
                 self.episodes[index] = self._reset(index)
                 starts[index] = 0
 

@@ -66,28 +66,38 @@ class Replay:
         self.capacity = capacity
         self.episodes: list[Episode] = []
         self.priorities: list[np.ndarray] = []
+        self._priority_totals: list[float] = []
         self.steps = 0
+
+    def _totals(self) -> list[float]:
+        if not hasattr(self, "_priority_totals"):
+            self._priority_totals = [float(priority.sum()) for priority in self.priorities]
+        return self._priority_totals
 
     def add(self, episode: Episode, td_steps: int, gamma: float, alpha: float) -> None:
         episode.validate()
+        totals = self._totals()
         self.episodes.append(episode)
         self.priorities.append(np.asarray([
             (abs(episode.root_values[index] - episode.value_target(index, td_steps, gamma)) + 1e-6) ** alpha
             for index in range(len(episode.actions))], dtype=np.float64))
+        totals.append(float(self.priorities[-1].sum()))
         self.steps += len(episode.actions)
         while self.steps > self.capacity and len(self.episodes) > 1:
             removed = self.episodes.pop(0)
             self.priorities.pop(0)
+            totals.pop(0)
             self.steps -= len(removed.actions)
 
     def sample(self, batch_size: int, beta: float,
                rng: np.random.Generator) -> list[tuple[Episode, int, float]]:
         """Prioritize root-search versus return error with importance correction."""
-        totals = np.asarray([priority.sum() for priority in self.priorities], dtype=np.float64)
+        totals = np.asarray(self._totals(), dtype=np.float64)
         grand_total = totals.sum()
         episode_indices = rng.choice(len(self.episodes), size=batch_size, p=totals / grand_total)
+        distributions = {int(index): self.priorities[index] / totals[index] for index in np.unique(episode_indices)}
         selected = [(int(ep_index), int(rng.choice(len(self.priorities[ep_index]),
-                         p=self.priorities[ep_index] / totals[ep_index]))) for ep_index in episode_indices]
+                         p=distributions[int(ep_index)]))) for ep_index in episode_indices]
         probabilities = np.asarray([self.priorities[ep_index][position] / grand_total
                                     for ep_index, position in selected])
         weights = (self.steps * probabilities) ** -beta
@@ -98,10 +108,15 @@ class Replay:
     def update_priorities(self, samples, errors, alpha: float) -> None:
         """Refresh priorities from current learner errors, preserving episode identity."""
         indices = {id(episode): index for index, episode in enumerate(self.episodes)}
+        totals = self._totals()
+        changed = set()
         for (episode, position, _), error in zip(samples, errors, strict=True):
             index = indices.get(id(episode))
             if index is not None:
                 self.priorities[index][position] = (abs(float(error)) + 1e-6) ** alpha
+                changed.add(index)
+        for index in changed:
+            totals[index] = float(self.priorities[index].sum())
 
 
 __all__ = ["Episode", "Replay", "history"]

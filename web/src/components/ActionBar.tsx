@@ -53,6 +53,7 @@ const PLAY_INTERVAL_MS = 700;
 export function ActionBar() {
   const sessionId = useAresStore((state) => state.snapshot?.sessionId ?? "");
   const gameStatus = useAresStore((state) => state.snapshot?.gameStatus);
+  const policyEpisodeDone = useAresStore((state) => state.policyEpisodeDone);
   const snapshotSeed = useAresStore((state) => state.snapshot?.seed ?? 0);
   const runMode = useAresStore((state) => state.runMode);
   const selectedTool = useAresStore((state) => state.selectedTool);
@@ -78,7 +79,7 @@ export function ActionBar() {
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(true);
   const agentSettingsToggleRef = useRef<HTMLButtonElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
-  const terminal = gameStatus === "game_over";
+  const terminal = gameStatus === "game_over" || (runMode === "algorithm" && policyEpisodeDone);
   const replayEnded = !!loadedReplay && loadedReplay.cursor >= loadedReplay.totalSteps;
   const modeStyle = MODE_STYLE[runMode];
   const controlsDisabled = terminal;
@@ -246,9 +247,9 @@ function AlgorithmSetup({ onClose }: { onClose: () => void }) {
   const rllibAvailable = useAresStore((state) => state.rllibAvailable);
   const muzeroAvailable = useAresStore((state) => state.muzeroAvailable);
   const worldModelsAvailable = useAresStore((state) => state.worldModelsAvailable);
-  const jevAvailable = useAresStore((state) => state.jevAvailable);
+  const llmDmAvailable = useAresStore((state) => state.llmDmAvailable);
   const policyCapabilitiesLoaded = useAresStore((state) => state.policyCapabilitiesLoaded);
-  const capabilities = { rllib: rllibAvailable, muzero: muzeroAvailable, world_models: worldModelsAvailable, jev: jevAvailable };
+  const capabilities = { rllib: rllibAvailable, muzero: muzeroAvailable, world_models: worldModelsAvailable, llm_dm: llmDmAvailable };
   const actionSelection = ALGORITHM_CATALOG[algorithmId].actionSelection;
   const setAlgorithmId = useAresStore((state) => state.setAlgorithmId);
   const setCheckpointPath = useAresStore((state) => state.setCheckpointPath);

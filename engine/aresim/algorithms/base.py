@@ -51,4 +51,33 @@ class Agent(Protocol[ObservationT, ActionT]):
         ...
 
 
-__all__ = ["Agent"]
+__all__ = ["Agent", "EpisodeStop", "TransitionAwareAgent"]
+
+
+class EpisodeStop(Exception):
+    """An external stop before the next action; never represents a simulator tick."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@runtime_checkable
+class TransitionAwareAgent(Protocol):
+    """Optional outcome lifecycle for agents that maintain explicit episode evidence.
+
+    Feedback is an allowlisted projection, never EnvironmentStep or WorldState.
+    Existing agents do not need to implement this capability.
+    """
+
+    def begin_episode(self, source_episode_id: str) -> None:
+        """Bind an audit identity after reset; model IDs remain opaque."""
+        ...
+
+    def observe_transition(self, feedback: dict[str, object]) -> None:
+        """Commit exactly one completed, real environment transition."""
+        ...
+
+    def finish_episode(self, outcome: dict[str, object]) -> None:
+        """Close a terminal, truncated, interrupted or zero-transition episode."""
+        ...

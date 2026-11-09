@@ -29,10 +29,12 @@ def sample_latent(logits: Tensor, unimix: float, *, generator=None, deterministi
     return sample + probabilities - probabilities.detach()
 
 
-def policy_probs(logits: Tensor, mask: Tensor, unimix: float) -> Tensor:
+def policy_probs(logits: Tensor, mask: Tensor, unimix: float, *, validate_contents: bool = True) -> Tensor:
     """Mix uniform mass only over legal actions, retaining exactly zero illegal mass."""
     legal = mask.bool()
-    if legal.shape != logits.shape or not legal.any(-1).all():
+    if legal.shape != logits.shape:
+        raise ValueError("actor requires aligned, nonempty legal masks")
+    if validate_contents and not legal.any(-1).all():
         raise ValueError("actor requires aligned, nonempty legal masks")
     probabilities = logits.masked_fill(~legal, torch.finfo(logits.dtype).min).softmax(-1)
     uniform = legal.to(logits.dtype) / legal.sum(-1, keepdim=True)

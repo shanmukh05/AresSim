@@ -43,9 +43,9 @@ ACTION_LABELS = (
     "unload",
 )
 ROOT = Path(__file__).resolve().parents[1]
-PPO_EXPERIMENT = ROOT / "results" / "rllib_masked_ppo_reference"
-DQN_EXPERIMENT = ROOT / "results" / "rllib_masked_double_dueling_dqn_reference"
-MUZERO_EXPERIMENT = ROOT / "results" / "muzero_reference"
+PPO_EXPERIMENT = ROOT / "results" / "ppo"
+DQN_EXPERIMENT = ROOT / "results" / "double_duelling_dqn"
+MUZERO_EXPERIMENT = ROOT / "results" / "muzero"
 CHECKPOINT_NAME = "final"
 DEFAULT_OUTPUT = ROOT / "results" / "reports"
 DEFAULT_TRIALS = ("seed_29", "dqn_seed_1")

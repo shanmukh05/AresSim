@@ -8,19 +8,19 @@ The shared encoder consumes terrain `[B,8,8]`, five numerical spatial channels `
 
 The dueling heads produce advantage `[B,10]` and value `[B,1]`; advantages are centered over legal actions. The final Q tensor is `[B,10]`, with illegal entries set to `-inf`. Double-Q replay targets use the next observation’s legal set.
 
-![Architecture and tensor dimensions](architecture.drawio.png)
+![Architecture and tensor dimensions](diagrams/architecture.drawio.png)
 
-![Training and checkpoint flow](training.drawio.png)
+![Training and checkpoint flow](diagrams/training.drawio.png)
 
 The PNG figures contain editable draw.io XML: open the PNG directly in draw.io to revise the illustration. Shapes and numbers are grounded in the adjacent model/configuration files and `../common/encoder.py`.
 
 **October 7, 2026 update:** new presets use `local_memory` v2, capped delivery/task rewards v2 and frozen snapshots. The shared RLlib runner saves rotating and final checkpoints without automatic evaluation, validation selection or success gates. Run evaluation separately after training. Architecture details that explicitly name `local.v1` describe the retained legacy input. See [pipeline corrections](../../../../docs/rl/pipeline_fixes_2026-10-06.md) for the current contract.
 
-**October 8 sample-credit experiment:** `reference.yaml` now selects `seed_3_sample_credit_030`, retaining learner seed 3 and all DQN settings from seed_3. The only reward change is `samples_collected: 0.30` per 0.5 kg newly acquired, capped at the mission's sample quota. Delivered plus onboard sample mass preserves the acquisition total through Unload; the standard 4 kg quota pays at most 2.4. Excess scans and disabled sample targets pay zero; fractional remaining quotas pay proportionally. `new_scan` stays zero. This enabled reward uses shaped profile/breakdown v3; sparse evaluation and zero-default rewards retain v2. Existing outputs are rejected rather than overwritten. See the [run learnings](../../../../results/rllib_masked_double_dueling_dqn_reference/seed_3/learnings.md) for evidence and [launch/evaluation commands](../../../../docs/rl/usage.md).
+**October 8 sample-credit experiment:** `reference.yaml` now selects `seed_3_sample_credit_030`, retaining learner seed 3 and all DQN settings from seed_3. The only reward change is `samples_collected: 0.30` per 0.5 kg newly acquired, capped at the mission's sample quota. Delivered plus onboard sample mass preserves the acquisition total through Unload; the standard 4 kg quota pays at most 2.4. Excess scans and disabled sample targets pay zero; fractional remaining quotas pay proportionally. `new_scan` stays zero. This enabled reward uses shaped profile/breakdown v3; sparse evaluation and zero-default rewards retain v2. Existing outputs are rejected rather than overwritten. See the [run learnings](../../../../results/double_duelling_dqn/seed_3/learnings.md) for evidence and [launch/evaluation commands](../../../../docs/rl/usage.md).
 
 Implementation reference for `masked_dqn` and `local_cnn_q`. Off-policy **Double Dueling DQN** (van Hasselt 2016 + Wang 2016; n-step=3 on the reference config) trains through Ray RLlib on the same Gym env, seeds, masks, and evaluation path as masked PPO.
 
-W&B run name is `{experiment_id}-{trial_id}`. The reference trial uses `experiment_id: rllib_masked_double_dueling_dqn_reference`, `group: double_dueling_dqn`, and checkpoint `policy_id` `{experiment_id}:{trial_id}:{label}`. Registry name stays `masked_dqn`.
+W&B run name is `{experiment_id}-{trial_id}`. The reference trial uses `experiment_id: double_duelling_dqn`, `group: double_dueling_dqn`, and checkpoint `policy_id` `{experiment_id}:{trial_id}:{label}`. Registry name stays `masked_dqn`.
 
 Simulator rules stay in `aresim.core` and `aresim.components`. Illegal actions are excluded from greedy selection, epsilon-greedy, and Double-DQN targets by setting those Q-values to `-inf` inside `compute_q_values`.
 

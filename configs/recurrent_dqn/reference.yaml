@@ -1,9 +1,9 @@
 schema_version: aresim.experiment.v1
-experiment_id: recurrent_dqn_reference_v1
-trial_id: seed_7
+experiment_id: recurrent_dqn
+trial_id: seed_11
 algorithm: recurrent_dqn
 model: local_cnn_lstm_q
-learner_seed: 7
+learner_seed: 11
 environment:
   scenario_id: phase1_default_v1
   observation: local_memory
@@ -22,7 +22,7 @@ algorithm_config:
   train_batch_size: 1024
   replay_capacity: 250000
   learning_starts: 20000
-  n_step: 1
+  n_step: 3
   double_q: true
   dueling: true
   gamma: 0.995
@@ -30,10 +30,10 @@ algorithm_config:
   max_gradient_norm: 40.0
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_timesteps: 400000
+  epsilon_timesteps: 1000000
   target_network_update_freq: 4000
   tau: 1.0
-  sequence_length: 64
+  sequence_length: 128
   burn_in_length: 16
 model_config:
   terrain_embedding: 4
@@ -52,8 +52,8 @@ evaluation:
   record_trajectories: false
   workers: 1
 checkpoint:
-  interval_environment_steps: 81920
-  keep: 3
+  interval_environment_steps: 131072
+  keep: 16
 tracking:
   mode: online
   project: aresim
@@ -61,6 +61,9 @@ tracking:
   tags:
   - reference
   - recurrent_dqn
+  - sample_credit_030
+  - episode_aware_burn_in
+  - n_step_3
 artifacts:
   root: results
   reject_existing: true

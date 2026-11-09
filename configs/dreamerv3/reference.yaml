@@ -16,7 +16,7 @@ environment:
     samples_collected: 0.3
 algorithm_config:
   total_environment_steps: 2097152
-  batch_size: 16
+  batch_size: 64
   sequence_length: 32
   replay_capacity: 250000
   learning_starts: 2048
@@ -56,13 +56,14 @@ model_config:
   telemetry_layers:
   - 128
   - 128
-  fused_width: 256
-  deterministic_size: 512
+  fused_width: 128
+  deterministic_size: 256
   stochastic_size: 32
-  categories: 32
-  hidden_size: 256
+  categories: 16
+  hidden_size: 128
   unimix: 0.01
   value_bins: 255
+  decoder_layout: grouped
 evaluation:
   seed_manifest: configs/seeds/phase1_open_exploration_split_v1.yaml
   split: validation

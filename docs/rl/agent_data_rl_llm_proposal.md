@@ -2,6 +2,8 @@
 
 Last updated: 2026-09-12
 
+LLM scope update (2026-11-07): the [AresSim LLM Agent Implementation Plan](../llm_dm/implementation.md) is the sole implementation reference for the new `llm` policy. Its direct primitive-action actor and versioned contracts supersede the strategic-subgoal/tool proposals below for that implementation. This older document remains background for the broader agent-data architecture.
+
 Status: The framework-neutral environments, baselines, truncation, deterministic rollouts, unified trajectories, fixed seed splits, RLlib masked PPO, mask-aware DQN, checkpoint evaluation, canonical metrics, and reports are implemented. Goal-bearing tasks, recurrent policies, advanced representation learning, and multiple rovers remain proposed. Existing simulation semantics remain governed by [Environment Rules Reference](../product/environment_rules.md), trajectory usage by [RL Usage Guide](usage.md), and learned-policy implementation by [RL Algorithms, Training, and Evaluation](rl_quickstart.md).
 
 > New to RL or implementing an agent? Start with [RL Algorithms, Training, and Evaluation](rl_quickstart.md). It explains the active contracts, implemented policies, online sampling, learner updates, and evaluation workflow.
@@ -1025,9 +1027,9 @@ For every algorithm/configuration:
 
 ## 13. How to use LLMs
 
-### 13.1 Implemented first: Jev per-tick Choice, recommended later: planner
+### 13.1 Implemented: llm_dm Actor/Memory/Learner, recommended later: planner
 
-The first implemented LLM-class rover is Jev as a **per-tick masked Choice** over `aresim.action.rover.v1`. Encoding, attach, and fallbacks are documented in the [Jev workflow](../../engine/aresim/algorithms/jev/DETAILS.md). The 5x5 named-cell encoder is the `aresim.llm.ops.v1` slice used at inference.
+The implemented `llm_dm` pipeline supports a Decision Model or LLM Actor over `aresim.action.rover.v1`, with identical permitted State, outcome-driven Memory and persistent learning context. A mandatory LLM Learner reviews completed games and stages advice for later games. See the [llm_dm workflow](../llm_dm/implementation.md) for contracts, configuration and replay exports. The former standalone Decision Models encoder and action overrides have been removed.
 
 The stronger long-horizon hybrid remains:
 

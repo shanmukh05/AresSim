@@ -191,6 +191,30 @@ class AresEnvironment(Generic[ObservationT, ActionT]):
             info=self._base_info(resolved_seed, state_checksum(state)),
         )
 
+    def bind_engine(self, engine: AresEngine) -> EnvironmentReset[ObservationT, ActionT]:
+        """Compose task/reward/observation bookkeeping around an existing live engine.
+
+        This does not reset or mutate its world. A mid-session binding is a new
+        policy episode/discontinuity, never a reconstruction of unobserved history.
+        """
+        if engine.config != self.engine_config:
+            raise ValueError("live engine configuration differs from environment")
+        self.engine = engine
+        state = engine.state
+        self.task.reset(state)
+        observation = self.observation_builder.reset(state, self.engine_config)
+        mask = self.action_adapter.mask(state, self.engine_config)
+        self._reset, self._done = True, False
+        return EnvironmentReset(self.possible_agents[0], observation, mask,
+                                self._base_info(state.seed, state_checksum(state)))
+
+    def current_input(self) -> EnvironmentReset[ObservationT, ActionT]:
+        """Return current permitted input without resetting task or episode memory."""
+        state = self.engine.state
+        return EnvironmentReset(self.possible_agents[0], self.observation_builder.build(state, self.engine_config),
+                                self.action_adapter.mask(state, self.engine_config),
+                                self._base_info(state.seed, state_checksum(state)))
+
     def step(self, action_id: ActionT) -> EnvironmentStep[ObservationT, ActionT]:
         """Decode and apply one action, then project its RL observation and reward."""
         if not self._reset:
@@ -280,6 +304,15 @@ class AresTimeLimit(Generic[ObservationT, ActionT]):
     def world_state(self) -> WorldState:
         """Expose the wrapped defensive state copy without changing policy inputs."""
         return self.environment.world_state
+
+    def bind_engine(self, engine: AresEngine) -> EnvironmentReset[ObservationT, ActionT]:
+        """Start a bounded policy episode on an existing world without resetting it."""
+        result = self.environment.bind_engine(engine)
+        self._episode_step, self._reset, self._done = 0, True, False
+        return result
+
+    def current_input(self) -> EnvironmentReset[ObservationT, ActionT]:
+        return self.environment.current_input()
 
     def reset(
         self,

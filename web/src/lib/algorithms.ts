@@ -1,6 +1,6 @@
 /** Live-controller metadata shared by selectors, capability gating, and policy helpers. */
 
-type Capability = "rllib" | "muzero" | "world_models" | "jev";
+type Capability = "rllib" | "muzero" | "world_models" | "llm_dm";
 type ActionSelection = "q" | "policy" | null;
 interface AlgorithmDefinition {
   label: string;
@@ -14,7 +14,7 @@ export const ALGORITHM_CATALOG = {
   random_valid: { label: "Random (valid)", kind: "baseline", capability: null, actionSelection: null },
   wait: { label: "Wait", kind: "baseline", capability: null, actionSelection: null },
   scripted: { label: "Scripted", kind: "baseline", capability: null, actionSelection: null },
-  jev: { label: "Jev", kind: "llm", capability: "jev", actionSelection: null },
+  llm_dm: { label: "LLM + Decision Model", kind: "llm", capability: "llm_dm", actionSelection: null },
   masked_ppo: { label: "Masked PPO", kind: "checkpoint", capability: "rllib", actionSelection: "policy" },
   masked_dqn: { label: "Double Dueling DQN", kind: "checkpoint", capability: "rllib", actionSelection: "q" },
   muzero: { label: "MuZero", kind: "checkpoint", capability: "muzero", actionSelection: "policy" },
@@ -32,7 +32,7 @@ export const CAPABILITY_REQUIREMENTS: Record<Capability, string> = {
   rllib: "rllib required",
   muzero: "muzero required",
   world_models: "world_models required",
-  jev: "API key required",
+  llm_dm: "Configure learned bundle",
 };
 
 export function supportsActionSampling(algorithmId: AlgorithmId): boolean {
@@ -45,8 +45,4 @@ export function usesCheckpoint(algorithmId: AlgorithmId): boolean {
 
 export function usesWorldModel(algorithmId: AlgorithmId): boolean {
   return ALGORITHM_CATALOG[algorithmId].capability === "world_models";
-}
-
-export function usesJev(algorithmId: AlgorithmId): boolean {
-  return ALGORITHM_CATALOG[algorithmId].kind === "llm";
 }

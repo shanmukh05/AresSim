@@ -63,6 +63,7 @@ model_config:
   hidden_size: 64
   unimix: 0.01
   value_bins: 255
+  decoder_layout: grouped
 evaluation:
   seed_manifest: configs/seeds/phase1_smoke_eval_v1.yaml
   split: validation

@@ -115,17 +115,29 @@ class Collector:
         stats = SearchStats()
         search_seconds = environment_seconds = 0.0
         config = self.spec.algorithm_config
+        encoded = None
+        reset_indices = []
         for _ in range(rounds):
             started = time.monotonic()
             observations, previous = batch_history_tensors(
                 [episode.observations for episode in self.episodes],
                 [episode.actions for episode in self.episodes], self.network.config.history_length, self.device)
+            if encoded is None:
+                batch, history = previous.shape
+                flat = {key: value.flatten(0, 1) for key, value in observations.items()}
+                encoded = self.network.encoder(flat).reshape(batch, history, -1)
+            else:
+                newest = self.network.encoder({key: value[:, -1] for key, value in observations.items()})
+                encoded = torch.cat((encoded[:, 1:], newest[:, None]), 1)
+                if reset_indices:
+                    encoded[reset_indices] = newest[reset_indices, None].expand(-1, self.network.config.history_length, -1)
             results = search_many(self.network, observations, previous,
                 np.stack([episode.masks[-1] for episode in self.episodes]), config,
-                rngs=self.rngs, training=True, stats=stats)
+                rngs=self.rngs, training=True, stats=stats, encoded_observations=encoded)
             search_seconds += time.monotonic() - started
             started = time.monotonic()
             ended = []
+            reset_indices = []
             for index, (episode, result) in enumerate(zip(self.episodes, results, strict=True)):
                 action = choose_action(result, training=True, temperature=config.temperature, rng=self.rngs[index])
                 if not episode.masks[-1][action]:
@@ -164,6 +176,7 @@ class Collector:
                     "train/extract_opportunities": sum(int(bool(mask[6])) for mask in episode.masks[:-1]),
                     **{f"train/action_count/{action}": episode.actions.count(action) for action in range(10)}})
                 self.episodes[index] = self._reset(index)
+                reset_indices.append(index)
             environment_seconds += time.monotonic() - started
         return CollectionResult(self.collector_id, policy_version, rounds * len(self.environments),
             completed, metrics, sum(len(episode.actions) for episode in self.episodes),

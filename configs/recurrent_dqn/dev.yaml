@@ -22,7 +22,7 @@ algorithm_config:
   train_batch_size: 1024
   replay_capacity: 250000
   learning_starts: 20000
-  n_step: 1
+  n_step: 3
   double_q: true
   dueling: true
   gamma: 0.995
@@ -30,10 +30,10 @@ algorithm_config:
   max_gradient_norm: 40.0
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_timesteps: 400000
+  epsilon_timesteps: 1000000
   target_network_update_freq: 4000
   tau: 1.0
-  sequence_length: 64
+  sequence_length: 128
   burn_in_length: 16
 model_config:
   terrain_embedding: 4

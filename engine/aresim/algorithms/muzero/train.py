@@ -24,13 +24,14 @@ from ...factory import make_env
 from ...training.provenance import environment_config, experiment_seeds, freeze_experiment
 from ...training.experiments import ExperimentSpec
 from ...training.artifacts import atomic_json, numbered_checkpoints, latest_checkpoint
+from ...training.torch_utils import cpu_state
 from ..common.config_decode import decode_dataclass
 from ..common.tracking import new_wandb_run_id
 from ..registry import TrainingContext, TrainingRegistry, create_training_registry
 from .checkpoint import batch_history_tensors, validate_sidecar, write_checkpoint_sidecar
 from .collection import RayCollectionPool
 from .config import MuZeroConfig, MuZeroModelConfig, MuZeroResourceConfig
-from .model import MuZeroNetwork, support_target, support_value
+from .model import MuZeroNetwork, support_loss, support_value
 from .replay import Episode, Replay
 from .search import search_many
 
@@ -194,7 +195,7 @@ def _update(network: MuZeroNetwork, optimizer: torch.optim.Optimizer, replay: Re
     consistency_loss = torch.zeros_like(policy_loss)
     legality_counts = torch.zeros((4, 10), device=device)
     positive_weights = torch.tensor(config.legality_positive_weights, device=device)
-    root_errors = (support_value(value_logits, network.config.support_size).detach() - values[:, 0]).cpu().numpy()
+    root_errors = support_value(value_logits, network.config.support_size).detach() - values[:, 0]
     reward_active = torch.tensor([[episode.terminated or start + k < len(episode.actions)
                                    for k in range(config.unroll_steps)]
                                   for episode, start, _ in samples], device=device, dtype=torch.float32)
@@ -212,8 +213,7 @@ def _update(network: MuZeroNetwork, optimizer: torch.optim.Optimizer, replay: Re
                 predicted = (mask_logits >= 0).float()
                 legality_counts += torch.stack(((predicted * positive).sum(0), positive.sum(0),
                                                 (predicted * negative).sum(0), negative.sum(0)))
-        value_target = support_target(values[:, k], network.config.support_size)
-        value_loss += -(value_target * F.log_softmax(value_logits, dim=-1)).sum(-1) * active[:, k]
+        value_loss += support_loss(value_logits, values[:, k], network.config.support_size) * active[:, k]
         policy_loss += -(policies[:, k] * F.log_softmax(policy_logits, dim=-1)).sum(-1) * policy_active[:, k]
         if k == config.unroll_steps:
             break
@@ -222,8 +222,7 @@ def _update(network: MuZeroNetwork, optimizer: torch.optim.Optimizer, replay: Re
         if targets is not None:
             predicted = network.project_consistency(latent, prediction=True)
             consistency_loss += (1 - F.cosine_similarity(predicted, targets[:, k], dim=-1)) * consistency_active[:, k]
-        reward_target = support_target(rewards[:, k], network.config.support_size)
-        reward_loss += -(reward_target * F.log_softmax(reward_logits, dim=-1)).sum(-1) * reward_active[:, k]
+        reward_loss += support_loss(reward_logits, rewards[:, k], network.config.support_size) * reward_active[:, k]
     divisor = config.unroll_steps + 1
     per_sample_losses = torch.stack((policy_loss, value_loss, reward_loss, constraint_loss,
                                     consistency_loss * config.consistency_loss_weight)) / divisor
@@ -234,13 +233,13 @@ def _update(network: MuZeroNetwork, optimizer: torch.optim.Optimizer, replay: Re
     loss.backward()
     gradient_norm = torch.nn.utils.clip_grad_norm_(network.parameters(), config.max_gradient_norm)
     optimizer.step()
-    replay.update_priorities(samples, root_errors, config.priority_alpha)
     names = ("policy", "value", "reward", "constraint", "consistency")
     # Transfer diagnostics together rather than adding a CUDA fence per field.
     packed = torch.cat((weighted_losses.detach(), unweighted_losses.detach(),
         torch.stack((weights.mean(), weights.min(), weights.max(),
                      weights.sum().square() / weights.square().sum(), gradient_norm,
-                     target_std)), legality_counts.flatten())).cpu().tolist()
+                     target_std)), legality_counts.flatten(), root_errors)).cpu().tolist()
+    replay.update_priorities(samples, packed[56:], config.priority_alpha)
     ages = [max(0, policy_version - ep.policy_versions[index])
             for ep, start, _ in samples if ep.policy_versions is not None and policy_version is not None
             for index in range(start, min(start + config.unroll_steps + 1, len(ep.actions)))]
@@ -371,8 +370,7 @@ def _checkpoint(run_directory: Path, label: str, spec: ExperimentSpec, schemas: 
         shutil.rmtree(destination)
     native = destination / "native"
     native.mkdir(parents=True)
-    torch.save(network.cpu().state_dict(), native / "model.pt")
-    network.to(spec.resources.device)
+    torch.save(cpu_state(network.state_dict()), native / "model.pt")
     torch.save({"optimizer": optimizer.state_dict(), "replay": replay, "rng": rng.bit_generator.state,
                 "torch_rng": torch.get_rng_state(), "python_rng": random.getstate(),
                 "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
@@ -432,7 +430,7 @@ def run_experiment(spec: ExperimentSpec | str | Path, registry: TrainingRegistry
     rng = np.random.default_rng(resolved.learner_seed)
     network = MuZeroNetwork(resolved.model_config, environment_config(resolved).observation_config.window_size,
                             memory=resolved.environment.observation == "local_memory").to(device)
-    optimizer = torch.optim.AdamW(network.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+    optimizer = torch.optim.AdamW(network.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay, fused=device.type == "cuda")
     replay = Replay(config.replay_capacity)
     steps = updates = episodes_collected = 0
     update_credit = 0.0

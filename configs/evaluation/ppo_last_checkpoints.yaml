@@ -1,0 +1,39 @@
+# Last saved checkpoint of every PPO trial under results/ppo.
+# final is the end-of-training export. seed_9 never wrote one, so this uses its newest step.
+schema_version: aresim.evaluation.panel.v1
+output: results/reports/ppo_last_checkpoints_20
+seed_manifest: configs/seeds/phase1_open_exploration_split_v1.yaml
+split: validation
+episode_count: 20
+action_mode: deterministic
+workers: 4
+allow_environment_mismatch: true
+checkpoints:
+  - name: PPO seed_7
+    path: results/ppo/seed_7/checkpoints/final/checkpoint.json
+  - name: PPO seed_9
+    path: results/ppo/seed_9/checkpoints/step_245863/checkpoint.json
+  - name: PPO seed_11
+    path: results/ppo/seed_11/checkpoints/final/checkpoint.json
+  - name: PPO seed_13
+    path: results/ppo/seed_13/checkpoints/final/checkpoint.json
+  - name: PPO seed_17
+    path: results/ppo/seed_17/checkpoints/final/checkpoint.json
+  - name: PPO seed_19
+    path: results/ppo/seed_19/checkpoints/final/checkpoint.json
+  - name: PPO seed_21
+    path: results/ppo/seed_21/checkpoints/final/checkpoint.json
+  - name: PPO seed_23
+    path: results/ppo/seed_23/checkpoints/final/checkpoint.json
+  - name: PPO seed_25
+    path: results/ppo/seed_25/checkpoints/final/checkpoint.json
+  - name: PPO seed_27
+    path: results/ppo/seed_27/checkpoints/final/checkpoint.json
+  - name: PPO seed_29
+    path: results/ppo/seed_29/checkpoints/final/checkpoint.json
+  - name: PPO seed_31
+    path: results/ppo/seed_31/checkpoints/final/checkpoint.json
+  - name: PPO seed_33
+    path: results/ppo/seed_33/checkpoints/final/checkpoint.json
+  - name: PPO seed_35
+    path: results/ppo/seed_35/checkpoints/final/checkpoint.json

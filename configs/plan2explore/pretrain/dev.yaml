@@ -60,13 +60,14 @@ model_config:
   telemetry_layers:
   - 128
   - 128
-  fused_width: 256
-  deterministic_size: 512
+  fused_width: 128
+  deterministic_size: 256
   stochastic_size: 32
-  categories: 32
-  hidden_size: 256
+  categories: 16
+  hidden_size: 128
   unimix: 0.01
   value_bins: 255
+  decoder_layout: grouped
 evaluation:
   seed_manifest: configs/seeds/phase1_open_exploration_split_v1.yaml
   split: validation

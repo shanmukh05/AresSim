@@ -47,6 +47,16 @@ def support_value(logits: Tensor, support_size: int) -> Tensor:
     return inverse_scalar_transform((logits.softmax(-1) * bins).sum(-1))
 
 
+def support_loss(logits: Tensor, values: Tensor, support_size: int) -> Tensor:
+    """Score the two occupied scalar-support bins without building a dense target."""
+    shifted = scalar_transform(values).clamp(-support_size, support_size) + support_size
+    low = shifted.floor().long()
+    high = (low + 1).clamp(max=2 * support_size)
+    fraction = shifted - low
+    log_probs = logits.log_softmax(-1)
+    return -(1 - fraction) * log_probs.gather(-1, low.unsqueeze(-1)).squeeze(-1) - fraction * log_probs.gather(-1, high.unsqueeze(-1)).squeeze(-1)
+
+
 class _Residual(nn.Module):
     def __init__(self, width: int) -> None:
         super().__init__()
@@ -112,6 +122,10 @@ class MuZeroNetwork(nn.Module):
             raise ValueError("MuZero sequence is shorter than its history")
         flattened = {key: value.reshape(batch * history, *value.shape[2:]) for key, value in observations.items()}
         embedded = self.encoder(flattened).reshape(batch, history, -1)
+        return self.represent_sequence(embedded, previous_actions)
+
+    def represent_sequence(self, embedded: Tensor, previous_actions: Tensor) -> Tensor:
+        """Represent features encoded under the same immutable collection weights."""
         action_planes = torch.nn.functional.one_hot(previous_actions.long(), 11).float()
         features = torch.cat((embedded, action_planes), dim=-1)
         windows = features.unfold(1, self.config.history_length, 1).transpose(-1, -2).flatten(-2)
@@ -131,4 +145,4 @@ class MuZeroNetwork(nn.Module):
         return next_latent, self.reward(next_latent), self.policy(next_latent), self.value(next_latent)
 
 
-__all__ = ["MuZeroNetwork", "scalar_transform", "inverse_scalar_transform", "support_target", "support_value"]
+__all__ = ["MuZeroNetwork", "scalar_transform", "inverse_scalar_transform", "support_target", "support_value", "support_loss"]

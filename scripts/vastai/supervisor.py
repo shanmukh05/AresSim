@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import signal
 import subprocess
 import sys
@@ -69,7 +68,7 @@ def stop_workers(process: subprocess.Popen, grace: int) -> None:
 
 def artifact_inventory(root: Path, deadline: float) -> dict[str, str]:
     files = [root / "training.log", root / "source_inventory.json", root / "job.json"]
-    allowed = {".json", ".jsonl", ".yaml", ".yml", ".pt", ".pkl", ".msgpack", ".npz", ".npy", ".csv", ".png", ".txt"}
+    allowed = {".json", ".jsonl", ".yaml", ".yml", ".pt", ".pkl", ".msgpack", ".npz", ".npy", ".csv", ".png", ".txt", ".wandb"}
     files.extend(path for path in (root / "results").rglob("*") if path.suffix in allowed)
     inventory = {}
     for path in sorted(files):
@@ -86,37 +85,37 @@ def artifact_inventory(root: Path, deadline: float) -> dict[str, str]:
 
 
 def self_stop(root: Path, identifier: int, control_env: dict[str, str]) -> None:
-    cli_path = root / ".vast-control/bin/vastai"
-    cli = str(cli_path) if cli_path.is_file() else shutil.which("vastai")
-    if cli:
-        stopped = subprocess.run([cli, "stop", "instance", str(identifier), "--raw"], env=control_env, capture_output=True, text=True, timeout=45)
-        payload = json.loads(stopped.stdout)
-        if stopped.returncode or not isinstance(payload, dict) or payload.get("success") is not True:
-            raise RuntimeError("Vast CLI did not acknowledge self-stop")
-    else:
-        # Setup may fail before installing the CLI. The documented instance API
-        # still permits scoped self-stop using only Python's standard library.
-        request = urllib.request.Request(
-            f"https://console.vast.ai/api/v0/instances/{identifier}",
-            data=b'{"state":"stopped"}', method="PUT",
-            headers={"Authorization": f"Bearer {control_env['VAST_API_KEY']}", "Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(request, timeout=45) as response:
-            payload = json.load(response)
-        if not isinstance(payload, dict) or payload.get("success") is not True:
-            raise RuntimeError("Vast API did not acknowledge self-stop")
+    # The scoped API also works before setup and avoids CLI versions that emit
+    # plain-text acknowledgments even with --raw.
+    request = urllib.request.Request(
+        f"https://console.vast.ai/api/v0/instances/{identifier}",
+        data=b'{"state":"stopped"}', method="PUT",
+        headers={"Authorization": f"Bearer {control_env['VAST_API_KEY']}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=45) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        raise RuntimeError("Vast API did not acknowledge self-stop")
 
 
 def run(root: Path) -> int:
     job = json.loads((root / "job.json").read_text())
     control_env = scoped_environment(str(job["instance_id"]))
     clean_env = {key: value for key, value in os.environ.items() if key not in {"VAST_API_KEY", "CONTAINER_API_KEY"}}
+    clean_env["WANDB_MODE"] = job["resolved_config"]["tracking"]["mode"]
+    tracking_key_path = root / ".wandb_api_key"
     deadline = time.monotonic() + job["seconds"]
     write_status(root, state="running", instance_id=job["instance_id"])
     process = None
     code = 1
     try:
-        command = ["bash", "-c", 'set -euo pipefail; python3 -m venv .vast-control; .vast-control/bin/pip -q install vastai; nvidia-smi; df -h .; bash scripts/cloud/remote_setup.sh "$1"; shift; exec .venv/bin/aresim-rl train "$@"', "aresim-cloud", job["extra"], *job["train_args"]]
+        if clean_env["WANDB_MODE"] == "online":
+            clean_env["WANDB_API_KEY"] = tracking_key_path.read_text().strip()
+            tracking_key_path.unlink()
+        if job.get("shared_instance"):
+            command = ["bash", "-c", 'set -euo pipefail; nvidia-smi; df -h .; bash scripts/cloud/remote_setup.sh "$1"; exec .venv/bin/python scripts/vastai/world_model_worker.py "$2"', "aresim-shared", job["extra"], str(root)]
+        else:
+            command = ["bash", "-c", 'set -euo pipefail; nvidia-smi; df -h .; bash scripts/cloud/remote_setup.sh "$1"; shift; exec .venv/bin/aresim-rl train "$@"', "aresim-cloud", job["extra"], *job["train_args"]]
         with (root / "training.log").open("w") as log:
             process = subprocess.Popen(command, cwd=root, stdout=log, stderr=subprocess.STDOUT, env=clean_env, start_new_session=True)
             state = "running"
@@ -144,13 +143,17 @@ def run(root: Path) -> int:
     finally:
         if process is not None and process.poll() is None:
             stop_workers(process, job["grace_seconds"])
-        try:
-            self_stop(root, int(job["instance_id"]), control_env)
-            write_status(root, shutdown="requested")
-        except Exception as error:
-            write_status(root, shutdown="failed", shutdown_error_type=type(error).__name__)
-            print(f"AUTOMATIC STOP FAILED: instance {job['instance_id']}; client must stop compute", file=sys.stderr)
-            code = code or 1
+        tracking_key_path.unlink(missing_ok=True)
+        if job.get("shared_instance"):
+            write_status(root, shutdown="shared_instance_guard_retained")
+        else:
+            try:
+                self_stop(root, int(job["instance_id"]), control_env)
+                write_status(root, shutdown="requested")
+            except Exception as error:
+                write_status(root, shutdown="failed", shutdown_error_type=type(error).__name__)
+                print(f"AUTOMATIC STOP FAILED: instance {job['instance_id']}; client must stop compute", file=sys.stderr)
+                code = code or 1
     return code
 
 

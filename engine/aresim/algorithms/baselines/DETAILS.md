@@ -2,13 +2,13 @@
 
 ## Inference at a glance
 
-![Baseline Agent input, policy alternatives, and engine output](inference.drawio.png)
+![Baseline Agent input, policy alternatives, and engine output](diagrams/inference.drawio.png)
 
 Each policy receives an observation and a ten-entry legal-action mask and returns one integer in `Discrete(10)`. The default local crop is 8×8. Wait and random-valid ignore crop contents; uniform random intentionally ignores legality, while scripted uses observed telemetry and private navigation memory. These policies have no trainable weights or training loop.
 
 The PNG figures contain editable draw.io XML: open the PNG directly in draw.io to revise the illustration. Shapes and numbers are grounded in the adjacent model/configuration files and `../common/encoder.py`.
 
-Inference-only `Agent` implementations used for rollouts, frozen evaluation, and UI Algorithm mode. They share the Discrete(10) action space and the same mask contract as PPO, DQN, and Jev. Simulator rules stay in `aresim.core`. None of these policies train.
+Inference-only `Agent` implementations used for rollouts, frozen evaluation, and UI Algorithm mode. They share the Discrete(10) action space and the same mask contract as PPO, DQN, and Decision Models. Simulator rules stay in `aresim.core`. None of these policies train.
 
 For the broader RL guide, see [RL Algorithms, Training, and Evaluation](../../../../docs/rl/rl_quickstart.md).
 

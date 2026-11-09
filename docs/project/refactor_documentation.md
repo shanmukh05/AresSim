@@ -14,7 +14,7 @@ Reviewed November 7, 2026 against the existing working tree. Existing algorithm 
 ## Verification
 
 - All eight algorithm folders have `DETAILS.md`; no `workflow.md` files remain in the algorithm tree.
-- Six learned algorithms each have architecture and training PNGs; Jev and baselines each have an inference PNG. Dimensions were checked against encoder/model/config source, with smoke/reference differences stated.
+- Six learned algorithms each have architecture and training PNGs; Decision Models and baselines each have an inference PNG. Dimensions were checked against encoder/model/config source, with smoke/reference differences stated.
 - Visually reviewed the figures, including a complete contact sheet and full-size architecture checks. Repaired duplicate cell IDs and connectors that crossed labels before the final export.
 - Loaded every PNG, checked nonblank image dimensions, parsed its embedded XML, verified unique cell IDs and rejected self-parenting cells. All diagram links and new navigation links resolve.
 - No unit tests were created, added, generated, restored or rewritten. The figures describe implementation structure, not evidence of GPU throughput or mission-learning quality.

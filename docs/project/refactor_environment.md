@@ -30,4 +30,4 @@ November 7, 2026. This records the working-tree inventory before structural edit
 - `npm run build` passed. Vite reports the existing large bundle advisory; this refactor does not alter application loading strategy.
 - Re-audited changed dependency boundaries and searched for removed constants/callers. Built-in compact stepping remains deliberately explicit to preserve custom hooks. No additional evidenced structural issue worth changing remains in this reviewed environment/UI scope.
 
-No unit tests were added, generated, restored, or rewritten. Manual verification does not benchmark a long training run or exercise a paid Jev API call.
+No unit tests were added, generated, restored, or rewritten. Manual verification does not benchmark a long training run or exercise a paid Decision Models API call.

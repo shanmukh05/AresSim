@@ -1,0 +1,27 @@
+# Same 20 validation worlds for every checkpoint. One deterministic episode per world.
+# Plan2Explore is the loop-fix adaptation checkpoint.
+# PPO is seed_33 final: best of the last-checkpoint panel on ice delivered
+# (nobody succeeded). Its frozen reward has no sample-credit override.
+schema_version: aresim.evaluation.panel.v1
+output: results/reports/reference_panel_loopfix
+seed_manifest: configs/seeds/phase1_open_exploration_split_v1.yaml
+split: validation
+episode_count: 20
+action_mode: deterministic
+workers: 4
+# These checkpoints were frozen before the current environment sources. Schemas still match.
+# The summary records environment_comparable false for that diagnostic comparison.
+allow_environment_mismatch: true
+checkpoints:
+  - name: Double Duelling DQN
+    path: results/double_duelling_dqn/seed_3_sample_credit_030/checkpoints/step_985600/checkpoint.json
+  - name: DreamerV3
+    path: results/dreamerv3/seed_11/checkpoints/step_2097152/checkpoint.json
+  - name: MuZero
+    path: results/muzero/seed_7_sample_credit_030_parallel_lossnorm/checkpoints/step_2048000/checkpoint.json
+  - name: Plan2Explore
+    path: results/plan2explore/adapt/seed_11_loopfix/checkpoints/step_1048576/checkpoint.json
+  - name: PPO
+    path: results/ppo/seed_33/checkpoints/final/checkpoint.json
+  - name: Recurrent DQN
+    path: results/recurrent_dqn/seed_11/checkpoints/step_1966080/checkpoint.json

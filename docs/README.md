@@ -16,11 +16,11 @@ Canonical and planned project docs, grouped by purpose. Historical research note
 | Document | Purpose |
 |---|---|
 | [RL Algorithms, Training, and Evaluation](rl/rl_quickstart.md) | Implemented policies, all six learned algorithms, network architecture, online sampling, W&B, checkpoints, and evaluation |
-| [RL Usage Guide](rl/usage.md) | CLI training, W&B setup, baselines, trajectories, Jev, and extension contracts |
+| [RL Usage Guide](rl/usage.md) | CLI training, W&B setup, baselines, trajectories, Decision Models, and extension contracts |
 | [Results layout](../results/README.md) | Consolidated algorithm folders, trial naming and preserved historical provenance |
 | [Pipeline corrections and verification](rl/pipeline_fixes_2026-10-06.md) | Reward v2, observed memory, frozen provenance, MuZero fixes, checkpoint-only training, and diagnostic evidence |
 | [PPO seed 33/35 follow-up](rl/ppo_followup_2026-10-07.md) | Sampled-versus-greedy failure, successful mission learning, survival traps, and next experiments |
-| [DQN seed 3 follow-up](../results/rllib_masked_double_dueling_dqn_reference/seed_3/learnings.md#october-8-follow-up-what-actually-remains-broken) | Frozen Q/action probes, learned camping, and the implemented capped sample-credit experiment |
+| [DQN seed 3 follow-up](../results/double_duelling_dqn/seed_3/learnings.md#october-8-follow-up-what-actually-remains-broken) | Frozen Q/action probes, learned camping, and the implemented capped sample-credit experiment |
 | [MuZero workflow](../engine/aresim/algorithms/muzero/DETAILS.md) | Learned search model, replay, training, checkpoints, and inference |
 | [MuZero checkpoint and loss corrections](rl/muzero_learning_fixes_2026-10-13.md) | Numeric checkpoint ordering, stable weighted loss, unweighted/replay diagnostics and fresh-run command |
 | [MuZero learning-path changes](rl/muzero_learning_v3_2026-10-13.md) | Full-unroll replay reanalysis, rare-action legality balancing, temporal consistency and local verification |
@@ -33,10 +33,11 @@ Canonical and planned project docs, grouped by purpose. Historical research note
 | [Algorithm Pipeline Notebook](../notebooks/rl_algorithm_pipeline.ipynb) | Baseline rollout, trajectory, validation, and determinism smoke test |
 | [Evaluation Report Template](../notebooks/evaluation_report_template.ipynb) | Optional manual W&B analysis notebook |
 | [Agent Data, RL, and LLM Proposal](rl/agent_data_rl_llm_proposal.md) | Observations, actions, adapters, datasets, LLM interface |
-| [Experience-Driven Agent Learning Plan](llm/experience_driven_llm_agent_learning_plan.md) | Objective, workflow, component experiments, controller research, implementation, and cross-game tests |
-| [LLM Agent Literature Review](llm/literature_survey.md) | Paper analyses, evidence cards, limitations, and component reading map |
+| [AresSim llm_dm — Implementation Guide](llm_dm/implementation.md) | Sole hybrid pipeline reference: Decision Model or LLM Actor, shared Memory, required LLM Learner, reuse, providers, replays and verification |
+| [LLM Agents for AresSim — Literature Survey](llm_dm/literature_survey.md) | Primary-source review, limitations, AresSim experiments, and relevant 2026 work |
 | [Algorithm Literature Survey](rl/algorithm_literature_survey.md) | Algorithms worth testing and research priorities |
 | [Recurrent DQN, DreamerV3, and Plan2Explore](../engine/aresim/algorithms/README.md) | Illustrated algorithm details, shared ownership, phase commands and masks/memory |
+| [Training performance](rl/training_performance.md) | Measured pipeline optimizations, validation and bounded CUDA benchmarks |
 
 ## Project — status and contributor rules
 
@@ -54,5 +55,5 @@ Coding standards live in the always-on Cursor rule [`.cursor/rules/coding-standa
 
 1. New to the product: Environment Rules → UI Design → Gameplay Save Format
 2. Working on the Python backend: Engine Code Reference → Implementation Checklist
-3. Starting RL work: [RL Usage Guide](rl/usage.md) (CLI + W&B) → [Train on JarvisLabs](rl/jarvislabs.md) or [Vast.ai](rl/vastai.md) for cloud GPUs → [RL Algorithms, Training, and Evaluation](rl/rl_quickstart.md) → [Jev workflow](../engine/aresim/algorithms/jev/DETAILS.md) → Agent Data proposal
+3. Starting RL work: [RL Usage Guide](rl/usage.md) (CLI + W&B) → [Train on JarvisLabs](rl/jarvislabs.md) or [Vast.ai](rl/vastai.md) for cloud GPUs → [RL Algorithms, Training, and Evaluation](rl/rl_quickstart.md) → [llm_dm workflow](llm_dm/implementation.md) → Agent Data proposal
 4. Exploring algorithms: [Recurrent DQN, DreamerV3, and Plan2Explore](../engine/aresim/algorithms/README.md) → Algorithm Literature Survey

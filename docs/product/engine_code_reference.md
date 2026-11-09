@@ -59,7 +59,7 @@ engine/
     │   │   ├── model.py
     │   │   ├── train.py
     │   │   └── DETAILS.md
-    │   ├── jev/
+    │   ├── llm_dm/
     │   │   ├── __init__.py
     │   │   ├── agent.py
     │   │   ├── client.py
@@ -281,7 +281,7 @@ The module validates the completed default configuration during import so invali
 
 ### `engine/aresim/registry.py`
 
-Owns the explicit repository-local component and agent registry and the uniform `ComponentBuildContext`. Every entry is a typed factory over that context. The registry includes the built-in environment components plus `random`, `random_valid`, `wait`, `scripted`, and `jev` policies, validates factory results against public contracts and spaces, and rejects duplicate or unknown names. It does not use entry points or automatic import discovery.
+Owns the explicit repository-local component and agent registry and the uniform `ComponentBuildContext`. Every entry is a typed factory over that context. The registry includes the built-in environment components plus `random`, `random_valid`, `wait`, `scripted`, and `llm_dm` policies, validates factory results against public contracts and spaces, and rejects duplicate or unknown names. It does not use entry points or automatic import discovery.
 
 ### `engine/aresim/factory.py`
 
@@ -414,7 +414,7 @@ Neither adapter implements gameplay validation, state mutation, observation feat
 - `catalog.py` owns dependency-free policy IDs, display labels and live-controller kinds used by API policy integration; algorithm registration owns model/loader IDs and dependency extras.
 - `README.md` links the eight illustrated algorithm `DETAILS.md` documents; their `.drawio.png` files embed editable diagram XML.
 - `baselines/` groups the four built-in baseline policies (`random.py`, `random_valid.py`, `wait.py`, `scripted.py`). [`DETAILS.md`](../../engine/aresim/algorithms/baselines/DETAILS.md) explains each one. The scripted policy cannot access canonical `WorldState`.
-- `jev/` is the inference-only TypeSafe Jev rover agent (`state.py` encodes `aresim.llm.ops.v1`, `agent.py` implements `Agent`). Canonical usage and payload docs are [`jev/DETAILS.md`](../../engine/aresim/algorithms/jev/DETAILS.md). It cannot access canonical `WorldState`.
+- `llm_dm/state.py` owns the common permitted observation encoder and public game rules; `memory.py` owns episode memory.
 - `common/masks.py` shares mask validation across baselines.
 - `common/config_decode.py` shares YAML-to-dataclass decoding and scalar validation for algorithm and experiment configs.
 - `common/tracking.py` owns W&B run-id helpers so training entry points do not invent ids.
@@ -440,12 +440,11 @@ Neither adapter implements gameplay validation, state mutation, observation feat
 - `muzero/train.py` owns one learner, self-normalized importance-weighted loss with unweighted diagnostics, actual-step update credit, bounded policy lag, batched full-unroll reanalysis of selected actual-minibatch starts, rare-action positive legality weighting, temporal consistency and quiescent collector/replay checkpoints. Numbered rotation/resume sorts by numeric step; final is compared by its recorded step count. It performs no held-out evaluation.
 - `muzero/checkpoint.py` owns batched history packing, native sidecars and frozen sampled/greedy inference; loading a policy does not start Ray.
 - `muzero/DETAILS.md` documents configuration, execution, resume, inference and separate manual evaluation. See [parallel implementation and A30 evidence](../rl/muzero_parallel_2026-10-11.md).
-- `jev/config.py` owns Jev timeouts, confidence floor, and neighborhood size.
-- `jev/state.py` owns the `aresim.llm.ops.v1` 5x5 encoder.
-- `jev/questions.py` owns the masked Choice question.
-- `jev/client.py` owns TypeSafe/fake clients and `JEV_API_KEY`.
-- `jev/agent.py` owns the inference `JevAgent`, idle-Wait skip, and Choice probability traces.
-- `jev/rollout.py` owns `aresim.rollout.v1` YAML for `aresim-rl rollout`.
+- `llm_dm/config.py` owns independent Actor/LLM-Learner providers, shared budgets, history and learning-file imports.
+- `llm_dm/state.py` owns the common permitted observation encoder and public game rules; `memory.py` owns episode memory.
+- `llm_dm/providers/http.py` owns native LLM endpoints and TypeSafe Choice normalization; no TypeSafe SDK is required.
+- `llm_dm/agent.py` owns the shared `LLMDMAgent` and outcome lifecycle; legal Actor choices are never strategically overridden.
+- `llm_dm/rollout.py` owns `aresim.llm_dm.run.v1`, required learning rounds, advice carry-forward, evaluation and export.
 - `__init__.py` re-exports the contract and built-in policies.
 
 ### `engine/aresim/training/`
@@ -459,7 +458,8 @@ Neither adapter implements gameplay validation, state mutation, observation feat
 - `world_models/replay.py` owns contiguous episode suffixes, padding/validity and typed sequence batches; `learner.py` owns model/behavior optimizer isolation and prefix reconstruction; `collection.py` owns bounded Ray CPU groups, batched actions and resumable histories; `runner.py` owns preflight, phase transfer/resume, budgets/tracking and checkpoint lifecycle. The initializer records shared ownership without importing the trainer.
 - `provenance.py` freezes environment, seed and source snapshots; `selection.py` owns explicitly requested manual validation selection. Neither trainer performs held-out selection.
 - `experiments.py` owns immutable experiment settings, safe YAML, strict typed overrides, and configuration hashes.
-- `seeds.py` and `evaluation.py` own fixed splits and framework-neutral frozen-policy evaluation. The checked-in split is `configs/seeds/phase1_open_exploration_split_v1.yaml`.
+- `seeds.py` and `evaluation.py` own fixed splits and framework-neutral frozen-policy evaluation. The checked-in split is `configs/seeds/phase1_open_exploration_split_v1.yaml`. `evaluate_episodes` scores one checkpoint on caller-supplied worlds.
+- `panel.py` owns cross-checkpoint comparison. It generates one episode list, runs each configured checkpoint through `evaluate_episodes`, and writes `environments.json`, `episodes.jsonl`, `summary.json`, and bar charts. `aresim-rl compare` is the command. The reference config is `configs/evaluation/reference_panel.yaml`.
 - `reports.py` pulls W&B training history and writes matplotlib plots plus exported metrics under `<run>/reports/` without starting Ray or the simulator. Reports include MuZero replay/consistency/legality plots, recurrent DQN learned/burn-in/padding counts, and world-model reconstruction/KL/continuation/actor/value/disagreement, phase-budget and history-cost plots when available. Rates without observed label denominators are hidden.
 - `cli.py` provides train, evaluate, report, inspect, and rollout commands.
 - `__init__.py` re-exports rollout, trajectory, and lazy learned-policy APIs.
@@ -484,7 +484,7 @@ When a field is added to authoritative state, decide explicitly whether the UI n
 
 ### `engine/aresim/integrations/policy.py`
 
-Bridges one live `AresEngine` session to a registered baseline, Jev, or checkpoint agent for UI Algorithm mode.
+Bridges one live `AresEngine` session to a registered baseline, Decision Models, or checkpoint agent for UI Algorithm mode.
 
 - Builds policy observations and legal-action masks from the current world state.
 - Decodes the chosen action ID back into an engine command.
@@ -512,7 +512,7 @@ Bridges one live `AresEngine` session to a registered baseline, Jev, or checkpoi
 | Change RL reward/task projection | `components/rewards.py`, `components/tasks.py` | Engine reward separation and adapter parity |
 | Change environment adapter shapes | `envs/` | Gymnasium/PettingZoo compliance and direct parity |
 | Add or change a baseline policy | `algorithms/` | Agent contracts, mask behavior, fixed-seed rollouts |
-| Add or change the Jev rover agent | `algorithms/jev/` | Encoder, fake-client fallbacks, attach, rollout YAML |
+| Add or change the Decision Models rover agent | `algorithms/llm_dm/` | Encoder, fake-client fallbacks, attach, rollout YAML |
 | Add or change a learned algorithm | `algorithms/ppo/`, `algorithms/dqn/` or `algorithms/muzero/` | Registry, experiment YAML, algorithm workflow |
 | Change rollout or trajectory semantics | `training/` | Alignment, integrity, round-trip, and gameplay-format separation |
 
@@ -540,8 +540,9 @@ training/artifacts.py       atomic metadata, inventory validation and checkpoint
 training/experiments.py      immutable experiment envelope, safe YAML, hashes
 training/seeds.py            fixed train/validation/test manifest
 training/evaluation.py       frozen RolloutRunner evaluation and trajectories
+training/panel.py            shared-world checkpoint comparison, raw rows, and bar charts
 training/reports.py          W&B metric plots and exported tables under <run>/reports/
-training/cli.py              train/evaluate/report/inspect commands
+training/cli.py              train/evaluate/compare/report/inspect commands
 ```
 
 Single-rover PPO and both DQNs train through `AresGymEnv`; native MuZero/Dreamer/Plan2Explore use `AresEnvironment` directly. `AresParallelEnv` remains the canonical future multi-rover boundary. Neither training nor evaluation reimplements simulator rules, observations, rewards, or legality.

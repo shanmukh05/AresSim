@@ -385,7 +385,7 @@ test("analytics modal opens from ribbon and renders tabs", async ({ page }) => {
 test("PPO defaults to sampling and switching action mode reattaches the policy", async ({ page }) => {
   const attachments: Array<{ actionMode?: string; algorithmId: string }> = [];
   await page.route('**/api/policies', (route) => route.fulfill({ json: {
-    policies: [], capabilities: { rllib: true, muzero: true, jev: false },
+    policies: [], capabilities: { rllib: true, muzero: true, llm_dm: false },
   } }));
   await page.route('**/attach-policy', async (route) => {
     const payload = route.request().postDataJSON();
@@ -421,7 +421,7 @@ test("PPO defaults to sampling and switching action mode reattaches the policy",
 
 test("agent settings stay above the footer without overlapping controls", async ({ page }, testInfo) => {
   await page.route('**/api/policies', (route) => route.fulfill({ json: {
-    policies: [], capabilities: { rllib: true, muzero: true, jev: false },
+    policies: [], capabilities: { rllib: true, muzero: true, llm_dm: false },
   } }));
   await page.route('**/attach-policy', (route) => route.fulfill({ json: { policyId: 'layout-fixture' } }));
   await page.goto('/');

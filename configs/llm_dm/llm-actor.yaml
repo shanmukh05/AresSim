@@ -1,0 +1,82 @@
+# Same pipeline, with an LLM Actor instead of a Decision Model.
+schema_version: aresim.llm_dm.run.v1
+agent: llm_dm
+experiment_name: llm-actor-10-games
+learnings_file: null
+execution_mode: sequential_diagnostic
+transport: live
+split: diagnostic
+max_episode_steps: 128
+output_directory: results/llm_dm
+history:
+  mode: focused
+  goal_horizon: 8
+  stall_steps: 6
+  target_limit: 6
+  advice_limit: 3
+debug_trace: false
+actor:
+  max_input_tokens: 65536
+  provider: gemini
+  model: gemini-3.8-flash
+  credential_env: GEMINI_API_KEY
+  max_output_tokens: 8192
+  generation:
+    thinkingConfig:
+      thinkingLevel: HIGH
+  attempt_timeout_seconds: 120
+  decision_deadline_seconds: 240
+learner:
+  enabled: true
+  provider: gemini
+  model: gemini-3.8-flash
+  credential_env: GEMINI_API_KEY
+  generation:
+    thinkingConfig:
+      thinkingLevel: HIGH
+  max_input_tokens: 65536
+  max_output_tokens: 4096
+  attempt_timeout_seconds: 180
+  decision_deadline_seconds: 360
+  batch_episodes: 1
+  max_rounds: 9
+  guidance: This is a sequential diagnostic. Knowledge marked evaluation is tentative,
+    not independently validated. Propose supported transferable advice or no_change;
+    do not assume previous tentative advice improved performance.
+budgets:
+  max_provider_attempts: 3000
+  max_total_tokens: 30000000
+  max_wall_seconds: 14400
+  max_usd: 5.0
+  price_sheet: prices.json
+episodes:
+- id: game-01
+  environment_seed: 91585
+  agent_seed: 0
+- id: game-02
+  environment_seed: 80522
+  agent_seed: 0
+- id: game-03
+  environment_seed: 17507
+  agent_seed: 0
+- id: game-04
+  environment_seed: 91676
+  agent_seed: 0
+- id: game-05
+  environment_seed: 34130
+  agent_seed: 0
+- id: game-06
+  environment_seed: 38895
+  agent_seed: 0
+- id: game-07
+  environment_seed: 26311
+  agent_seed: 0
+- id: game-08
+  environment_seed: 17076
+  agent_seed: 0
+- id: game-09
+  environment_seed: 45544
+  agent_seed: 0
+- id: game-10
+  environment_seed: 89990
+  agent_seed: 0

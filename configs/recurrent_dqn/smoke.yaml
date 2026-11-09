@@ -22,7 +22,7 @@ algorithm_config:
   train_batch_size: 16
   replay_capacity: 1024
   learning_starts: 32
-  n_step: 1
+  n_step: 3
   double_q: true
   dueling: true
   gamma: 0.995

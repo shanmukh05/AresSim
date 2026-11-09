@@ -68,6 +68,8 @@ class DreamerModelConfig(ModelConfig):
     hidden_size: int = 256
     unimix: float = 0.01
     value_bins: int = 255
+    # Missing fields in historical checkpoints must retain independent decoder heads.
+    decoder_layout: Literal["independent", "grouped"] = "independent"
 
     def validate(self) -> None:
         super().validate()
@@ -77,6 +79,8 @@ class DreamerModelConfig(ModelConfig):
             raise ValueError("RSSM needs >=2 categories and an odd value_bins >=3")
         if not 0 <= finite_number(self.unimix, "unimix") < 1:
             raise ValueError("unimix must be in [0, 1)")
+        if self.decoder_layout not in ("independent", "grouped"):
+            raise ValueError("decoder_layout must be independent or grouped")
 
 
 @dataclass(frozen=True)

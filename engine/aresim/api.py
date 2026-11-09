@@ -27,7 +27,7 @@ from .algorithms.catalog import AlgorithmId
 from .config import EngineConfig
 from .defaults import DEFAULT_ENGINE_CONFIG
 from .gameplay import CHECKPOINT_REASON_PRIORITY, TRAJECTORY_EPISODE_SCHEMA, TRAJECTORY_REPLAY_SCHEMA, JsonObject, ReplayCursor
-from .integrations.policy import jev_available, rllib_available, muzero_available, world_models_available
+from .integrations.policy import llm_dm_available, rllib_available, muzero_available, world_models_available
 from .service import AresService, ServiceError
 from .types import ActionCommand, ActionType, Actor, Position
 
@@ -140,7 +140,7 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
             "rllibAvailable": rllib_available(),
             "muzeroAvailable": muzero_available(),
             "worldModelsAvailable": world_models_available(),
-            "jevAvailable": jev_available(),
+            "llmDmAvailable": llm_dm_available(),
         }
 
     @app.get("/api/policies")

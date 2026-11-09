@@ -1,0 +1,82 @@
+# Jev Actor + LLM Learner; the episode list and turn limit below define this run.
+schema_version: aresim.llm_dm.run.v1
+agent: llm_dm
+experiment_name: jev-gpt6-luna-5-games-new-v3
+learnings_file: null
+execution_mode: sequential_diagnostic
+transport: live
+split: diagnostic
+max_episode_steps: 256
+output_directory: results/llm_dm
+history:
+  mode: focused
+  goal_horizon: 8
+  stall_steps: 6
+  target_limit: 6
+  advice_limit: 3
+debug_trace: false
+actor:
+  provider: decision_models
+  model: jev-1.14.0
+  credential_env: JEV_API_KEY
+  output_mode: choice
+  max_input_tokens: 65536
+  max_output_tokens: 4096
+  attempt_timeout_seconds: 30
+  decision_deadline_seconds: 60
+  context_window: 131072
+learner:
+  enabled: true
+  provider: openai
+  model: gpt-6-luna
+  credential_env: OPENAI_API_KEY
+  generation:
+    reasoning:
+      effort: medium
+  max_input_tokens: 131072
+  max_output_tokens: 16384
+  attempt_timeout_seconds: 180
+  decision_deadline_seconds: 360
+  context_window: 262144
+  batch_episodes: 1
+  max_rounds: 9
+  guidance: This is a sequential diagnostic. Knowledge marked evaluation is tentative,
+    not independently validated. Propose supported transferable advice or no_change;
+    do not assume previous tentative advice improved performance.
+budgets:
+  max_provider_attempts: 3000
+  max_total_tokens: 30000000
+  max_wall_seconds: 14400
+  max_usd: 5.0
+  price_sheet: prices.json
+episodes:
+- id: game-01
+  environment_seed: 91585
+  agent_seed: 0
+- id: game-02
+  environment_seed: 80522
+  agent_seed: 0
+- id: game-03
+  environment_seed: 17507
+  agent_seed: 0
+# - id: game-04
+#   environment_seed: 91676
+#   agent_seed: 0
+# - id: game-05
+#   environment_seed: 34130
+#   agent_seed: 0
+# - id: game-06
+#   environment_seed: 38895
+#   agent_seed: 0
+# - id: game-07
+#   environment_seed: 26311
+#   agent_seed: 0
+# - id: game-08
+#   environment_seed: 17076
+#   agent_seed: 0
+# - id: game-09
+#   environment_seed: 45544
+#   agent_seed: 0
+# - id: game-10
+#   environment_seed: 89990
+#   agent_seed: 0

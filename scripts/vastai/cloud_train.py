@@ -29,7 +29,7 @@ from cloud_payload import stage_payload
 
 ROOT = Path(__file__).resolve().parents[2]
 OFFER_FIELDS = ("id", "gpu_name", "num_gpus", "gpu_ram", "cpu_cores_effective", "cpu_name", "cpu_ram", "cuda_max_good", "disk_bw", "inet_down", "inet_up", "inet_down_cost", "inet_up_cost", "reliability", "verified", "duration", "dph_total", "storage_cost")
-INSTANCE_FIELDS = ("id", "label", "actual_status", "desired_status", "gpu_name", "num_gpus", "dph_total", "disk_space", "ssh_host", "ssh_port", "public_ipaddr")
+INSTANCE_FIELDS = ("id", "label", "actual_status", "desired_status", "intended_status", "gpu_name", "num_gpus", "dph_total", "disk_space", "ssh_host", "ssh_port", "public_ipaddr", "ports")
 
 
 def vast(args: list[str]):
@@ -38,6 +38,13 @@ def vast(args: list[str]):
     try:
         value = json.loads(completed.stdout)
     except ValueError as error:
+        verb = args[0] if len(args) == 3 and args[1] == "instance" else ""
+        acknowledgments = {"start": "starting", "stop": "stopping"}
+        if not completed.returncode and verb in acknowledgments and completed.stdout.strip() == f"{acknowledgments[verb]} instance {args[2]}.":
+            current = instance(int(args[2]))
+            desired = "running" if verb == "start" else "stopped"
+            if current.get("intended_status", current.get("desired_status")) == desired:
+                return {"success": True}
         raise RuntimeError("Vast CLI returned no valid JSON; check account authentication with `vastai show user --raw`") from error
     if completed.returncode or value is None or isinstance(value, dict) and (value.get("error") or value.get("success") is False):
         raise RuntimeError("Vast CLI operation failed; inspect the account/instance with the official CLI")
@@ -65,11 +72,18 @@ def save(path: Path, value: dict) -> None:
 
 
 def connection(value: dict, identity: str | None) -> tuple[list[str], list[str], str]:
-    host = str(value.get("public_ipaddr") or value.get("ssh_host") or "")
-    ipaddress.ip_address(host)
-    port = int(value.get("ssh_port", 0))
+    mappings = (value.get("ports") or {}).get("22/tcp", [])
+    if mappings and value.get("public_ipaddr"):
+        host = str(value["public_ipaddr"])
+        ipaddress.ip_address(host)
+        port = int(mappings[0]["HostPort"])
+    else:
+        host = str(value.get("ssh_host") or "")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", host):
+            raise ValueError("instance has no valid SSH host")
+        port = int(value.get("ssh_port", 0))
     if not 1 <= port <= 65535:
-        raise ValueError("instance has no direct SSH port")
+        raise ValueError("instance has no valid SSH port")
     options = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "StrictHostKeyChecking=accept-new"]
     if identity:
         options.extend(["-i", str(Path(identity).expanduser().resolve()), "-o", "IdentitiesOnly=yes"])
@@ -95,8 +109,6 @@ def prepare(args, dest: Path) -> dict:
         overrides.append(f"algorithm_config.initialization_checkpoint={initialization_path}")
     spec = freeze_experiment(load_experiment_with_overrides(ROOT / config, tuple(overrides)))
     experiment_seeds(spec).validate()
-    if spec.tracking.mode == "online":
-        raise ValueError("cloud launcher supports tracking.mode=disabled or offline; select one with --set")
     if spec.artifacts.resume_from:
         raise ValueError("this source-only launcher starts fresh trials; remote resume needs the original recovered source/artifacts")
     if spec.artifacts.root != "results":
@@ -154,7 +166,8 @@ def fetch(ssh: list[str], scp: list[str], target: str, remote_root: str, destina
     """Recover a frozen allowlist within one deadline and verify before acknowledgment."""
     if not re.fullmatch(r"/root/aresim-cloud/[A-Za-z0-9_-]+", remote_root):
         raise ValueError("unexpected remote job directory")
-    inventory = json.loads(remote(ssh, ["cat", f"{remote_root}/artifact_inventory.json"], timeout=remaining(deadline, 45)))
+    inventory_text = remote(ssh, ["cat", f"{remote_root}/artifact_inventory.json"], timeout=remaining(deadline, 45))
+    inventory = json.loads(inventory_text)
     if not isinstance(inventory, dict) or not inventory:
         raise RuntimeError("remote artifact inventory is empty")
     destination = destination.resolve()
@@ -164,13 +177,43 @@ def fetch(ssh: list[str], scp: list[str], target: str, remote_root: str, destina
         path = Path(name)
         if not path.parts or path.is_absolute() or ".." in path.parts or not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
             raise ValueError("unsafe artifact inventory")
-        if path.parts[0] != "results" and name not in {"training.log", "source_inventory.json", "job.json"}:
+        if path.parts[0] != "results" and name not in {"training.log", "source_inventory.json", "job.json", "resume_attempt.json"}:
             raise ValueError(f"unexpected artifact path: {name}")
         output = destination / path
         if output.is_symlink() or not output.resolve().is_relative_to(destination):
             raise ValueError("artifact destination follows a local symlink")
-        output.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run([*scp, f"{target}:{remote_root}/{name}", str(output)], check=True, timeout=remaining(deadline))
+    # One allowlisted stream avoids hundreds of SSH handshakes for checkpoints.
+    pack = """import gzip,hashlib,json,pathlib,sys,tarfile
+root=pathlib.Path(sys.argv[1]).resolve()
+raw=(root/'artifact_inventory.json').read_bytes()
+assert hashlib.sha256(raw).hexdigest()==sys.argv[2], 'artifact inventory changed'
+names=list(json.loads(raw))
+for name in names:
+    path=root/name
+    assert path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(root)
+    assert not any(parent.is_symlink() for parent in path.parents)
+with gzip.GzipFile(fileobj=sys.stdout.buffer,mode='wb',compresslevel=1) as compressed:
+    with tarfile.open(fileobj=compressed,mode='w|',dereference=True) as archive:
+        for name in names: archive.add(root/name,arcname=name,recursive=False)
+"""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    archive_path = destination.parent / "artifacts.tar.gz"
+    temporary = archive_path.with_suffix(".gz.partial")
+    with temporary.open("wb") as output:
+        subprocess.run([*ssh, shlex.join(["python3", "-c", pack, remote_root,
+            hashlib.sha256(inventory_text.encode()).hexdigest()])], stdout=output,
+            stderr=subprocess.PIPE, check=True, timeout=remaining(deadline, float("inf")))
+    temporary.replace(archive_path)
+    destination.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive_path, "r:gz") as archive:
+        members = archive.getmembers()
+        if len(members) != len(inventory) or {member.name for member in members} != set(inventory):
+            raise ValueError("archive does not match the frozen artifact inventory")
+        if any(not member.isfile() for member in members):
+            raise ValueError("artifact archive contains a non-file member")
+        archive.extractall(destination, members=members, filter="data")
+    for name, digest in inventory.items():
+        output = destination / name
         digest_state = hashlib.sha256()
         with output.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -189,13 +232,71 @@ def stop(identifier: int) -> None:
         raise RuntimeError(f"stop was not acknowledged for instance {identifier}")
 
 
+def publish_results(artifacts: Path) -> Path:
+    """Move a verified cloud trial into the local model's results directory."""
+    spec = json.loads((artifacts / "job.json").read_text())["resolved_config"]
+    models = {"masked_ppo": "ppo", "masked_dqn": "double_duelling_dqn",
+              "muzero": "muzero", "recurrent_dqn": "recurrent_dqn",
+              "dreamerv3": "dreamerv3", "plan2explore": "plan2explore"}
+    experiment, trial = spec["experiment_id"], spec["trial_id"]
+    if any(not re.fullmatch(r"[A-Za-z0-9_.-]+", name) or name in {".", ".."} for name in (experiment, trial)):
+        raise ValueError("unsafe result identity")
+    source = artifacts / "results" / experiment / trial
+    target = ROOT / "results" / models[spec["algorithm"]]
+    if spec["algorithm"] == "plan2explore":
+        phase = spec["algorithm_config"]["phase"]
+        if phase not in {"pretrain", "adapt"}:
+            raise ValueError("unknown Plan2Explore phase")
+        target /= phase
+    for preset in ("smoke", "dev"):
+        if preset in spec["tracking"].get("tags", []):
+            target /= preset
+            break
+    target /= trial
+    if not source.is_dir() or source.is_symlink() or not source.resolve().is_relative_to(artifacts.resolve()):
+        raise ValueError("verified result directory is missing or unsafe")
+    if target.exists() or target.is_symlink():
+        raise FileExistsError(f"local trial already exists: {target}")
+    if not target.resolve().is_relative_to((ROOT / "results").resolve()):
+        raise ValueError("unsafe local result destination")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(target)
+    for parent in (source.parent, source.parent.parent):
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+    return target
+
+
 def run(args) -> int:
     if any(not math.isfinite(value) or value <= 0 for value in (args.hours, args.max_hourly, args.max_cost)):
         raise ValueError("hours and cost limits must be finite positive values")
     with tempfile.TemporaryDirectory(prefix="aresim-vast-") as temporary:
         payload = Path(temporary) / "payload"
         job = prepare(args, payload)
-        job.update(instance_id=args.on, seconds=max(1, int(args.hours * 3600)), grace_seconds=args.grace_seconds, recovery_seconds=args.recovery_seconds)
+        tracking_key = None
+        if job["resolved_config"]["tracking"]["mode"] == "online":
+            import os
+
+            tracking_key = os.environ.get("WANDB_API_KEY", "").strip()
+            if not tracking_key:
+                raise ValueError("online tracking requires WANDB_API_KEY in the local environment")
+        shared = bool(getattr(args, "shared_instance", False))
+        if shared:
+            parent = getattr(args, "stop_with_manifest", None)
+            steps = getattr(args, "stop_with_steps", None)
+            if job["resolved_config"]["algorithm"] not in {"dreamerv3", "plan2explore"}:
+                raise ValueError("shared-instance training currently requires a world-model job")
+            if not parent or not re.fullmatch(r"/root/aresim-cloud/[A-Za-z0-9_-]+/results/[A-Za-z0-9_./-]+/manifest.json", parent) or ".." in Path(parent).parts or not steps or steps <= 0:
+                raise ValueError("shared jobs require a parent cloud manifest and positive stop-with-steps")
+        graph_prefix = bool(getattr(args, "cuda_graph_prefix", False))
+        if graph_prefix and (job["resolved_config"]["algorithm"] not in {"dreamerv3", "plan2explore"} or job["resolved_config"]["resources"].get("device") != "cuda"):
+            raise ValueError("CUDA history replay requires a CUDA world-model job")
+        job.update(instance_id=args.on, seconds=max(1, int(args.hours * 3600)), grace_seconds=args.grace_seconds, recovery_seconds=args.recovery_seconds,
+                   shared_instance=shared, cuda_graph_prefix=graph_prefix)
+        if shared:
+            job.update(stop_with_manifest=parent, stop_with_steps=steps)
         save(payload / "job.json", job)
         bundle = Path(temporary) / "payload.tar.gz"
         with tarfile.open(bundle, "w:gz") as archive:
@@ -210,6 +311,13 @@ def run(args) -> int:
         if not math.isfinite(rate) or rate <= 0 or rate > args.max_hourly or rate * bounded_hours > args.max_cost:
             raise ValueError("live hourly rate or estimated running cost exceeds bounds (or price is unavailable)")
         ssh, scp, target = connection(value, args.identity)
+        if shared:
+            guard = json.loads(remote(ssh, ["cat", "/root/aresim-rental-guard.json"]))
+            if int(guard.get("instance_id", -1)) != args.on or guard.get("state") != "armed" or float(guard.get("deadline_epoch", 0)) < time.time() + bounded_hours * 3600:
+                raise ValueError("shared jobs require a verified instance shutdown guard beyond their recovery deadline")
+            parent_state = json.loads(remote(ssh, ["cat", parent]))
+            if parent_state.get("status") != "running" or int(parent_state.get("environment_steps", 0)) >= steps:
+                raise ValueError("parent job is no longer eligible for concurrent training")
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         local = ROOT / "results/cloud/vastai" / f"{args.on}_{stamp}"
         remote_root = f"/root/aresim-cloud/{stamp}"
@@ -221,35 +329,52 @@ def run(args) -> int:
             remote(ssh, ["mkdir", "-p", remote_root], timeout=remaining(deadline, 45))
             subprocess.run([*scp, str(bundle), f"{target}:{remote_root}/payload.tar.gz"], check=True, timeout=remaining(deadline, args.hours * 3600))
             remote(ssh, ["tar", "-xzf", f"{remote_root}/payload.tar.gz", "-C", remote_root], timeout=remaining(deadline, 45))
+            if tracking_key:
+                # Send the key only through encrypted stdin, outside the source bundle.
+                command = ["python3", "-c", "import os,sys; fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600); os.write(fd,sys.stdin.buffer.read()); os.close(fd)", f"{remote_root}/.wandb_api_key"]
+                subprocess.run([*ssh, shlex.join(command)], input=tracking_key, text=True, capture_output=True, check=True, timeout=remaining(deadline, 45))
             seconds = int(remaining(deadline, args.hours * 3600))
             if seconds < 1:
                 raise TimeoutError("no setup/training time remains after upload")
             remote(ssh, ["python3", "-c", "import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); j=json.loads(p.read_text()); j['seconds']=int(sys.argv[2]); p.write_text(json.dumps(j))", f"{remote_root}/job.json", str(seconds)], timeout=remaining(deadline, 45))
             # Account API keys never enter SSH command arguments or the payload.
-            shell = f"cd {shlex.quote(remote_root)} && nohup python3 scripts/vastai/supervisor.py {shlex.quote(remote_root)} > supervisor.log 2>&1 < /dev/null &"
-            remote(ssh, ["bash", "-c", shell], timeout=remaining(deadline, 45))
+            start = "import pathlib,subprocess,sys; root=pathlib.Path(sys.argv[1]); log=(root/'supervisor.log').open('ab'); subprocess.Popen(['python3','scripts/vastai/supervisor.py',str(root)],cwd=root,stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)"
+            remote(ssh, ["python3", "-c", start, remote_root], timeout=remaining(deadline, 45))
             record["state"] = "running"
             save(local / "lifecycle.json", record)
             print(f"instance {args.on}; lifecycle {local / 'lifecycle.json'}", flush=True)
             recovery_deadline = deadline + args.grace_seconds + args.recovery_seconds
             status_seen = False
+            last_status_time = time.monotonic()
             while time.monotonic() < recovery_deadline:
-                completed = subprocess.run([*ssh, shlex.join(["cat", f"{remote_root}/cloud_status.json"])], capture_output=True, text=True, timeout=remaining(recovery_deadline, 45))
+                try:
+                    completed = subprocess.run([*ssh, shlex.join(["cat", f"{remote_root}/cloud_status.json"])], capture_output=True, text=True, timeout=remaining(recovery_deadline, 45))
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() - last_status_time > 180:
+                        raise
+                    record["status_poll"] = "retrying_timeout"
+                    save(local / "lifecycle.json", record)
+                    continue
                 if completed.returncode:
-                    if status_seen or completed.returncode == 255:
+                    if time.monotonic() - last_status_time > 180:
                         raise RuntimeError("remote status became unavailable; recover retained artifacts after inspecting the instance")
-                    record["remote_status"] = {"state": "starting", "status_not_written_yet": True}
+                    record["status_poll"] = "retrying_unavailable"
+                    if not status_seen:
+                        record["remote_status"] = {"state": "starting", "status_not_written_yet": True}
                 else:
                     status = json.loads(completed.stdout)
                     if not isinstance(status, dict):
                         raise RuntimeError("supervisor returned an invalid status")
                     status_seen = True
+                    last_status_time = time.monotonic()
+                    record["status_poll"] = "ok"
                     record["remote_status"] = status
                     save(local / "lifecycle.json", record)
                     if status.get("artifacts_ready"):
                         remote_seconds = float(status.get("recovery_seconds_remaining", args.recovery_seconds))
                         fetch_deadline = min(recovery_deadline, time.monotonic() + max(0, remote_seconds - 2))
                         record["recovered_files"] = fetch(ssh, scp, target, remote_root, local / "artifacts", deadline=fetch_deadline)
+                        record["local_run_directory"] = str(publish_results(local / "artifacts"))
                         record["state"] = status["state"]
                         return int(status["exit_code"])
                     if status.get("supervisor_error_type") or status.get("state") == "failed" and "exit_code" not in status:
@@ -261,13 +386,23 @@ def run(args) -> int:
             record.update(state="interrupted" if isinstance(error, KeyboardInterrupt) else "failed", error_type=type(error).__name__)
             raise
         finally:
-            try:
-                stop(args.on)
-                record["shutdown"] = "stop_requested"
-            except Exception as shutdown_error:
-                record["shutdown"] = "FAILED"
-                record["shutdown_error_type"] = type(shutdown_error).__name__
-                print(f"AUTOMATIC STOP FAILED: run `vastai stop instance {args.on} --raw`", file=sys.stderr)
+            if tracking_key:
+                try:
+                    remote(ssh, ["rm", "-f", f"{remote_root}/.wandb_api_key"], timeout=15)
+                    record["tracking_credential_cleanup"] = "removed"
+                except Exception as cleanup_error:
+                    record["tracking_credential_cleanup"] = "unverified"
+                    record["tracking_cleanup_error_type"] = type(cleanup_error).__name__
+            if shared:
+                record["shutdown"] = "shared_instance_guard_retained"
+            else:
+                try:
+                    stop(args.on)
+                    record["shutdown"] = "stop_requested"
+                except Exception as shutdown_error:
+                    record["shutdown"] = "FAILED"
+                    record["shutdown_error_type"] = type(shutdown_error).__name__
+                    print(f"AUTOMATIC STOP FAILED: run `vastai stop instance {args.on} --raw`", file=sys.stderr)
             save(local / "lifecycle.json", record)
             print(f"instance {args.on}: {record['state']}; {record['shutdown']}; storage remains billed", flush=True)
             if record["shutdown"] == "FAILED" and sys.exception() is None:
@@ -296,6 +431,10 @@ def main() -> int:
             command.add_argument("--max-cost", required=True, type=float, help="estimated running USD ceiling; excludes transfer and subsequent storage")
             command.add_argument("--grace-seconds", type=int, default=30)
             command.add_argument("--recovery-seconds", type=int, default=300)
+            command.add_argument("--shared-instance", action="store_true", help="leave instance shutdown to its verified rental guard and parent run")
+            command.add_argument("--stop-with-manifest", help="parent cloud manifest; checkpoint and stop before that run completes")
+            command.add_argument("--stop-with-steps", type=int, help="parent environment-step threshold for a graceful shared-job stop")
+            command.add_argument("--cuda-graph-prefix", action="store_true", help="capture world-model recurrent history on CUDA")
     recover = commands.add_parser("fetch", help="recover outputs after manually starting the same instance")
     recover.add_argument("lifecycle", type=Path)
     recover.add_argument("--identity")
@@ -319,7 +458,7 @@ def main() -> int:
         if not 1 <= args.seconds <= 3600:
             raise ValueError("recovery deadline must be 1..3600 seconds")
         count = fetch(ssh, scp, target, record["remote_root"], args.lifecycle.parent / "artifacts", deadline=time.monotonic()+args.seconds)
-        record.update(recovered_files=count)
+        record.update(recovered_files=count, local_run_directory=str(publish_results(args.lifecycle.parent / "artifacts")))
         save(args.lifecycle, record)
         print(f"verified {count} artifacts; stop compute when recovery is complete")
         return 0

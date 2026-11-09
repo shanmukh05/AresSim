@@ -155,6 +155,7 @@ def search_many(
     rngs: list[np.random.Generator] | None = None,
     training: bool = False,
     stats: SearchStats | None = None,
+    encoded_observations: Tensor | None = None,
 ) -> list[SearchResult]:
     """Search independent roots, batching one unvisited leaf per active tree.
 
@@ -169,7 +170,11 @@ def search_many(
         raise ValueError("training search requires one seeded generator per root")
     legal_masks = [require_mask(mask) for mask in action_masks]
     simulations = config.simulations if training else config.evaluation_simulations
-    latents, logits, value_logits = network.initial(observations, previous_actions)
+    if encoded_observations is None:
+        latents, logits, value_logits = network.initial(observations, previous_actions)
+    else:
+        latents = network.represent_sequence(encoded_observations, previous_actions)[:, 0]
+        logits, value_logits = network.policy(latents), network.value(latents)
     initial = torch.cat((logits.float(), support_value(value_logits, network.config.support_size)[:, None]), -1).cpu().numpy()
     roots = [_Node(1.0, latent=latents[index:index + 1]) for index in range(count)]
     for index, (root, legal) in enumerate(zip(roots, legal_masks, strict=True)):

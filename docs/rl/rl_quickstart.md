@@ -16,7 +16,7 @@ This is the canonical guide to the reinforcement-learning implementation in Ares
 | Uniform random | No | No; may select illegal actions | Implemented | Invalid-action and environment robustness baseline |
 | Random-valid | No | Yes | Implemented | Untrained legal-action baseline |
 | Scripted | No | Yes | Implemented | Deterministic partial-observation heuristic baseline |
-| Jev (TypeSafe) | No | Yes, legal Choice options only | Implemented | Per-tick System One rover; see [Jev workflow](../../engine/aresim/algorithms/jev/DETAILS.md) |
+| llm_dm | Prompt advice via required LLM Learner | Yes, both Actor types | Implemented | Decision Model or LLM Actor + shared Memory; see [llm_dm workflow](../llm_dm/implementation.md) |
 | Action-masked PPO | Yes, on-policy | Yes, in exploration, training, and inference | Implemented | First learned reference policy |
 | Action-masked DQN | Yes, off-policy | Yes, in selection, epsilon-greedy, and TD targets | Implemented | Sample-efficient discrete comparison |
 | MuZero | Yes, model-based | Yes, at the real search root | Implemented | Learned-model planning comparison |
@@ -25,7 +25,7 @@ This is the canonical guide to the reinforcement-learning implementation in Ares
 | Plan2Explore | Yes, model-based | Shared Dreamer real/imagined mask handling | Implemented; both CPU phases verified | Reward-free pretraining followed by separate task adaptation |
 | Recurrent PPO, multi-agent policies | — | — | Planned | Later milestones; see the [Algorithm Literature Survey](algorithm_literature_survey.md) |
 
-The six learned RL algorithms are action-masked PPO, feedforward DQN, Recurrent DQN, MuZero, DreamerV3, and Plan2Explore. Wait, random, random-valid, scripted, and Jev are inference-only comparisons; Jev calls TypeSafe and does not optimize parameters. MuZero's dedicated trainer and inference path are documented in the [MuZero workflow](../../engine/aresim/algorithms/muzero/DETAILS.md).
+The six learned RL algorithms are action-masked PPO, feedforward DQN, Recurrent DQN, MuZero, DreamerV3, and Plan2Explore. Wait, random, random-valid and scripted are inference-only comparisons. The llm_dm pipeline uses a pretrained Decision Model or LLM Actor and improves prompt advice through an LLM Learner between games; it does not optimize model weights. MuZero's dedicated trainer and inference path are documented in the [MuZero workflow](../../engine/aresim/algorithms/muzero/DETAILS.md).
 
 The [recurrent and world-model implementation guide](../../engine/aresim/algorithms/README.md) documents the new algorithms, shared training ownership, complete presets, Plan2Explore transfer, numerical details and verification limits. Local CPU checks do not establish long-budget mission learning.
 
@@ -381,7 +381,7 @@ Nonterminal base terms are clipped to `[-2, 2]`; the potential contribution is a
 
 Reward code lives in [`components/rewards.py`](../../engine/aresim/components/rewards.py). Changing the selected RL reward never rewrites the engine/UI reward or replay history.
 
-The October 8 DQN reference isolates sample acquisition credit in `seed_3_sample_credit_030`, using a maximum 2.4 collection bonus for the unchanged 4 kg quota and retaining −0.025 time cost. Its [observed results](../../results/rllib_masked_double_dueling_dqn_reference/seed_3_sample_credit_030/learnings.md) show mission improvement for that learner seed. The October 10 MuZero reference adopted the same reward; the October 11 parallel trial was `seed_7_sample_credit_030_parallel`. The [October 13 checkpoint/loss corrections](muzero_learning_fixes_2026-10-13.md) used trial `seed_7_sample_credit_030_parallel_lossnorm`, which also completed no full validation missions. The [learning-path follow-up](muzero_learning_v3_2026-10-13.md) now uses `seed_7_sample_credit_030_learning_v3`; its task-learning benefit and CUDA throughput remain unverified. Enabling the bonus versions the shaped profile/breakdown to v3. At the zero default, the extra term is omitted and the v2 reward contract is preserved; sparse rewards also remain v2. See [run instructions](usage.md).
+The October 8 DQN reference isolates sample acquisition credit in `seed_3_sample_credit_030`, using a maximum 2.4 collection bonus for the unchanged 4 kg quota and retaining −0.025 time cost. Its [observed results](../../results/double_duelling_dqn/seed_3_sample_credit_030/learnings.md) show mission improvement for that learner seed. The October 10 MuZero reference adopted the same reward; the October 11 parallel trial was `seed_7_sample_credit_030_parallel`. The [October 13 checkpoint/loss corrections](muzero_learning_fixes_2026-10-13.md) used trial `seed_7_sample_credit_030_parallel_lossnorm`, which also completed no full validation missions. The [learning-path follow-up](muzero_learning_v3_2026-10-13.md) now uses `seed_7_sample_credit_030_learning_v3`; its task-learning benefit and CUDA throughput remain unverified. Enabling the bonus versions the shaped profile/breakdown to v3. At the zero default, the extra term is omitted and the v2 reward contract is preserved; sparse rewards also remain v2. See [run instructions](usage.md).
 
 ## Training metrics and W&B
 
@@ -420,9 +420,12 @@ flowchart LR
 ```bash
 engine/.venv/bin/aresim-rl evaluate results/<experiment>/<trial> \
   --checkpoint final --split validation
+engine/.venv/bin/aresim-rl compare configs/evaluation/reference_panel.yaml
 engine/.venv/bin/aresim-rl report results/<experiment>/<trial>
 engine/.venv/bin/aresim-rl inspect results/<experiment>/<trial>
 ```
+
+`aresim-rl compare` plays one shared seed list through every checkpoint in the panel YAML, then writes `environments.json`, raw `episodes.jsonl`, `summary.json`, and bar charts. The reference panel is 20 deterministic validation games. See [Compare checkpoints on the same worlds](usage.md#compare-checkpoints-on-the-same-worlds).
 
 The report command fetches training history from W&B and writes matplotlib plots plus exported metric tables under `<run>/reports/`. It also copies the latest local `evaluation/*/summary.json` when present. It does not start Ray or mutate the simulator. Tracked W&B runs (`tracking.mode: online` or `offline`) are required; the smoke configuration disables tracking and skips automatic report generation.
 

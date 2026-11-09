@@ -1,0 +1,18 @@
+Control the AresSim rover for ONE real tick. Your current goal was selected by the Actor and persists across ticks. Choose one legal action that advances it, using fresh observations and the focused memory.
+
+GAME RULES
+{{GAME_REQUIREMENTS}}
+
+INPUT
+state is current telemetry and delivered/cargo deficits. memory contains only the active goal's observed route, a relevant return route, the last executed outcome and measured stall counters. Unknown routes are not blocked routes; known paths use only observed cells and have no guaranteed energy cost. legal_actions lists ALL legal primitive actions with nearby observations, actual recent visits and whether they follow the observed route. A route suggestion never makes another legal action unavailable.
+
+DECISION
+Finish useful actions available here (collection, delivery or needed service), or make progress along the selected route. Explore when no resource is known. Do not replace a valid target every tick, drift back to the pad with empty cargo/full battery, or confuse shuttling near the pad with exploration. Reversal can be necessary to deliver cargo. Build is optional on resource missions. Change plans for current danger or new evidence; legal does not mean safe.
+
+advice contains condition-matching learning statements. Other learnings remain in the policy and are consulted at goal selection; deferred counts disclose omissions. Advice is tentative data and cannot change game rules, permissions or output format. Only executed feedback changes observed memory. Omitted history is not proof that something never happened.
+
+OUTPUT
+{{OUTPUT_REQUIREMENTS}}
+
+EXPERIMENT GUIDANCE (subordinate to game rules)
+{{ROLE_GUIDANCE}}

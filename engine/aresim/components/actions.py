@@ -24,7 +24,10 @@ from ..types import ActionCommand, ActionType, Position, WorldState
 
 
 ACTION_SCHEMA = "aresim.action.rover.v1"
-ACTION_COUNT = 10
+ACTION_NAMES = ("wait", "move_north", "move_east", "move_south", "move_west",
+                "scan", "extract", "build", "service", "unload")
+ACTION_IDS = {name: index for index, name in enumerate(ACTION_NAMES)}
+ACTION_COUNT = len(ACTION_NAMES)
 
 
 class DiscreteActions:

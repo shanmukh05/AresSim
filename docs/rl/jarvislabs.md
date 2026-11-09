@@ -294,8 +294,8 @@ python3 scripts/jarvislabs/cloud_train.py self-check
 Same commands as local training, pointed at the downloaded run directory:
 
 ```bash
-engine/.venv/bin/aresim-rl inspect results/rllib_masked_ppo_reference/seed_35
-engine/.venv/bin/aresim-rl evaluate results/rllib_masked_ppo_reference/seed_35 \
+engine/.venv/bin/aresim-rl inspect results/ppo/seed_35
+engine/.venv/bin/aresim-rl evaluate results/ppo/seed_35 \
   --checkpoint final --split validation
 ```
 
@@ -304,7 +304,7 @@ Resume on the cloud instance (directory already exists remotely; `artifacts.reje
 ```bash
 python3 scripts/jarvislabs/cloud_train.py run --on MACHINE_ID --gpu L4 --skip-setup \
   --config configs/masked_ppo/reference.yaml \
-  --resume-from results/rllib_masked_ppo_reference/seed_35
+  --resume-from results/ppo/seed_35
 ```
 
 `--resume-from` is a **remote** path relative to `$HOME/aresim`.

@@ -8,9 +8,9 @@ The shared encoder consumes terrain `[B,8,8]`, five numerical spatial channels `
 
 The shared RSSM feature has width 1,536. Concatenating a 10-way action gives each disagreement predictor 1,546 inputs. Five independently bootstrapped MLPs predict the next 256-wide encoder embedding, producing `[5,N,256]` for `N` imagined roots. Variance across predictors, averaged over embedding dimensions, yields intrinsic reward `[N]`. The two phases export different actors as shown below.
 
-![Architecture and tensor dimensions](architecture.drawio.png)
+![Architecture and tensor dimensions](diagrams/architecture.drawio.png)
 
-![Training and checkpoint flow](training.drawio.png)
+![Training and checkpoint flow](diagrams/training.drawio.png)
 
 The PNG figures contain editable draw.io XML: open the PNG directly in draw.io to revise the illustration. Shapes and numbers are grounded in the adjacent model/configuration files and `../common/encoder.py`.
 
@@ -51,3 +51,7 @@ engine/.venv/bin/aresim-rl train configs/plan2explore/adapt/smoke.yaml \
 Initialization creates a new run; resume restores that run without reapplying or rereading its parent. Frozen parent identity/digest/experiment and interaction count are copied into `transfer.json` and sidecar/manifest lineage. `train/environment_steps` is phase-local; pretraining and cumulative counters make the combined budget explicit.
 
 Each phase has smoke/dev/reference presets. Reference pretraining 1,048,576 + adaptation 1,048,576 interactions should be compared with Dreamer from scratch at 2,097,152, plus adaptation-only curves under matched settings. Local CPU smoke, phase transfer, phase-local resume, seeded checkpoint inference and manual evaluation pass. Long-budget learning and GPU performance remain unverified. See the [implementation guide](../README.md).
+
+## Training performance — November 7, 2026
+
+See the [measured pipeline optimizations and GPU benchmark commands](../../../../docs/rl/training_performance.md). Search/learning budgets and model widths are unchanged; CPU component timings do not establish CUDA throughput. Native checkpoint formats are preserved.

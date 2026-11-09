@@ -25,7 +25,7 @@ export type CameraView = "survey" | "top" | "rover";
 export type RunMode = "manual" | "algorithm" | "load";
 export type SavedRunMode = RunMode | "llm";
 export type { AlgorithmId } from "../lib/algorithms";
-export { supportsActionSampling, usesCheckpoint, usesWorldModel, usesJev } from "../lib/algorithms";
+export { supportsActionSampling, usesCheckpoint, usesWorldModel } from "../lib/algorithms";
 export type PolicyActionMode = "stochastic" | "deterministic";
 
 export interface PolicyMeta {
@@ -35,14 +35,10 @@ export interface PolicyMeta {
   actionIndex: number;
   action: SimAction;
   actionMask: number[];
-  jev?: {
-    choice: string | null;
-    confidence: number;
-    probabilities: Record<string, number>;
-    action: string;
-    fallback: string | null;
-    waitRecharges: boolean;
-  };
+  episodeDone?: boolean;
+  endingReason?: string | null;
+  llmDm?: Record<string, unknown>;
+
 }
 
 export interface AgentStepResponse {
@@ -59,7 +55,7 @@ export interface PolicyCatalogEntry {
 
 export interface PoliciesResponse {
   policies: PolicyCatalogEntry[];
-  capabilities: { rllib: boolean; muzero?: boolean; world_models?: boolean; jev?: boolean };
+  capabilities: { rllib: boolean; muzero?: boolean; world_models?: boolean; llm_dm?: boolean };
 }
 
 export interface AttachPolicyResponse {

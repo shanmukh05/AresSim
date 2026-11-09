@@ -48,6 +48,8 @@ def canonicalize_rllib_metrics(result: Mapping[str, object]) -> dict[str, float]
         "learner/recurrent_learned_timesteps": (("learners", "default_policy", "recurrent_learned_timesteps"),),
         "learner/recurrent_burn_in_timesteps": (("learners", "default_policy", "recurrent_burn_in_timesteps"),),
         "learner/recurrent_padding_fraction": (("learners", "default_policy", "recurrent_padding_fraction"),),
+        "learner/recurrent_effective_n_step": (("learners", "default_policy", "recurrent_effective_n_step"),),
+        "learner/recurrent_zero_burn_sequences": (("learners", "default_policy", "recurrent_zero_burn_sequences"),),
     }
     metrics = {
         name: value

@@ -1,5 +1,5 @@
 schema_version: aresim.experiment.v1
-experiment_id: rllib_masked_double_dueling_dqn_reference
+experiment_id: double_duelling_dqn
 trial_id: seed_3_sample_credit_030
 algorithm: masked_dqn
 model: local_cnn_q
@@ -13,7 +13,7 @@ environment:
   max_episode_steps: 800
   reward_overrides:
     time_cost: -0.025
-    samples_collected: 0.30
+    samples_collected: 0.3
 algorithm_config:
   total_environment_steps: 2097152
   rollout_batch_size: 4096

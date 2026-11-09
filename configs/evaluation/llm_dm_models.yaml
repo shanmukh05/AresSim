@@ -1,0 +1,92 @@
+# Same five worlds for every model; each model is BOTH Actor and Learner.
+# Derived from configs/llm_dm/10-games.yaml; that original config is never modified.
+# Four reviews occur between games. Learnings are isolated per model.
+# Budgets below are PER MODEL. Defaults permit at most $15 across three models.
+# Add provider/model entries below. Credentials default to each provider's API-key variable.
+# Optional per-entry pricing: {input_per_million: ..., output_per_million: ...}.
+# This is a sequential adaptation comparison, not frozen held-out evaluation.
+schema_version: aresim.llm_dm.model_panel.v1
+experiment_name: llm-actor-learner-5-games
+output_directory: results/reports/llm_dm
+env_file: .env.local
+models:
+- provider: openai
+  model: gpt-6-luna
+  actor:
+    generation:
+      reasoning:
+        effort: none
+  learner:
+    generation:
+      reasoning:
+        effort: high
+- provider: deepseek
+  model: deepseek-flash
+  generation:
+    reasoning:
+      effort: none
+  learner:
+    generation:
+      reasoning:
+        effort: high
+- provider: gemini
+  model: gemini-3.8-flash
+run:
+  schema_version: aresim.llm_dm.run.v1
+  agent: llm_dm
+  learnings_file: null
+  execution_mode: sequential_diagnostic
+  transport: live
+  split: diagnostic
+  max_episode_steps: 128
+  debug_trace: false
+  actor:
+    provider: openai
+    model: gpt-6-luna
+    credential_env: OPENAI_API_KEY
+    output_mode: native_schema
+    max_input_tokens: 65536
+    max_output_tokens: 4096
+    attempt_timeout_seconds: 30
+    decision_deadline_seconds: 60
+    context_window: 131072
+    generation: {}
+  learner:
+    enabled: true
+    provider: openai
+    model: gpt-6-luna
+    credential_env: OPENAI_API_KEY
+    generation: {}
+    max_input_tokens: 131072
+    max_output_tokens: 16384
+    attempt_timeout_seconds: 180
+    decision_deadline_seconds: 360
+    context_window: 262144
+    batch_episodes: 1
+    max_rounds: 4
+    guidance: This is a sequential diagnostic. Knowledge marked evaluation is tentative,
+      not independently validated. Propose supported transferable advice or no_change;
+      do not assume previous tentative advice improved performance.
+    output_mode: native_schema
+  budgets:
+    max_provider_attempts: 3000
+    max_total_tokens: 30000000
+    max_wall_seconds: 14400
+    max_usd: 5.0
+    price_sheet: ../llm_dm/prices.json
+  episodes:
+  - id: game-01
+    environment_seed: 91585
+    agent_seed: 0
+  - id: game-02
+    environment_seed: 80522
+    agent_seed: 0
+  - id: game-03
+    environment_seed: 17507
+    agent_seed: 0
+  - id: game-04
+    environment_seed: 91676
+    agent_seed: 0
+  - id: game-05
+    environment_seed: 34130
+    agent_seed: 0

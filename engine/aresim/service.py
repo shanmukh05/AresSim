@@ -21,6 +21,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Literal
 
+from .algorithms.base import EpisodeStop, TransitionAwareAgent
 from .config import EngineConfig
 from .core.engine import AresEngine
 from .gameplay import (
@@ -71,6 +72,9 @@ class LiveSession:
     policy: AttachedPolicy | None = None
     policy_bridge: PolicyBridge | None = None
     policy_events: dict[int, str] = field(default_factory=dict)
+    revision: int = 0
+    pending_policy_request: str | None = None
+    policy_needs_reset: bool = False
 
 
 class AresService:
@@ -88,6 +92,8 @@ class AresService:
             selected_seed = seed if seed is not None else secrets.randbelow(self.config.world.seed_max - self.config.world.seed_min + 1) + self.config.world.seed_min
             if selected_seed < self.config.world.seed_min or selected_seed > self.config.world.seed_max:
                 raise ServiceError("INVALID_SEED", f"Seed must be between {self.config.world.seed_min} and {self.config.world.seed_max}.", 400)
+            if self._live is not None:
+                self._invalidate_policy(self._live, "session_replaced")
             engine = AresEngine(self.config)
             snapshot = snapshot_from_state(engine.reset(selected_seed), self.config)
             self._live = LiveSession(
@@ -103,6 +109,20 @@ class AresService:
             raise ServiceError("SESSION_NOT_FOUND", "The requested session is not active.", 404)
         return self._live
 
+    def _invalidate_policy(self, session: LiveSession, reason: str) -> None:
+        """Invalidate inference authority while leaving any already committed tick intact."""
+        session.revision += 1
+        session.policy_needs_reset = True
+        if session.policy is None:
+            return
+        agent = session.policy.agent
+        cancel = getattr(agent, "cancel", None)
+        if callable(cancel):
+            cancel(reason)
+        if not session.pending_policy_request and isinstance(agent, TransitionAwareAgent) and getattr(agent, "episode_open", True):
+            agent.finish_episode({"transitions": getattr(agent, "step_index", 0), "terminated": False,
+                                  "truncated": True, "ending_reason": reason})
+
     def get_snapshot(self, session_id: str) -> JsonObject:
         """Return the current UI snapshot, or raise if this is not the active session."""
         with self._lock:
@@ -112,6 +132,7 @@ class AresService:
         """Step the engine and record a delta when the world clock actually advanced."""
         with self._lock:
             session = self._session(session_id)
+            self._invalidate_policy(session, "manual_interruption")
             before = snapshot_from_state(session.engine.state, self.config)
             transition = session.engine.step(command, actor)
             after = snapshot_from_state(transition.state, self.config)
@@ -123,6 +144,7 @@ class AresService:
         """Pause without recording a step. Updates the recorder's current snapshot."""
         with self._lock:
             session = self._session(session_id)
+            self._invalidate_policy(session, "paused")
             state = session.engine.pause()
             snapshot = snapshot_from_state(state, self.config)
             session.recorder.current_snapshot = snapshot
@@ -158,9 +180,9 @@ class AresService:
 
     def list_policies(self) -> JsonObject:
         """Return the built-in policy catalog and optional RLlib capability."""
-        from .integrations.policy import POLICY_CATALOG, jev_available, rllib_available, muzero_available, world_models_available
+        from .integrations.policy import POLICY_CATALOG, rllib_available, muzero_available, world_models_available, llm_dm_available
 
-        return {"policies": POLICY_CATALOG, "capabilities": {"rllib": rllib_available(), "muzero": muzero_available(), "jev": jev_available(), "world_models": world_models_available()}}
+        return {"policies": POLICY_CATALOG, "capabilities": {"rllib": rllib_available(), "muzero": muzero_available(), "world_models": world_models_available(), "llm_dm": llm_dm_available()}}
 
     def validate_checkpoint(self, checkpoint_path: str) -> JsonObject:
         """Validate one checkpoint sidecar without attaching it."""
@@ -184,6 +206,7 @@ class AresService:
                 current.action_mode = mode
                 return {"algorithmId": algorithm_id, "policyId": current.policy_id,
                         "checkpointPath": resolved_path, "actionMode": mode}
+            self._invalidate_policy(session, "policy_changed")
             agent.reset(session.engine.state.seed)
             session.policy = AttachedPolicy(
                 algorithm_id=algorithm_id,
@@ -200,34 +223,63 @@ class AresService:
         """Remove any policy bound to the active session."""
         with self._lock:
             session = self._session(session_id)
+            self._invalidate_policy(session, "policy_detached")
             session.policy = None
             return {"detached": True}
 
     def agent_step(self, session_id: str) -> JsonObject:
-        """Apply one attached policy decision and return snapshot plus policy metadata."""
+        """Infer outside the session lock, then commit only if the captured revision is current."""
         with self._lock:
             session = self._session(session_id)
             if session.policy is None:
                 raise ServiceError("POLICY_NOT_ATTACHED", "Attach a policy before running agent steps.", 400)
+            if session.pending_policy_request is not None:
+                raise ServiceError("POLICY_BUSY", "A policy decision is already pending.", 409)
+            attached = session.policy
+            agent = attached.agent
+            if session.policy_needs_reset:
+                agent.reset(session.engine.state.seed)
+                session.policy_bridge = PolicyBridge.for_engine(self.config)
+                session.policy_needs_reset = False
             if session.policy_bridge is None:
                 session.policy_bridge = PolicyBridge.for_engine(self.config)
-            before = snapshot_from_state(session.engine.state, self.config)
+            bridge = session.policy_bridge
             try:
-                result = session.policy_bridge.step(
-                    session.engine, session.policy.agent, algorithm_id=session.policy.algorithm_id)
+                observation, mask = bridge.prepare(session.engine, agent)
             except PolicyError as error:
                 raise _policy_service_error(error) from error
-            after = snapshot_from_state(result.transition.state, self.config)
-            summary = result.info.get("summary") if result.info else None
-            if isinstance(summary, str) and summary:
-                session.policy_events[int(after["step"])] = summary
-            _merge_policy_events(after, session.policy_events)
-            if after["step"] != before["step"]:
-                session.recorder.record(before, after)
-            meta = policy_meta_from_result(result)
-            if session.policy.action_mode is not None:
-                meta["actionMode"] = session.policy.action_mode
-            return {"snapshot": after, "policyMeta": meta}
+            revision = session.revision
+            request_id = secrets.token_hex(16)
+            session.pending_policy_request = request_id
+        try:
+            action = int(agent.act(observation, mask))
+            with self._lock:
+                if self._live is not session or session.revision != revision or session.policy is not attached:
+                    raise EpisodeStop("cancelled")
+                before = snapshot_from_state(session.engine.state, self.config)
+                result = bridge.commit(session.engine, agent, action, mask, algorithm_id=attached.algorithm_id)
+                after = snapshot_from_state(result.transition.state, self.config)
+                summary = result.info.get("summary") if result.info else None
+                if isinstance(summary, str) and summary:
+                    session.policy_events[int(after["step"])] = summary
+                _merge_policy_events(after, session.policy_events)
+                if after["step"] != before["step"]:
+                    session.recorder.record(before, after)
+                meta = policy_meta_from_result(result)
+                if attached.action_mode is not None:
+                    meta["actionMode"] = attached.action_mode
+                return {"snapshot": after, "policyMeta": meta}
+        except EpisodeStop as error:
+            if isinstance(agent, TransitionAwareAgent):
+                agent.finish_episode({"transitions": getattr(agent, "step_index", 0), "terminated": False,
+                                      "truncated": True, "ending_reason": error.reason})
+            raise ServiceError("POLICY_STOPPED", f"Policy episode stopped: {error.reason}", 409) from error
+        except PolicyError as error:
+            raise _policy_service_error(error) from error
+        finally:
+            with self._lock:
+                if session.pending_policy_request == request_id:
+                    session.pending_policy_request = None
 
     def load_replay(self, file_name: str, content: str) -> ReplayCursor:
         """Parse, normalize, and replace the in-memory replay. Rejects oversized uploads."""
@@ -244,6 +296,8 @@ class AresService:
         except ValueError as error:
             raise ServiceError("INVALID_GAMEPLAY", str(error), 400) from error
         with self._lock:
+            if self._live is not None:
+                self._invalidate_policy(self._live, "replay_loaded")
             self._replay = ReplayCursor.create(gameplay, file_name)
             return self._replay
 
@@ -303,7 +357,7 @@ def _policy_service_error(error: PolicyError) -> ServiceError:
         "MUZERO_UNAVAILABLE": 503,
         "WORLD_MODELS_UNAVAILABLE": 503,
         "POLICY_NOT_RUNNING": 400,
-        "JEV_UNAVAILABLE": 503,
+        "DECISION_MODELS_UNAVAILABLE": 503,
         "UNKNOWN_ALGORITHM": 400,
     }.get(error.code, 400)
     return ServiceError(error.code, error.message, status)

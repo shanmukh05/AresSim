@@ -38,6 +38,13 @@ def evaluate_checkpoint(*args, **kwargs):
     return evaluate(*args, **kwargs)
 
 
+def run_panel(*args, **kwargs):
+    """Generate shared worlds, score the configured checkpoints, and write raw rows plus bars."""
+    from .panel import run_panel as run
+
+    return run(*args, **kwargs)
+
+
 def generate_report(*args, **kwargs):
     from .reports import generate_report as generate
 
@@ -80,6 +87,7 @@ __all__ = [
     "TrainingRegistry",
     "create_training_registry",
     "evaluate_checkpoint",
+    "run_panel",
     "generate_report",
     "iter_trajectory_episodes",
     "load_experiment",

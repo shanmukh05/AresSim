@@ -5,15 +5,17 @@ The shared model never receives behavior gradients or pretraining task rewards.
 """
 from __future__ import annotations
 import time
+import os
 import torch
 from torch import Tensor
 import torch.nn.functional as F
 from ...algorithms.dreamerv3.model import WorldModel, State
 from ...algorithms.dreamerv3.behavior import ActorCritic
-from ...algorithms.dreamerv3.distributions import latent_probs, policy_probs, scalar_prediction, twohot_loss, lambda_returns
+from ...algorithms.dreamerv3.distributions import latent_probs, policy_probs, sample_latent, scalar_prediction, twohot_loss, lambda_returns
 from ...algorithms.plan2explore.config import Plan2ExploreConfig
 from ...algorithms.plan2explore.ensemble import DisagreementEnsemble
 from .replay import SequenceBatch
+from ..torch_utils import cpu_state
 
 
 def onehot(actions: Tensor) -> Tensor:
@@ -22,7 +24,8 @@ def onehot(actions: Tensor) -> Tensor:
 
 
 def masked_mean(values: Tensor, mask: Tensor) -> Tensor:
-    return values[mask].mean() if mask.any() else values.sum() * 0
+    """Reduce fixed-shape tensors without GPU nonzero or a host validity branch."""
+    return values.masked_fill(~mask, 0).sum() / mask.sum().clamp(min=1)
 
 
 class DreamerLearner:
@@ -33,6 +36,10 @@ class DreamerLearner:
         self.config = config = spec.algorithm_config
         self.device = torch.device(spec.resources.device)
         self.model = WorldModel(spec.model_config, observation_space).to(self.device)
+        self.cuda_prefix = None
+        if self.device.type == "cuda" and os.environ.get("ARESIM_CUDA_GRAPH_PREFIX", "0") == "1":
+            from .cuda_prefix import CUDAPrefixReplay
+            self.cuda_prefix = CUDAPrefixReplay(self.model, spec.environment.max_episode_steps)
         self.task = ActorCritic(self.model.feature_size, spec.model_config).to(self.device)
         self.exploration = None
         self.ensemble = None
@@ -41,14 +48,15 @@ class DreamerLearner:
             self.exploration = ActorCritic(self.model.feature_size, spec.model_config).to(self.device)
             self.ensemble = DisagreementEnsemble(self.model.feature_size, spec.model_config.fused_width,
                                                 spec.model_config.hidden_size, config.ensemble_size).to(self.device)
-        self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=config.model_learning_rate, eps=1e-8)
+        fused = self.device.type == "cuda"
+        self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=config.model_learning_rate, eps=1e-8, fused=fused)
         self.optimizers = {}
         for name, behavior in (("task", self.task), ("exploration", self.exploration)):
             if behavior is not None:
-                self.optimizers[name + "_actor"] = torch.optim.Adam(behavior.actor.parameters(), lr=config.actor_learning_rate, eps=1e-8)
-                self.optimizers[name + "_critic"] = torch.optim.Adam(behavior.critic.parameters(), lr=config.critic_learning_rate, eps=1e-8)
+                self.optimizers[name + "_actor"] = torch.optim.Adam(behavior.actor.parameters(), lr=config.actor_learning_rate, eps=1e-8, fused=fused)
+                self.optimizers[name + "_critic"] = torch.optim.Adam(behavior.critic.parameters(), lr=config.critic_learning_rate, eps=1e-8, fused=fused)
         if self.ensemble is not None:
-            self.optimizers["ensemble"] = torch.optim.Adam(self.ensemble.parameters(), lr=config.model_learning_rate, eps=1e-8)
+            self.optimizers["ensemble"] = torch.optim.Adam(self.ensemble.parameters(), lr=config.model_learning_rate, eps=1e-8, fused=fused)
 
     @property
     def behavior(self) -> ActorCritic:
@@ -56,14 +64,23 @@ class DreamerLearner:
 
     @torch.no_grad()
     def _prefix(self, batch: SequenceBatch) -> State:
-        # ponytail: full-prefix reconstruction is O(episode length); cache validated states only after profiling.
         state = self.model.rssm.initial(len(batch.actions), self.device)
         if batch.prefix_observations is None:
             return state
-        embeddings = self.model.encode_sequence(batch.prefix_observations)
+        if batch.prefix_positions is None:
+            embeddings = self.model.encode_sequence(batch.prefix_observations)
+        else:
+            encoded = self.model.encoder(batch.prefix_observations)
+            rows, steps = batch.prefix_previous_actions.shape
+            embeddings = encoded.new_zeros(rows * steps, encoded.shape[-1])
+            embeddings.index_copy_(0, batch.prefix_positions, encoded)
+            embeddings = embeddings.reshape(rows, steps, -1)
         actions = onehot(batch.prefix_previous_actions)
+        if self.cuda_prefix is not None:
+            return self.cuda_prefix(embeddings, actions, batch.prefix_lengths)
         for t in range(embeddings.shape[1]):
-            advanced, _, _ = self.model.rssm.observe(state, actions[:, t], embeddings[:, t])
+            hidden, posterior = self.model.rssm.posterior_step(state, actions[:, t], embeddings[:, t])
+            advanced = hidden, sample_latent(posterior, self.spec.model_config.unimix)
             active = batch.prefix_lengths > t
             state = tuple(torch.where(active.reshape(-1, *([1] * (new.ndim - 1))), new, old) for new, old in zip(advanced, state, strict=True))
         return state
@@ -87,14 +104,16 @@ class DreamerLearner:
         config = self.config
         valid = batch.observation_valid
         reconstruction = self.model.decoder.losses(features, batch.observations)
-        reconstruction_loss = sum(masked_mean(value, valid) for value in reconstruction.values())
+        reconstruction_means = {key: masked_mean(value, valid) for key, value in reconstruction.items()}
+        reconstruction_loss = sum(reconstruction_means.values())
         p = latent_probs(prior, self.spec.model_config.unimix)
         q = latent_probs(posterior, self.spec.model_config.unimix)
         dynamics_kl = (q.detach() * (q.detach().log() - p.log())).sum((-1, -2))
         representation_kl = (q * (q.log() - p.detach().log())).sum((-1, -2))
         dynamics = masked_mean(dynamics_kl.clamp(min=config.free_nats), valid)
         representation = masked_mean(representation_kl.clamp(min=config.free_nats), valid)
-        legality_losses = F.binary_cross_entropy_with_logits(self.model.legality(features), batch.masks.float(), reduction="none",
+        legality_logits = self.model.legality(features)
+        legality_losses = F.binary_cross_entropy_with_logits(legality_logits, batch.masks.float(), reduction="none",
             pos_weight=torch.tensor(config.legality_positive_weights, device=self.device)).mean(-1)
         legality = masked_mean(legality_losses, valid)
         task_labels = batch.valid & batch.reward_valid
@@ -108,22 +127,24 @@ class DreamerLearner:
         metrics = {"learner/reconstruction_loss": reconstruction_loss.detach(), "learner/dynamics_kl": dynamics.detach(),
                    "learner/representation_kl": representation.detach(), "learner/reward_loss": reward.detach(),
                    "learner/continuation_loss": continuation.detach(), "learner/legality_loss": legality.detach()}
-        metrics.update({f"learner/reconstruction/{key}": masked_mean(value, valid).detach() for key, value in reconstruction.items()})
+        metrics.update({f"learner/reconstruction/{key}": value.detach() for key, value in reconstruction_means.items()})
         with torch.no_grad():
-            predicted = self.model.legality(features).sigmoid() >= config.legality_threshold
+            predicted = legality_logits.sigmoid() >= config.legality_threshold
+            positive = batch.masks & valid.unsqueeze(-1)
+            negative = ~batch.masks & valid.unsqueeze(-1)
+            recall = (predicted & positive).sum((0, 1)) / positive.sum((0, 1)).clamp(min=1)
+            false_positive = (predicted & negative).sum((0, 1)) / negative.sum((0, 1)).clamp(min=1)
             for action in range(10):
-                positive = batch.masks[..., action] & valid
-                negative = ~batch.masks[..., action] & valid
-                metrics[f"learner/legality_recall/{action}"] = (predicted[..., action] & positive).sum() / positive.sum().clamp(min=1)
-                metrics[f"learner/legality_false_positive_rate/{action}"] = (predicted[..., action] & negative).sum() / negative.sum().clamp(min=1)
+                metrics[f"learner/legality_recall/{action}"] = recall[action]
+                metrics[f"learner/legality_false_positive_rate/{action}"] = false_positive[action]
         return loss, metrics
 
     def _step(self, loss: Tensor, optimizer, parameters) -> Tensor:
-        if not torch.isfinite(loss):
-            raise FloatingPointError("world-model training produced a non-finite loss")
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        norm = torch.nn.utils.clip_grad_norm_(parameters, self.config.max_gradient_norm, error_if_nonfinite=True)
+        norm = torch.nn.utils.clip_grad_norm_(parameters, self.config.max_gradient_norm)
+        if not (torch.isfinite(loss.detach()) & torch.isfinite(norm)):
+            raise FloatingPointError("world-model training produced a non-finite loss or gradient")
         optimizer.step()
         return norm.detach()
 
@@ -135,7 +156,7 @@ class DreamerLearner:
         behavior = self.behavior
         for index in range(self.config.imagination_horizon):
             mask = root_masks if index == 0 else self.model.imagined_mask(features[-1], self.config.legality_threshold)
-            probabilities = policy_probs(behavior.actor(features[-1]), mask, self.spec.model_config.unimix)
+            probabilities = policy_probs(behavior.actor(features[-1]), mask, self.spec.model_config.unimix, validate_contents=False)
             action = torch.multinomial(probabilities, 1).squeeze(-1)
             encoded = onehot(action)
             intrinsic = self.ensemble.reward(features[-1], encoded) * self.config.intrinsic_scale if self.pretraining else None
@@ -158,7 +179,7 @@ class DreamerLearner:
             weights = torch.cumprod(torch.cat((torch.ones_like(discounts[:, :1]), discounts[:, :-1]), -1), -1)
             scale = behavior.return_scale(returns.flatten())
             advantages = (returns - values[:, :-1]) / scale
-        probabilities = policy_probs(behavior.actor(imagined[:, :-1]), masks, self.spec.model_config.unimix)
+        probabilities = policy_probs(behavior.actor(imagined[:, :-1]), masks, self.spec.model_config.unimix, validate_contents=False)
         log_probs = probabilities.clamp(min=1e-8).log()
         chosen = log_probs.gather(-1, actions.unsqueeze(-1)).squeeze(-1)
         entropy = -(probabilities * log_probs).sum(-1)
@@ -198,9 +219,17 @@ class DreamerLearner:
             self._step(ensemble_loss, self.optimizers["ensemble"], self.ensemble.parameters())
             metrics["learner/disagreement_loss"] = ensemble_loss.detach()
         metrics.update(self._behavior_update(detached_states, features.detach(), batch))
-        metrics["system/prefix_reconstruction_seconds"] = torch.tensor(prefix_seconds)
         metrics["learner/learned_timesteps"] = batch.valid.sum()
-        return {key: float(value.detach().cpu()) for key, value in metrics.items()}
+        packed = torch.stack([value.detach().float() for value in metrics.values()]).cpu().tolist()
+        result = dict(zip(metrics, packed, strict=True))
+        result["system/prefix_reconstruction_seconds"] = prefix_seconds
+        return result
+
+    def policy_state(self) -> dict:
+        """Copy only parameters required for real posterior inference and action selection."""
+        model = {**self.model.encoder.state_dict(prefix="encoder."), **self.model.rssm.state_dict(prefix="rssm.")}
+        behavior = self.behavior.actor.state_dict(prefix="actor.")
+        return cpu_state({"model": model, "behavior": behavior})
 
     def model_state(self) -> dict:
         return {"model": self.model.state_dict(), "task": self.task.state_dict(),

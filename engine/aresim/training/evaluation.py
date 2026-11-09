@@ -6,9 +6,9 @@ Evaluates learned policies against fixed seed splits using
 Evaluation runs only the checkpoint policy. With recording off and multiple evaluation workers,
 rollouts run in a CPU process pool (not training EnvRunners).
 
-**Last updated:** September 22, 2026
+**Last updated:** November 8, 2026
 
-**Contains:** :func:`evaluate_checkpoint`.
+**Contains:** :func:`evaluate_checkpoint`, :func:`evaluate_episodes`.
 
 **Inputs:** RLlib checkpoint sidecar JSON, seed manifest YAML, experiment provenance.
 
@@ -75,9 +75,12 @@ class _EvalRow:
     truncated: bool
     ending_reason: str | None
     success: bool = False
+    ice_collected: float = 0.0
     ice_delivered: float = 0.0
+    samples_collected: float = 0.0
     samples_delivered: float = 0.0
     action_counts: dict[str, int] = field(default_factory=dict)
+    actions: tuple[int, ...] = ()
     extract_opportunities: int = 0
     action_mode: str = "deterministic"
 
@@ -167,13 +170,17 @@ def _summary_payload(rows: list[_EvalRow], split: str, checkpoint: Path) -> dict
         "mean_episode_length": fmean(item.length for item in rows),
         "success_count": sum(item.success for item in rows),
         "success_rate": fmean(item.success for item in rows),
+        "mean_ice_collected": fmean(item.ice_collected for item in rows),
         "mean_ice_delivered": fmean(item.ice_delivered for item in rows),
+        "mean_samples_collected": fmean(item.samples_collected for item in rows),
         "mean_samples_delivered": fmean(item.samples_delivered for item in rows),
         "terminal_reasons": endings,
         "action_counts": actions,
         "extract_opportunities": sum(row.extract_opportunities for row in rows),
         "episodes_with_extraction": sum(row.action_counts.get("extract", 0) > 0 for row in rows),
+        "episodes_with_ice_collection": sum(row.ice_collected > 0 for row in rows),
         "episodes_with_ice_delivery": sum(row.ice_delivered > 0 for row in rows),
+        "episodes_with_sample_collection": sum(row.samples_collected > 0 for row in rows),
         "episodes_with_sample_delivery": sum(row.samples_delivered > 0 for row in rows),
         "success_metric": fmean(item.success for item in rows),
         "promoted_checkpoint": None,
@@ -195,11 +202,21 @@ def _load_evaluation(checkpoint: Path, split: str, *, allow_environment_mismatch
     return spec, seeds.episodes(split), sidecar
 
 
+# Historical checkpoints stored the previous names of the same built-in profiles.
+_SCHEMA_ALIASES = {
+    "reward_profile": {"aresim.reward.shaped_train.v1": "aresim.reward.shaped_train.v2"},
+    "task_id": {"phase1_resource_mission_v1": "phase1_resource_mission_v2"},
+}
+
+
 def _validate_environment(config, seed: int, sidecar: dict[str, object], registry) -> None:
     reset = make_env(config, registry=registry).reset(seed=seed)
     for key in ("observation_schema", "action_schema", "task_id", "reward_profile"):
-        if str(reset.info[key]) != str(sidecar.get(key, "")):
-            raise ValueError(f"checkpoint {key} is incompatible with the evaluation environment")
+        live = str(reset.info[key])
+        stored = str(sidecar.get(key, ""))
+        if live == stored or _SCHEMA_ALIASES.get(key, {}).get(stored) == live:
+            continue
+        raise ValueError(f"checkpoint {key} is incompatible with the evaluation environment")
 
 
 def _eval_worker_init(checkpoint: str | None) -> None:
@@ -250,9 +267,11 @@ def _summary_episode(agent, episode: EpisodeSpec, config, max_steps: int, regist
     engine_rewards: list[float] = []
     sparse_return = 0.0
     action_counts = {}
+    chosen_actions: list[int] = []
     extract_opportunities = 0
     while True:
         action = policy.act(deepcopy(observation), mask.copy())
+        chosen_actions.append(int(action))
         if not environment.action_space.contains(action):
             raise ValueError("agent returned an action outside the environment action space")
         extract_opportunities += int(bool(mask[6]))
@@ -278,9 +297,11 @@ def _summary_episode(agent, episode: EpisodeSpec, config, max_steps: int, regist
                 truncated=result.truncated,
                 ending_reason=result.info.get("terminal_reason") or result.info.get("truncation_reason"),
                 success=bool(result.info["success"]),
-                ice_delivered=result.info["objective_stats"]["ice_delivered"],
-                samples_delivered=result.info["objective_stats"]["samples_delivered"],
-                action_counts=action_counts, extract_opportunities=extract_opportunities,
+                ice_collected=result.transition.state.objective_stats.ice_collected,
+                ice_delivered=result.transition.state.objective_stats.ice_delivered,
+                samples_collected=result.transition.state.objective_stats.samples_collected,
+                samples_delivered=result.transition.state.objective_stats.samples_delivered,
+                action_counts=action_counts, actions=tuple(chosen_actions), extract_opportunities=extract_opportunities,
                 action_mode="stochastic" if not getattr(policy, "deterministic", True) else "deterministic",
             )
         observation, mask = result.observation, result.action_mask
@@ -370,6 +391,7 @@ def _evaluate_parallel(
     environment_config,
     split: str,
     deterministic: bool = True,
+    workers: int | None = None,
 ) -> list[_EvalRow]:
     max_steps = spec.environment.max_episode_steps
     checkpoint = str(checkpoint_path)
@@ -384,7 +406,10 @@ def _evaluate_parallel(
         _EvalJob(*ids, max_steps, episode, checkpoint, serialize(environment_config), deterministic)
         for episode in episodes
     ]
-    workers = min(spec.evaluation.workers, _eval_worker_count(len(jobs)))
+    requested = spec.evaluation.workers if workers is None else workers
+    if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
+        raise ValueError("evaluation workers must be a positive integer")
+    workers = min(requested, _eval_worker_count(len(jobs)))
     print(
         f"Frozen evaluation: {len(episodes)} {split} episodes "
         f"({len(jobs)} rollouts, {workers} workers)",
@@ -398,7 +423,7 @@ def _write_evaluation(destination: Path, rows: list[_EvalRow], summary: dict[str
     partial.write_text(json.dumps(summary, sort_keys=True, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     partial.replace(destination / "summary.json")
     fieldnames = [
-        "episode_id", "action_mode", "success", "ice_delivered", "samples_delivered", "extract_opportunities", "action_counts",
+        "episode_id", "action_mode", "success", "ice_collected", "ice_delivered", "samples_collected", "samples_delivered", "extract_opportunities", "action_counts",
         "environment_seed",
         "agent_seed",
         "length",
@@ -415,7 +440,8 @@ def _write_evaluation(destination: Path, rows: list[_EvalRow], summary: dict[str
         for row in rows:
             writer.writerow({
                 "episode_id": row.episode_id, "action_mode": row.action_mode, "success": row.success,
-                "ice_delivered": row.ice_delivered, "samples_delivered": row.samples_delivered,
+                "ice_collected": row.ice_collected, "ice_delivered": row.ice_delivered,
+                "samples_collected": row.samples_collected, "samples_delivered": row.samples_delivered,
                 "extract_opportunities": row.extract_opportunities, "action_counts": json.dumps(row.action_counts, sort_keys=True),
                 "environment_seed": row.environment_seed,
                 "agent_seed": row.agent_seed,
@@ -482,7 +508,7 @@ def evaluate_checkpoint(
             spec, allow_environment_mismatch=allow_environment_mismatch))
         summary.update(config_hash=spec.config_hash, checkpoint_sha256=digest(sidecar))
         if spec.algorithm in {"dreamerv3", "plan2explore"}:
-            summary["policy_inference"] = {"latent_mode": "modal" if deterministic else "seeded_sample",
+            summary["policy_inference"] = {"latent_mode": "seeded_sample",
                                            "phase": sidecar.get("phase"), "memory_reset_each_episode": True}
         _write_evaluation(mode_destination, rows, summary)
         summaries[selected_mode] = summary
@@ -495,4 +521,38 @@ def evaluate_checkpoint(
     return destination
 
 
-__all__ = ["evaluate_checkpoint"]
+def evaluate_episodes(
+    checkpoint: str | Path,
+    episodes: tuple[EpisodeSpec, ...],
+    *,
+    deterministic: bool = True,
+    workers: int = 1,
+    allow_environment_mismatch: bool = False,
+) -> list[_EvalRow]:
+    """Score one frozen checkpoint on caller-supplied worlds.
+
+    The checkpoint still uses its own frozen environment. ``episodes`` only chooses
+    which world seeds and agent seeds are played.
+    """
+    checkpoint_path = Path(checkpoint).resolve()
+    sidecar = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    experiment = sidecar.get("experiment")
+    if not isinstance(experiment, dict):
+        raise ValueError("checkpoint sidecar is missing its resolved experiment")
+    spec = parse_experiment(experiment)
+    if sidecar.get("config_hash") != experiment_payload_hash(experiment):
+        raise ValueError("checkpoint configuration hash does not match its experiment")
+    verify_provenance(spec, allow_environment_mismatch=allow_environment_mismatch)
+    config = environment_config(spec)
+    selected = tuple(episodes)
+    if not selected:
+        raise ValueError("evaluation requires at least one episode")
+    _validate_environment(config, selected[0].environment_seed, sidecar, None)
+    if workers == 1:
+        return _evaluate_sequential(
+            checkpoint_path, spec, selected, config, None, None, checkpoint_path.parent, "panel", False, deterministic)
+    return _evaluate_parallel(
+        checkpoint_path, spec, selected, config, "panel", deterministic, workers)
+
+
+__all__ = ["evaluate_checkpoint", "evaluate_episodes"]

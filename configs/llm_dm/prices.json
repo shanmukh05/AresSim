@@ -1,0 +1,27 @@
+{
+  "as_of": "2026-11-08",
+  "source": [
+    "https://api-docs.deepseek.com/quick_start/pricing/",
+    "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "https://aistudio.google.com/docs/whats-new-gemini-3.8",
+    "https://docs.typesafe.ai/models"
+  ],
+  "models": {
+    "deepseek/deepseek-flash": {
+      "input_per_million": 0.3,
+      "output_per_million": 1.2
+    },
+    "openai/gpt-6-luna": {
+      "input_per_million": 0.125,
+      "output_per_million": 0.5
+    },
+    "gemini/gemini-3.8-flash": {
+      "input_per_million": 0.75,
+      "output_per_million": 3.75
+    },
+    "decision_models/jev-1.14.0": {
+      "input_per_million": 0.042,
+      "output_per_million": 0.0
+    }
+  }
+}

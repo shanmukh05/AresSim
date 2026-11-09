@@ -35,7 +35,7 @@ This document gives a high-level view of what is implemented and what remains. D
 - [x] Ambient Martian day/night backdrop with Sun, moons, planets, and reduced-motion handling.
 - [x] Manual play, server-driven Algorithm autoplay (baselines + all six learned checkpoint algorithms), and backend-owned Replay flow.
 
-Algorithm mode attaches registered baselines, Jev, or a masked PPO/DQN checkpoint sidecar through `POST /api/sessions/{id}/attach-policy` and steps with `POST /api/sessions/{id}/agent-step`. Inference stays on the API host; the UI sends algorithm selection and an optional dev-time checkpoint path. Jev requires `aresim[jev]` and an API key.
+Algorithm mode attaches registered baselines, Decision Models, or a masked PPO/DQN checkpoint sidecar through `POST /api/sessions/{id}/attach-policy` and steps with `POST /api/sessions/{id}/agent-step`. Inference stays on the API host; the UI sends algorithm selection and an optional dev-time checkpoint path. Decision Models requires `aresim[llm_dm]` and an API key.
 
 ## 3. RL-ready environment — completed
 
@@ -52,7 +52,7 @@ Algorithm mode attaches registered baselines, Jev, or a masked PPO/DQN checkpoin
 
 - [x] Add external episode truncation and explicit environment/agent seeds for rollouts.
 - [x] Add the versioned fixed train, validation, and test seed manifest for the current scenario.
-- [x] Add random, random-valid, Wait, scripted, and Jev baseline/inference agents.
+- [x] Add random, random-valid, Wait, scripted, and Decision Models baseline/inference agents.
 - [x] Add a simple rollout runner for generating trajectory samples.
 - [x] Add optional `aresim.trajectory.v1` recording and validation with unified, UI-loadable `aresim.trajectory.episode.v1` artifacts.
 - [x] Add reproducible frozen-policy evaluation over validation/test seeds through the shared rollout path.
@@ -65,7 +65,7 @@ Algorithm mode attaches registered baselines, Jev, or a masked PPO/DQN checkpoin
 - [ ] Verify the implemented action-masked PPO RLModule, learner update, and frozen evaluation with the full dev acceptance run.
 - [ ] Verify the implemented canonical W&B logging, local report plots, and reproducibility artifacts with the full dev acceptance run.
 - [x] Verify native RLlib checkpoint loading through the shared `Agent` interface with the full dev acceptance run.
-- [x] Wire UI Algorithm mode to server-side policy attach and agent-step (baselines, Jev, masked PPO/DQN checkpoint path).
+- [x] Wire UI Algorithm mode to server-side policy attach and agent-step (baselines, Decision Models, masked PPO/DQN checkpoint path).
 - [x] Add mask-aware DQN through RLlib (selection, epsilon-greedy, and TD-target masking).
 - [x] Verify corrected-reward MuZero reference wiring on CPU with the reference architecture and 50 simulations/action: collection, learner updates, checkpoint reload and legal sampled inference; long-budget CUDA mission learning remains pending.
 - [x] Collate MuZero replay histories on CPU before batched device transfer; local pipeline checks and CUDA tensor/update equivalence pass. An idle A30 batch-256 learner improved from 140 to 68 ms; bounded CUDA training completed 4,208 steps/420 updates and legal sampled checkpoint reload. See [world-model scaling analysis](../rl/world_model_scaling_2026-10-11.md); parallel search is implemented below, while long-budget learning acceptance remains pending.
@@ -90,7 +90,7 @@ The [recurrent and world-model guide](../../engine/aresim/algorithms/README.md) 
 - [ ] Add JEPA representation learning and reusable encoder artifacts.
 - [ ] Add learned world-model experiments without replacing authoritative simulator transitions.
 - [ ] Add offline learning and behavior-cloning experiments where useful.
-- [x] Add a Jev (TypeSafe) per-tick rover agent with named 5x5 encoding, budgets, audit fallbacks to Wait, and Algorithm-mode attach. Provider-neutral multi-LLM agents remain later.
+- [x] Consolidate llm_dm: Decision Model or LLM Actor, shared observed Memory, required LLM Learner, persistent advice, bounded providers, compact logs and native replay export.
 - [ ] Add LLM + scripted, LLM + RL, JEPA + RL, and world-model + RL hybrids.
 
 ## 7. Multi-rover environment — later
@@ -154,3 +154,10 @@ Details and local verification: [pipeline corrections](../rl/pipeline_fixes_2026
 - [ ] Verify the new Vast.ai launcher on a live rented GPU and measure CUDA throughput. Script implementation and local checks do not establish live provider behavior or long-budget learning quality.
 
 Decision logs: [environment/UI](refactor_environment.md), [training](refactor_training.md), [cloud](refactor_cloud.md), and [documentation](refactor_documentation.md). Start GPU work with the [Vast.ai run guide](../rl/vastai.md); inspect model data flow in the [illustrated algorithm guide](../../engine/aresim/algorithms/README.md).
+
+## November 7, 2026 training performance
+
+- [x] Profile MuZero, DreamerV3, both Plan2Explore phases and recurrent DQN using real simulator histories.
+- [x] Optimize replay packing, recurrent reconstruction, inference publication, CUDA synchronization, scalar losses and burn-in graphs without reducing training budgets.
+- [x] Add a bounded full-pipeline benchmark script to cloud payloads.
+- [ ] Measure sustained throughput on the target Vast.ai NVIDIA GPU; local CPU measurements and smoke verification are documented in the [performance report](../rl/training_performance.md).

@@ -8,9 +8,9 @@ The shared encoder consumes terrain `[B,8,8]`, five numerical spatial channels `
 
 The default posterior state has deterministic `h=[B,512]` and categorical `z=[B,32,32]`, giving feature width `512+32×32=1536`. The actor emits `[B,10]`; critic/reward heads emit 255 two-hot support logits per row, while continuation and legality emit one and ten logits. Replay has `T+1` observations for `T` real transitions. Imagined learning uses horizon 15 by default.
 
-![Architecture and tensor dimensions](architecture.drawio.png)
+![Architecture and tensor dimensions](diagrams/architecture.drawio.png)
 
-![Training and checkpoint flow](training.drawio.png)
+![Training and checkpoint flow](diagrams/training.drawio.png)
 
 The PNG figures contain editable draw.io XML: open the PNG directly in draw.io to revise the illustration. Shapes and numbers are grounded in the adjacent model/configuration files and `../common/encoder.py`.
 
@@ -52,3 +52,7 @@ engine/.venv/bin/aresim-rl evaluate results/dreamerv3_smoke_v1/seed_7 --checkpoi
 Exports use `aresim.checkpoint.world_model.v1`, `native/model.pt`, and trusted `native/trainer.pt`. Trainer state includes replay, optimizers, slow critic/normalizers, RNGs, counters/credit, collector snapshots and active episodes. Quiescent CPU partial-episode resume was checked against uninterrupted training exactly. Frozen inference loads only model weights and does not import Ray/RLlib. Training never evaluates or selects on held-out data.
 
 See the [implementation guide](../README.md) for field loss definitions, numerical settings, memory/mask semantics, UI integration, deviations, resource presets and verification limits.
+
+## Training performance — November 7, 2026
+
+See the [measured pipeline optimizations and GPU benchmark commands](../../../../docs/rl/training_performance.md). Search/learning budgets and model widths are unchanged; CPU component timings do not establish CUDA throughput. Native checkpoint formats are preserved.

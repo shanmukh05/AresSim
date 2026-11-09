@@ -18,7 +18,7 @@ def stage_payload(root: Path, dest: Path, *, provider: str = "jarvislabs") -> No
         raise ValueError("unsupported cloud provider")
     if dest.exists():
         raise FileExistsError(f"staging destination already exists: {dest}")
-    files = [root / "engine/pyproject.toml", root / "scripts/cloud/remote_setup.sh"]
+    files = [root / "engine/pyproject.toml", root / "scripts/cloud/remote_setup.sh", root / "scripts/benchmark_training.py"]
     files.extend((root / "engine/aresim").rglob("*.py"))
     files.extend((root / "configs").rglob("*.yaml"))
     files.extend((root / "configs").rglob("*.yml"))
@@ -26,6 +26,7 @@ def stage_payload(root: Path, dest: Path, *, provider: str = "jarvislabs") -> No
         files.append(root / "scripts/jarvislabs/remote_setup.sh")
     else:
         files.append(root / "scripts/vastai/supervisor.py")
+        files.append(root / "scripts/vastai/world_model_worker.py")
     # Old configurations can still name the two historical notebook manifests.
     for name in ("phase1_open_exploration_split_v1.yaml", "phase1_smoke_eval_v1.yaml"):
         path = root / "notebooks" / name

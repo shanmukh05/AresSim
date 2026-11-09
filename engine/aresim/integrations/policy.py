@@ -12,7 +12,7 @@ checkpoint path validation, and a small LRU checkpoint cache.
 **See also:** :mod:`aresim.service` (attach/agent-step use cases),
 :mod:`aresim.algorithms.ppo.checkpoint` (masked PPO loader),
 :mod:`aresim.algorithms.dqn.checkpoint` (masked DQN loader),
-:mod:`aresim.algorithms.jev.agent` (Jev rover agent).
+:mod:`aresim.algorithms.llm_dm.agent` (DecisionModels rover agent).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from typing import Any
 
 import numpy as np
 
-from ..algorithms.base import Agent
+from ..algorithms.base import Agent, TransitionAwareAgent
 from ..algorithms.catalog import BASELINE_ALGORITHMS, CHECKPOINT_ALGORITHMS, LLM_ALGORITHMS, POLICY_CATALOG
 from ..config import EngineConfig, EnvironmentConfig
 from ..core.engine import AresEngine
@@ -72,17 +72,25 @@ def muzero_available() -> bool:
 def world_models_available() -> bool:
     """Return whether frozen world-model inference dependencies are installed (no Ray startup)."""
     try:
-        from ..algorithms.dreamerv3.checkpoint import WorldModelAgent
+        from ..algorithms.dreamerv3.checkpoint import WorldModelAgent  # noqa: F401
     except ImportError:
         return False
     return True
 
 
-def jev_available() -> bool:
-    """Return whether the TypeSafe SDK and an API key are available for Jev."""
-    from ..algorithms.jev.client import jev_available as live_jev_available
-
-    return live_jev_available()
+def llm_dm_available() -> bool:
+    """Report configured frozen-bundle readiness without calls or credential disclosure."""
+    import os
+    from importlib.util import find_spec
+    path = os.environ.get("ARESIM_LLM_DM_CONFIG")
+    if not path or find_spec("jsonschema") is None:
+        return False
+    try:
+        from ..algorithms.llm_dm.config import load_llm_dm_run
+        config = load_llm_dm_run(Path(path))
+        return config.execution_mode == "frozen_evaluation" and (config.transport == "fake" or bool(os.environ.get(config.actor.credential_env)))
+    except (ValueError, TypeError, OSError, KeyError):
+        return False
 
 
 def _is_safe_resolved_checkpoint(candidate: Path) -> bool:
@@ -192,13 +200,11 @@ def resolve_agent(algorithm_id: str, checkpoint_path: str | None = None, *, acti
     if algorithm_id in BASELINE_ALGORITHMS:
         agent = make_agent(algorithm_id)
         return agent, agent.policy_id, None
-    if algorithm_id in LLM_ALGORITHMS:
-        if not jev_available():
-            raise PolicyError(
-                "JEV_UNAVAILABLE",
-                "Jev requires aresim[jev] and JEV_API_KEY.",
-            )
-        agent = make_agent(algorithm_id)
+    if algorithm_id == "llm_dm":
+        try:
+            agent = make_agent("llm_dm")
+        except (ValueError, OSError, ImportError) as error:
+            raise PolicyError("LLM_DM_UNAVAILABLE", str(error)) from error
         return agent, agent.policy_id, None
     if algorithm_id in CHECKPOINT_ALGORITHMS:
         if checkpoint_path is None or not checkpoint_path.strip():
@@ -227,6 +233,8 @@ class PolicyStepResult:
     algorithm_id: str
     action_mask: list[int]
     info: dict[str, object] | None = None
+    episode_done: bool = False
+    ending_reason: str | None = None
 
 
 class PolicyBridge:
@@ -238,6 +246,9 @@ class PolicyBridge:
         components = create_default_registry() if registry is None else registry
         self._components = components
         self._last_policy_step: int | None = None
+        self._learning_environment = None
+        self._learning_steps = 0
+        self._bound_agent = None
         context = ComponentBuildContext(env_config, env_config.engine)
         self._observation = components.build_observation(env_config.observation, context)
         self._actions = components.build_action(env_config.action, context)
@@ -248,11 +259,28 @@ class PolicyBridge:
         env_config = replace(DEFAULT_ENVIRONMENT_CONFIG, engine=engine_config)
         return cls(env_config, registry=registry)
 
-    def step(self, engine: AresEngine, agent: Agent[Any, Any], *, algorithm_id: str) -> PolicyStepResult:
-        """Run one policy decision and apply it to ``engine`` as ``Actor.AGENT``."""
+    def prepare(self, engine: AresEngine, agent: Agent[Any, Any]) -> tuple[object, np.ndarray]:
+        """Build input under the session lock; provider inference happens outside it."""
         state = engine.state
         if state.game_status != GameStatus.RUNNING:
             raise PolicyError("POLICY_NOT_RUNNING", "Resume a running session before requesting agent actions.")
+        if isinstance(agent, TransitionAwareAgent):
+            if not getattr(agent, "episode_open", True):
+                raise PolicyError("POLICY_EPISODE_ENDED", "The policy episode ended; reset before continuing.")
+            if self._learning_environment is None or self._bound_agent is not agent:
+                from ..factory import make_env
+                config = getattr(agent, "environment_config", self.env_config)
+                self.env_config = replace(config, engine=self.env_config.engine)
+                self._learning_environment = make_env(self.env_config, max_episode_steps=getattr(agent, "max_episode_steps", 1200))
+                reset = self._learning_environment.bind_engine(engine)
+                self._bound_agent = agent
+                self._learning_steps = 0
+                agent.begin_episode(f"live-attachment-step-{state.step}")
+                return reset.observation, reset.action_mask
+            if self._learning_environment._done:
+                raise PolicyError("POLICY_EPISODE_ENDED", "The policy episode ended; reset the game before continuing.")
+            current = self._learning_environment.current_input()
+            return current.observation, current.action_mask
         if self._last_policy_step is not None and self._last_policy_step != state.step:
             reset_memory = getattr(agent, "reset_memory", None)
             if callable(reset_memory):
@@ -266,22 +294,41 @@ class PolicyBridge:
             self._observation = self._components.build_observation(name, context)
             if self._observation.schema != declared:
                 raise PolicyError("CHECKPOINT_INCOMPATIBLE", "Unsupported observation schema.")
-        observation = self._observation.build(state, self.env_config.engine)
-        action_mask = self._actions.mask(state, self.env_config.engine)
-        action_index = int(agent.act(observation, action_mask))
-        command = self._actions.decode(state, action_index)
-        transition = engine.step(command, Actor.AGENT)
+        return self._observation.build(state, self.env_config.engine), self._actions.mask(state, self.env_config.engine)
+
+    def commit(self, engine: AresEngine, agent: Agent[Any, Any], action_index: int,
+               action_mask: np.ndarray, *, algorithm_id: str) -> PolicyStepResult:
+        """Dispatch only after the service rechecks its session revision and pending request."""
+        if not self._actions.space.contains(action_index):
+            raise PolicyError("INVALID_POLICY_ACTION", "Policy returned an action outside Discrete(10).")
+        command = self._actions.decode(engine.state, action_index)
+        done, reason = False, None
+        if isinstance(agent, TransitionAwareAgent):
+            result = self._learning_environment.step(action_index)
+            transition = result.transition
+            decision = getattr(agent, "last_info", None) or {}
+            reason = result.info.get("terminal_reason") or result.info.get("truncation_reason")
+            agent.observe_transition({"schema_version": "aresim.llm.feedback.v1", "episode_id": decision.get("episode_id"),
+                                      "decision_id": decision.get("decision_id"), "step_index": self._learning_steps,
+                                      "issued_action_id": action_index, "observation": result.observation,
+                                      "action_mask": result.action_mask, "reward": float(result.reward),
+                                      "effective_action": transition.effective_action.value,
+                                      "terminated": result.terminated, "truncated": result.truncated, "ending_reason": reason})
+            self._learning_steps += 1
+            done = result.terminated or result.truncated
+            if done:
+                agent.finish_episode({"transitions": self._learning_steps, "terminated": result.terminated,
+                                      "truncated": result.truncated, "ending_reason": reason})
+        else:
+            transition = engine.step(command, Actor.AGENT)
         self._last_policy_step = transition.state.step
-        info = _agent_info(agent)
-        return PolicyStepResult(
-            transition=transition,
-            command=command,
-            action_index=action_index,
-            policy_id=agent.policy_id,
-            algorithm_id=algorithm_id,
-            action_mask=[int(value) for value in action_mask.tolist()],
-            info=info,
-        )
+        return PolicyStepResult(transition, command, action_index, agent.policy_id, algorithm_id,
+                                [int(value) for value in action_mask.tolist()], _agent_info(agent), done, reason)
+
+    def step(self, engine: AresEngine, agent: Agent[Any, Any], *, algorithm_id: str) -> PolicyStepResult:
+        """Synchronous convenience path; service uses prepare/commit to allow cancellation."""
+        observation, mask = self.prepare(engine, agent)
+        return self.commit(engine, agent, int(agent.act(observation, mask)), mask, algorithm_id=algorithm_id)
 
 
 def command_to_ui_payload(command: ActionCommand) -> dict[str, object]:
@@ -308,15 +355,10 @@ def policy_meta_from_result(result: PolicyStepResult) -> dict[str, object]:
         "action": command_to_ui_payload(result.command),
         "actionMask": result.action_mask,
     }
-    if result.info:
-        meta["jev"] = {
-            "choice": result.info.get("choice"),
-            "confidence": result.info.get("confidence"),
-            "probabilities": result.info.get("probabilities") or {},
-            "action": result.info.get("action"),
-            "fallback": result.info.get("fallback"),
-            "waitRecharges": result.info.get("wait_recharges"),
-        }
+    if result.algorithm_id == "llm_dm":
+        meta["episodeDone"] = result.episode_done
+        meta["endingReason"] = result.ending_reason
+        meta["llmDm"] = dict(result.info or {})
     return meta
 
 
@@ -325,7 +367,6 @@ __all__ = [
     "CHECKPOINT_ALGORITHMS",
     "LLM_ALGORITHMS",
     "POLICY_CATALOG",
-    "jev_available",
     "PolicyBridge",
     "PolicyError",
     "PolicyStepResult",

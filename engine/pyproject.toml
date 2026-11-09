@@ -63,13 +63,15 @@ world_models = [
   "torch>=2.13,<2.14",
   "wandb>=0.29,<0.30",
 ]
-jev = [
+llm_dm = [
   "numpy>=2,<3",
   "gymnasium>=1.2.2,<2",
-  "pettingzoo>=1.26,<2",
   "PyYAML>=6.0.3,<7",
-  "typesafe-sdk>=0.5.7",
+  "jsonschema>=4.23,<5",
 ]
+
+[tool.setuptools.package-data]
+"aresim.algorithms.llm_dm" = ["prompts/*.txt"]
 
 [tool.setuptools.packages.find]
 include = ["aresim*"]

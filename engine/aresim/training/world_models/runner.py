@@ -28,17 +28,7 @@ from ..provenance import environment_config, experiment_seeds, freeze_experiment
 from .learner import DreamerLearner
 from .replay import SequenceReplay
 from .collection import RayCollectionPool
-
-
-def cpu_state(value):
-    """Copy tensors before publishing immutable CPU inference snapshots."""
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu().clone()
-    if isinstance(value, dict):
-        return {key: cpu_state(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return type(value)(cpu_state(item) for item in value)
-    return value
+from ..torch_utils import cpu_state
 
 
 def _preflight(spec, registry, component_registry, *, resuming: bool):
@@ -218,16 +208,15 @@ def _tracking(session: TrainingSession):
     import wandb
     if tracking.mode == "online" and not wandb.login(timeout=30):
         raise RuntimeError("W&B authentication failed")
-    return wandb.init(project=tracking.project, entity=tracking.entity, group=tracking.group,
+    run = wandb.init(project=tracking.project, entity=tracking.entity, group=tracking.group,
         tags=list(tracking.tags), name=f"{session.spec.experiment_id}-{session.spec.trial_id}", id=session.run_id,
         resume="allow", mode=tracking.mode, dir=str(session.directory), config=session.spec.as_dict())
+    run.config.update({"execution": {"cuda_graph_prefix": session.learner.cuda_prefix is not None}}, allow_val_change=True)
+    return run
 
 
 def _collect(session: TrainingSession, pool: RayCollectionPool):
-    learner = session.learner
-    current = learner.model_state()
-    behavior = current["exploration"] if learner.pretraining else current["task"]
-    snapshot = cpu_state({"model": current["model"], "behavior": behavior})
+    snapshot = session.learner.policy_state()
     config = session.spec.algorithm_config
     results = pool.collect(snapshot, session.counters["updates"], config.total_environment_steps - session.counters["steps"],
                            warmup=session.counters["steps"] < config.learning_starts)
@@ -251,7 +240,7 @@ def _learn(session: TrainingSession) -> dict[str, float]:
     while session.counters["update_credit"] >= config.batch_size * config.sequence_length:
         batch = session.replay.sample(config.batch_size, config.sequence_length, session.rng, session.learner.device)
         metrics = session.learner.update(batch)
-        learned = int(batch.valid.sum())
+        learned = int(metrics["learner/learned_timesteps"])
         session.counters["learned_timesteps"] += learned
         session.counters["update_credit"] -= learned
         session.counters["updates"] += 1
@@ -269,6 +258,8 @@ def _metrics(session: TrainingSession, results, started: float, initial_steps: i
     counters = session.counters
     pretraining_steps = 0 if session.parent is None else session.parent["environment_steps"]
     return {"train/environment_steps": counters["steps"], "train/episodes": counters["episodes"],
+        "train/batch_size": session.spec.algorithm_config.batch_size,
+        "system/cuda_graph_prefix": session.learner.cuda_prefix is not None,
         "train/learner_updates": counters["updates"], "train/replay_steps": session.replay.steps,
         "train/actual_replay_ratio": counters["learned_timesteps"] / max(1, counters["steps"]),
         "train/update_credit": counters["update_credit"], "train/invalid_actions": 0,
@@ -292,13 +283,15 @@ def _publish_status(session: TrainingSession, status: str, started: float, error
     atomic_json(session.directory / "status.json", {"status": status, "error": error})
 
 
-def _train(session: TrainingSession, pool: RayCollectionPool, tracking, started: float) -> None:
+def _train(session: TrainingSession, pool: RayCollectionPool, tracking, started: float, stop_requested=None) -> bool:
     spec = session.spec
     initial_steps = session.counters["steps"]
     interval = spec.checkpoint.interval_environment_steps
     next_checkpoint = (initial_steps // interval + 1) * interval
     metrics = {}
     while session.counters["steps"] < spec.algorithm_config.total_environment_steps:
+        if stop_requested is not None and stop_requested():
+            break
         phase_started = time.monotonic()
         results = _collect(session, pool)
         collection_seconds = time.monotonic() - phase_started
@@ -317,9 +310,10 @@ def _train(session: TrainingSession, pool: RayCollectionPool, tracking, started:
     if session.counters["updates"] == 0:
         raise RuntimeError("training budget ended without a learner update")
     _save(session, "final", pool)
+    return session.counters["steps"] >= spec.algorithm_config.total_environment_steps
 
 
-def run_experiment(spec, registry=None, *, report: bool = False, component_registry=None, resume_from=None) -> Path:
+def run_experiment(spec, registry=None, *, report: bool = False, component_registry=None, resume_from=None, stop_requested=None) -> Path:
     """Train one phase, restoring its full state on resume rather than reinitializing transfer."""
     selected = create_training_registry() if registry is None else registry
     session = _prepare_session(spec, selected, component_registry, resume_from)
@@ -330,11 +324,11 @@ def run_experiment(spec, registry=None, *, report: bool = False, component_regis
     try:
         pool = RayCollectionPool(session.spec, component_registry, session.collector_states, session.snapshot)
         tracking = _tracking(session)
-        _train(session, pool, tracking, started)
+        completed = _train(session, pool, tracking, started, stop_requested)
         if report and session.spec.tracking.mode == "online":
             from ..reports import generate_report
             generate_report(session.directory)
-        _publish_status(session, "completed", started)
+        _publish_status(session, "completed" if completed else "stopped", started)
     except Exception as error:
         _publish_status(session, "failed", started, f"{type(error).__name__}: {error}")
         raise

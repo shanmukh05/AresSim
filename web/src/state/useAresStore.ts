@@ -9,7 +9,7 @@ import { AresApiClient, AresApiError, type ReplayResponse } from "../api/aresCli
 import { downloadTrajectoryFile } from "../lib/trajectoryFile";
 import { payloadUsedKg } from "../lib/payload";
 import type { ActionType, AresReplayProjectionV1, AlgorithmId, AnalyticsSeriesPoint, CameraView, LoadedReplay, OverlayMode, PolicyActionMode, RunMode, SelectionTarget, SimAction, SimSnapshot, SimWarning, ViewportZoomMode } from "../types/sim";
-import { supportsActionSampling, usesCheckpoint, usesJev } from "../types/sim";
+import { supportsActionSampling, usesCheckpoint } from "../types/sim";
 
 const client = new AresApiClient();
 
@@ -133,7 +133,8 @@ interface AresStore {
   rllibAvailable: boolean;
   muzeroAvailable: boolean;
   worldModelsAvailable: boolean;
-  jevAvailable: boolean;
+  llmDmAvailable: boolean;
+  policyEpisodeDone: boolean;
   policyCapabilitiesLoaded: boolean;
   policyAttachKey: string | null;
   loadedReplay: LoadedReplay | null;
@@ -196,13 +197,31 @@ interface AresStore {
 
 /** Hook into session/replay/UI state. Call `start` once from `App`. */
 export const useAresStore = create<AresStore>((set, get) => {
-  const runBackend = async <T>(operation: () => Promise<T>, apply: (value: T) => void, failureTitle = "Backend request failed") => {
-    if (get().backendBusy) return;
+  let backendRequests = 0;
+  let policyRevision = 0;
+  let policyDetach = Promise.resolve();
+
+  const invalidateLlmPolicy = () => {
+    policyRevision += 1;
+    const sessionId = get().snapshot?.sessionId;
+    if (!sessionId || get().algorithmId !== "llm_dm") return;
+    policyDetach = policyDetach.then(async () => {
+      if (get().snapshot?.sessionId === sessionId) await client.detachPolicy();
+    }).catch(() => {
+      set({ backendError: "Could not detach the previous LLM policy. Reset before continuing." });
+    });
+  };
+
+  const runBackend = async <T>(operation: () => Promise<T>, apply: (value: T) => void, failureTitle = "Backend request failed", allowWhileBusy = false) => {
+    if (get().backendBusy && !allowWhileBusy) return;
+    const revision = policyRevision;
+    backendRequests += 1;
     set({ backendBusy: true, backendError: null });
     try {
       const value = await operation();
-      apply(value);
+      if (revision === policyRevision) apply(value);
     } catch (error) {
+      if (revision !== policyRevision) return;
       const message = error instanceof AresApiError ? error.message : "The backend request failed.";
       set((state) => ({
         backendError: message,
@@ -211,7 +230,8 @@ export const useAresStore = create<AresStore>((set, get) => {
           : state.actionWarning,
       }));
     } finally {
-      set({ backendBusy: false });
+      backendRequests -= 1;
+      set({ backendBusy: backendRequests > 0 });
     }
   };
 
@@ -243,7 +263,8 @@ export const useAresStore = create<AresStore>((set, get) => {
   rllibAvailable: false,
   muzeroAvailable: false,
   worldModelsAvailable: false,
-  jevAvailable: false,
+  llmDmAvailable: false,
+  policyEpisodeDone: false,
   policyCapabilitiesLoaded: false,
   policyAttachKey: null,
   loadedReplay: null,
@@ -266,7 +287,9 @@ export const useAresStore = create<AresStore>((set, get) => {
   showRoverVisibility: false,
   actionWarning: null,
   lastSavedAt: null,
-  start: async (seed) => runBackend(
+  start: async (seed) => {
+    policyRevision += 1;
+    await runBackend(
     async () => {
       const snapshot = await client.startSession({ seed });
       await get().refreshPolicyCapabilities();
@@ -275,6 +298,7 @@ export const useAresStore = create<AresStore>((set, get) => {
     (snapshot) => set({
       snapshot,
       policyAttachKey: null,
+      policyEpisodeDone: false,
       selectedTarget: null,
       highlightedCell: null,
       paused: false,
@@ -288,9 +312,13 @@ export const useAresStore = create<AresStore>((set, get) => {
       analyticsSeries: buildInitialSeries(snapshot),
     }),
     "Session start failed",
-  ),
+    true,
+    );
+  },
   retryBackend: async () => get().start(1447),
-  randomize: async () => runBackend(
+  randomize: async () => {
+    policyRevision += 1;
+    await runBackend(
     async () => {
       const snapshot = await client.randomizeSession();
       await get().refreshPolicyCapabilities();
@@ -299,6 +327,7 @@ export const useAresStore = create<AresStore>((set, get) => {
     (snapshot) => set({
       snapshot,
       policyAttachKey: null,
+      policyEpisodeDone: false,
       selectedTarget: null,
       highlightedCell: null,
       paused: false,
@@ -314,7 +343,9 @@ export const useAresStore = create<AresStore>((set, get) => {
       analyticsSeries: buildInitialSeries(snapshot),
     }),
     "Randomization failed",
-  ),
+    true,
+    );
+  },
   saveRun: async (filename) => {
     const snapshot = get().snapshot;
     const runMode = get().runMode;
@@ -337,7 +368,9 @@ export const useAresStore = create<AresStore>((set, get) => {
       "Save failed",
     );
   },
-  loadGameplay: async (content, fileName) => runBackend(
+  loadGameplay: async (content, fileName) => {
+    policyRevision += 1;
+    await runBackend(
     () => client.loadReplay(content, fileName),
     (response) => {
       const gameplay = response.gameplay!;
@@ -371,7 +404,9 @@ export const useAresStore = create<AresStore>((set, get) => {
       });
     },
     "Load failed",
-  ),
+    true,
+    );
+  },
   resetCurrentRun: async () => {
     const snapshot = get().snapshot;
     if (!snapshot) return;
@@ -408,7 +443,11 @@ export const useAresStore = create<AresStore>((set, get) => {
         () => client.agentStep(),
         (response) => set((current) => ({
           snapshot: response.snapshot,
-          actionWarning: warningFromSnapshot(response.snapshot),
+          policyEpisodeDone: response.policyMeta.episodeDone === true,
+          actionWarning: response.policyMeta.episodeDone ? {
+            id: response.snapshot.step, kind: "progress", title: "Policy episode complete",
+            message: `${response.policyMeta.endingReason ?? "Episode ended"}. Reset the game to start another episode.`, severity: "success",
+          } : warningFromSnapshot(response.snapshot),
           analyticsSeries: appendSeriesPoint(current.analyticsSeries, response.snapshot),
         })),
         "Action failed",
@@ -456,20 +495,26 @@ export const useAresStore = create<AresStore>((set, get) => {
       return;
     }
     const nextPaused = !get().paused;
+    policyRevision += 1;
     await runBackend(
       () => nextPaused ? client.pause() : client.resume(),
       (snapshot) => set({ paused: nextPaused, snapshot }),
       "Playback control failed",
+      true,
     );
   },
   setSpeed: (speed) => set({ speed }),
   setRunMode: (mode) => {
-    set({ runMode: mode });
+    if (get().runMode !== mode) invalidateLlmPolicy();
+    set({ runMode: mode, policyAttachKey: null });
     if (mode === "algorithm") {
       void get().refreshPolicyCapabilities();
     }
   },
-  setAlgorithmId: (id) => set({ algorithmId: id, policyAttachKey: null }),
+  setAlgorithmId: (id) => {
+    if (get().algorithmId !== id) invalidateLlmPolicy();
+    set({ algorithmId: id, policyActionMode: "stochastic", policyAttachKey: null, policyEpisodeDone: false });
+  },
   setCheckpointPath: (path) => set({ checkpointPath: path, policyAttachKey: null }),
   setPolicyActionMode: (mode) => set({ policyActionMode: mode, policyAttachKey: null }),
   refreshPolicyCapabilities: async () => {
@@ -479,7 +524,7 @@ export const useAresStore = create<AresStore>((set, get) => {
         rllibAvailable: policies.capabilities.rllib,
         muzeroAvailable: policies.capabilities.muzero === true,
         worldModelsAvailable: policies.capabilities.world_models === true,
-        jevAvailable: policies.capabilities.jev === true,
+        llmDmAvailable: policies.capabilities.llm_dm === true,
         policyCapabilitiesLoaded: true,
       });
     } catch {
@@ -489,7 +534,7 @@ export const useAresStore = create<AresStore>((set, get) => {
           rllibAvailable: health.rllibAvailable,
           muzeroAvailable: health.muzeroAvailable,
           worldModelsAvailable: health.worldModelsAvailable,
-          jevAvailable: health.jevAvailable,
+          llmDmAvailable: health.llmDmAvailable,
           policyCapabilitiesLoaded: true,
         });
       } catch {
@@ -498,6 +543,7 @@ export const useAresStore = create<AresStore>((set, get) => {
     }
   },
   attachCurrentPolicy: async () => {
+    await policyDetach;
     const { algorithmId, checkpointPath, policyActionMode, snapshot, runMode } = get();
     if (!snapshot || runMode !== "algorithm") return;
     const actionMode = supportsActionSampling(algorithmId) ? policyActionMode : undefined;
@@ -515,16 +561,9 @@ export const useAresStore = create<AresStore>((set, get) => {
       });
       return;
     }
-    if (usesJev(algorithmId) && get().policyCapabilitiesLoaded && !get().jevAvailable) {
-      set({
-        actionWarning: {
-          id: snapshot.step,
-          kind: "blocked",
-          title: "Jev unavailable",
-          message: "Install aresim[jev] and set JEV_API_KEY on the API host.",
-          severity: "warning",
-        },
-      });
+    if (algorithmId === "llm_dm" && get().policyCapabilitiesLoaded && !get().llmDmAvailable) {
+      set({ actionWarning: { id: snapshot.step, kind: "blocked", title: "LLM/DM unavailable",
+        message: "Configure a learned policy bundle on the backend before selecting LLM/DM.", severity: "warning" } });
       return;
     }
     await runBackend(

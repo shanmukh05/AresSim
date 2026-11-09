@@ -4,7 +4,7 @@ This package contains the deterministic Phase 1 gameplay engine, the local REST 
 
 ## Development
 
-`pyproject.toml` is the canonical backend dependency manifest. The deterministic core remains usable without numerical frameworks. The API policy bridge uses the `env` extra; `dev` adds development checks, `rllib`/`muzero`/`world_models` add the selected training backend, `jev` adds TypeSafe, and `notebook` adds the Jupyter kernel.
+`pyproject.toml` is the canonical backend dependency manifest. The deterministic core remains usable without numerical frameworks. The API policy bridge uses the `env` extra; `dev` adds development checks, `rllib`/`muzero`/`world_models` add the selected training backend, `llm_dm` adds the hybrid agent pipeline, and `notebook` adds the Jupyter kernel.
 
 ```bash
 python3 -m venv .venv
@@ -69,7 +69,7 @@ The supported extension surface is the typed protocols in `aresim.components`, t
 
 ## Baseline rollouts
 
-The optional environment extra also includes deterministic random, random-valid, Wait, scripted, and Jev agents. Jev needs `aresim[jev]` and `JEV_API_KEY` for live calls; smoke rollouts use a fake client. See [`algorithms/baselines/DETAILS.md`](aresim/algorithms/baselines/DETAILS.md) and [`algorithms/jev/DETAILS.md`](aresim/algorithms/jev/DETAILS.md).
+The environment extra includes random, random-valid, Wait and scripted agents. The unified `llm_dm` algorithm uses a Decision Model or LLM Actor, shared episode Memory and a mandatory LLM Learner. Install `aresim[llm_dm]`; use native HTTPS providers with locally configured credentials. See [the implementation guide](../docs/llm_dm/implementation.md) for complete configs and commands.
 
 ```python
 from aresim.training import EpisodeSpec, RolloutConfig, RolloutRunner, TrajectoryWriter

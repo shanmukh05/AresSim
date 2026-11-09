@@ -25,13 +25,14 @@ from typing import Any
 import numpy as np
 
 from ..algorithms import Agent
+from ..algorithms.base import EpisodeStop, TransitionAwareAgent
 from ..config import EnvironmentConfig
 from ..defaults import DEFAULT_ENVIRONMENT_CONFIG
 from ..factory import make_agent, make_env
 from ..gameplay import TrajectoryRecorder
 from ..integrations.ui import snapshot_from_state
 from ..registry import ComponentRegistry, create_default_registry
-from .trajectories import EpisodeTrajectory, TrajectoryWriter
+from .trajectories import EpisodeTrajectory, EpisodeWriter, ProgressiveEpisodeWriter
 
 
 DEFAULT_MAX_EPISODE_STEPS = 1200
@@ -122,6 +123,7 @@ class RolloutRunner:
         self.environment_config = environment_config
         self.registry = create_default_registry() if registry is None else registry
         self.agent = make_agent(agent, environment_config, self.registry) if isinstance(agent, str) else agent
+        self.interruption_reason: str | None = None
         if not isinstance(self.agent, Agent):
             raise TypeError("rollout agent does not implement Agent")
 
@@ -147,7 +149,7 @@ class RolloutRunner:
             raise RuntimeError("environment schema identifiers changed during an episode")
         return result, legal
 
-    def _collect_episode(self, environment, spec: EpisodeSpec) -> EpisodeTrajectory[Any, Any]:
+    def _collect_episode(self, environment, spec: EpisodeSpec, writer: EpisodeWriter | None = None) -> EpisodeTrajectory[Any, Any] | None:
         reset = environment.reset(seed=spec.environment_seed)
         initial_snapshot = snapshot_from_state(environment.world_state, self.environment_config.engine)
         trajectory_recorder = TrajectoryRecorder.create(
@@ -159,6 +161,12 @@ class RolloutRunner:
         action_schema = str(reset.info["action_schema"])
         self._require_compatible_schemas(observation_schema, action_schema)
         self.agent.reset(spec.agent_seed)
+        aware = isinstance(self.agent, TransitionAwareAgent)
+        if aware:
+            self.agent.begin_episode(spec.episode_id)
+        progressive = isinstance(writer, ProgressiveEpisodeWriter)
+        if progressive:
+            writer.begin_episode(spec.episode_id, self.agent.policy_id, trajectory_recorder)
 
         observations = [deepcopy(reset.observation)]
         action_masks = [reset.action_mask.copy()]
@@ -178,12 +186,21 @@ class RolloutRunner:
         while True:
             current_observation = deepcopy(observations[-1])
             current_mask = action_masks[-1].copy()
-            action = self.agent.act(current_observation, current_mask)
+            try:
+                action = self.agent.act(current_observation, current_mask)
+            except EpisodeStop as stop:
+                self.interruption_reason = stop.reason
+                if actions:
+                    truncated[-1] = True
+                    terminal_reasons[-1] = stop.reason
+                break
             if not environment.action_space.contains(action):
                 raise ValueError("agent returned an action outside the environment action space")
             result, legal = self._record_transition(
                 environment, action, current_mask, trajectory_recorder, observation_schema, action_schema
             )
+            if progressive:
+                writer.write_progress(trajectory_recorder)
             actions.append(deepcopy(action))
             rewards.append(float(result.reward))
             reward_breakdowns.append(result.reward_breakdown.as_dict())
@@ -206,8 +223,27 @@ class RolloutRunner:
             observations.append(deepcopy(result.observation))
             action_masks.append(result.action_mask.copy())
             state_checksums.append(result.transition.after_checksum)
+            if aware:
+                decision = getattr(self.agent, "last_info", None) or {}
+                self.agent.observe_transition({
+                    "schema_version": "aresim.llm.feedback.v1",
+                    "episode_id": decision.get("episode_id"), "decision_id": decision.get("decision_id"),
+                    "step_index": len(actions) - 1, "issued_action_id": int(action),
+                    "observation": deepcopy(result.observation), "action_mask": result.action_mask.copy(),
+                    "reward": float(result.reward), "effective_action": result.transition.effective_action.value,
+                    "terminated": result.terminated, "truncated": result.truncated,
+                    "ending_reason": terminal_reasons[-1],
+                })
             if result.terminated or result.truncated:
                 break
+
+        if aware:
+            self.agent.finish_episode({"source_episode_id": spec.episode_id, "transitions": len(actions),
+                                       "terminated": terminated[-1] if actions else False,
+                                       "truncated": truncated[-1] if actions else True,
+                                       "ending_reason": terminal_reasons[-1] if actions else self.interruption_reason})
+        if not actions:
+            return None
 
         return EpisodeTrajectory(
             episode_id=spec.episode_id,
@@ -261,8 +297,8 @@ class RolloutRunner:
             ending_reason=episode.ending_reason,
         )
 
-    def run(self, writer: TrajectoryWriter | None = None) -> RolloutResult:
-        """Collect all planned episodes and optionally finalize a JSONL dataset."""
+    def run(self, writer: EpisodeWriter | None = None) -> RolloutResult:
+        """Collect planned episodes and persist them through the selected episode writer."""
         environment = make_env(
             self.environment_config,
             registry=self.registry,
@@ -271,14 +307,18 @@ class RolloutRunner:
         episodes: list[EpisodeTrajectory[Any, Any]] = []
         summaries: list[EpisodeSummary] = []
         for spec in self.rollout_config.episodes:
-            episode = self._collect_episode(environment, spec)
+            episode = self._collect_episode(environment, spec, writer)
+            if episode is None:
+                break
             episodes.append(episode)
             summaries.append(self._summary(episode))
             if writer is not None:
                 writer.write_episode(episode)
+            if self.interruption_reason is not None:
+                break
 
         artifact_manifest: str | None = None
-        if writer is not None:
+        if writer is not None and episodes:
             manifest_path = writer.finalize(max_episode_steps=self.rollout_config.max_episode_steps)
             artifact_manifest = str(Path(manifest_path).resolve())
             summaries = [replace(summary, artifact_reference=artifact_manifest) for summary in summaries]

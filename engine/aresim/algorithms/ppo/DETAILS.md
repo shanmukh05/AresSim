@@ -8,9 +8,9 @@ The shared encoder consumes terrain `[B,8,8]`, five numerical spatial channels `
 
 The policy head produces `[B,10]` masked logits and the value head produces `[B,1]`, squeezed to `[B]`. Rollouts feed on-policy PPO/GAE updates; no experience replay is used.
 
-![Architecture and tensor dimensions](architecture.drawio.png)
+![Architecture and tensor dimensions](diagrams/architecture.drawio.png)
 
-![Training and checkpoint flow](training.drawio.png)
+![Training and checkpoint flow](diagrams/training.drawio.png)
 
 The PNG figures contain editable draw.io XML: open the PNG directly in draw.io to revise the illustration. Shapes and numbers are grounded in the adjacent model/configuration files and `../common/encoder.py`.
 

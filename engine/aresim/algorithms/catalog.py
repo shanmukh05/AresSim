@@ -8,7 +8,7 @@ class AlgorithmId(StrEnum):
     RANDOM_VALID = "random_valid"
     WAIT = "wait"
     SCRIPTED = "scripted"
-    JEV = "jev"
+    LLM_DM = "llm_dm"
     MASKED_PPO = "masked_ppo"
     MASKED_DQN = "masked_dqn"
     MUZERO = "muzero"
@@ -22,7 +22,7 @@ _POLICY_METADATA = {
     AlgorithmId.RANDOM_VALID: ("Random (valid)", "baseline"),
     AlgorithmId.WAIT: ("Wait", "baseline"),
     AlgorithmId.SCRIPTED: ("Scripted", "baseline"),
-    AlgorithmId.JEV: ("Jev", "llm"),
+    AlgorithmId.LLM_DM: ("LLM + Decision Model", "llm"),
     AlgorithmId.MASKED_PPO: ("Masked PPO", "checkpoint"),
     AlgorithmId.MASKED_DQN: ("Double Dueling DQN", "checkpoint"),
     AlgorithmId.MUZERO: ("MuZero", "checkpoint"),

@@ -46,15 +46,15 @@ The RLlib fallback for older native module state, historical frozen MuZero metad
 
 ## Final inference and analysis audit
 
-- Keep Jev's cargo arithmetic and repeated-action pattern definition beside its named JSON-state contract, and reuse them for policy overrides.
-  - `jev/state.py` and `jev/agent.py` independently sum ice/ore/sample cargo and independently recognize three-action repeats/two-action cycles; prompt advice and policy fallback must change together.
-  - `JevAgent._resolve_client` catches `JevUnavailableError` only to re-raise it unchanged.
+- Keep Decision Models's cargo arithmetic and repeated-action pattern definition beside its named JSON-state contract, and reuse them for policy overrides.
+  - The former Decision Models encoder/heuristic duplication was removed in llm_dm. Both Actor providers now share one observation encoder, outcome-driven Memory and learning pipeline.
+  - `DecisionModelsAgent._resolve_client` catches `DecisionModelsUnavailableError` only to re-raise it unchanged.
 - Pass checkpoint sources explicitly to action-path analysis and derive seed defaults from frozen experiment provenance.
   - `scripts/plot_reference_action_paths.py` mutates module globals for CLI-selected experiment roots and checkpoint labels; helpers silently read those values.
   - It imports private `evaluation._environment_config`, which only delegates to public `provenance.environment_config`.
   - Validation seed ranges and the policy seed offset repeat values already owned by frozen seed manifests.
   - `PPO_TRIALS` is unused.
 
-SDK timeout/signature fallbacks, deterministic baseline reset requirements, Jev's productive-action heuristics, action-name wire strings, and comparison/cache compatibility checks remain intentional requirements.
+SDK timeout/signature fallbacks, deterministic baseline reset requirements, Decision Models's productive-action heuristics, action-name wire strings, and comparison/cache compatibility checks remain intentional requirements.
 
-Final audit verification: four baselines each completed 72 real simulator steps; mask-respecting baselines stayed legal. Fake Jev completed 72 legal steps across three seeds with timeout/unknown/Wait decisions, and the checked-in Jev YAML completed its 20-step smoke. Jev request states serialize as JSON and retain one `action` Choice. Real scripted rollouts generated 48 steps for action-path cache collection/reload, three PNG charts and summary output under a temporary directory; existing results were untouched. Public experiment loading accepts both historical positional registry and keyword registry arguments. A static direct-import graph of 104 Python modules and 305 internal edges has no top-level cycles (`/tmp/ares-module-imports.json`; deferred/plugin imports are outside that graph).
+Final audit verification: four baselines each completed 72 real simulator steps; mask-respecting baselines stayed legal. Fake Decision Models completed 72 legal steps across three seeds with timeout/unknown/Wait decisions, and the checked-in Decision Models YAML completed its 20-step smoke. Decision Models request states serialize as JSON and retain one `action` Choice. Real scripted rollouts generated 48 steps for action-path cache collection/reload, three PNG charts and summary output under a temporary directory; existing results were untouched. Public experiment loading accepts both historical positional registry and keyword registry arguments. A static direct-import graph of 104 Python modules and 305 internal edges has no top-level cycles (`/tmp/ares-module-imports.json`; deferred/plugin imports are outside that graph).

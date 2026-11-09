@@ -106,9 +106,9 @@ export class AresApiClient {
     });
   }
 
-  async fetchHealth(): Promise<{ rllibAvailable: boolean; muzeroAvailable: boolean; worldModelsAvailable: boolean; jevAvailable: boolean }> {
-    const response = await request<{ rllibAvailable?: boolean; muzeroAvailable?: boolean; worldModelsAvailable?: boolean; jevAvailable?: boolean }>("/api/health");
-    return { rllibAvailable: response.rllibAvailable === true, muzeroAvailable: response.muzeroAvailable === true, worldModelsAvailable: response.worldModelsAvailable === true, jevAvailable: response.jevAvailable === true };
+  async fetchHealth(): Promise<{ rllibAvailable: boolean; muzeroAvailable: boolean; worldModelsAvailable: boolean; llmDmAvailable: boolean }> {
+    const response = await request<{ rllibAvailable?: boolean; muzeroAvailable?: boolean; worldModelsAvailable?: boolean; llmDmAvailable?: boolean }>("/api/health");
+    return { rllibAvailable: response.rllibAvailable === true, muzeroAvailable: response.muzeroAvailable === true, worldModelsAvailable: response.worldModelsAvailable === true, llmDmAvailable: response.llmDmAvailable === true };
   }
 
   /** @deprecated Use agentStep after attachPolicy. Kept for manual pre-decoded agent actions if needed. */

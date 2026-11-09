@@ -17,9 +17,17 @@ class Plan2ExploreConfig(DreamerConfig):
     initialization_checkpoint: str | None = None
     ensemble_size: int = 5
     intrinsic_scale: float = 1.0
+    demonstration_fraction: float = 0.0
+    cycle_penalty: float = 0.0
 
     def validate(self) -> None:
         super().validate()
+        if not 0 <= finite_number(self.demonstration_fraction, "demonstration_fraction") < 1:
+            raise ValueError("demonstration_fraction must be in [0, 1)")
+        if finite_number(self.cycle_penalty, "cycle_penalty") < 0:
+            raise ValueError("cycle_penalty must be nonnegative")
+        if self.phase != "adapt" and (self.demonstration_fraction or self.cycle_penalty):
+            raise ValueError("demonstrations and cycle shaping require adaptation")
         positive_integer(self.ensemble_size, "ensemble_size")
         if self.ensemble_size < 2:
             raise ValueError("disagreement requires at least two ensemble members")

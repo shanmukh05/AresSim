@@ -8,9 +8,9 @@ The shared encoder consumes terrain `[B,8,8]`, five numerical spatial channels `
 
 The encoder flattens `[B,T,...]` for CNN processing, then restores `[B,T,256]` for the 256-wide LSTM. External hidden/cell state is `[B,256]` each. Training Q-values are `[B,T,10]`; single-step inference returns `[B,10]`. Default replay length is 64 including 16 burn-in positions, which receive no TD loss.
 
-![Architecture and tensor dimensions](architecture.drawio.png)
+![Architecture and tensor dimensions](diagrams/architecture.drawio.png)
 
-![Training and checkpoint flow](training.drawio.png)
+![Training and checkpoint flow](diagrams/training.drawio.png)
 
 The PNG figures contain editable draw.io XML: open the PNG directly in draw.io to revise the illustration. Shapes and numbers are grounded in the adjacent model/configuration files and `../common/encoder.py`.
 
@@ -43,3 +43,7 @@ engine/.venv/bin/aresim-rl evaluate results/recurrent_dqn_smoke_v1/seed_7 --chec
 ```
 
 Select **Recurrent DQN** in Algorithm mode with the absolute sidecar path. The frozen agent resets `(h,c)` every episode, updates memory on random as well as greedy actions, and uses `epsilon_end` for stochastic evaluation. See the [implementation guide](../README.md) for matched-memory comparisons, resume compatibility, all presets, and verification evidence.
+
+## Training performance — November 7, 2026
+
+See the [measured pipeline optimizations and GPU benchmark commands](../../../../docs/rl/training_performance.md). Search/learning budgets and model widths are unchanged; CPU component timings do not establish CUDA throughput. Native checkpoint formats are preserved.

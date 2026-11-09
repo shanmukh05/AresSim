@@ -83,13 +83,14 @@ class WorldModelAgent:
 
     action_schema = "aresim.action.rover.v1"
 
-    def __init__(self, model: WorldModel, behavior: ActorCritic, policy_id: str, *, deterministic: bool = False) -> None:
+    def __init__(self, model: WorldModel, behavior: ActorCritic, policy_id: str, *, deterministic: bool = False, latent_deterministic: bool = False) -> None:
         self.model = model.eval()
         self.behavior = behavior.eval()
         self.policy_id = policy_id
         self.device = next(model.parameters()).device
         self.observation_schema = "aresim.obs.local_memory.v2" if model.encoder.memory else "aresim.obs.local.v1"
         self.deterministic = deterministic
+        self.latent_deterministic = latent_deterministic
         self.generator = torch.Generator(device=self.device)
         self.latent_generator = torch.Generator(device=self.device)
         self.reset(0)
@@ -115,11 +116,33 @@ class WorldModelAgent:
         states = [agent.state if agent.state is not None else model.rssm.initial(1, device) for agent in agents]
         state = tuple(torch.cat([item[index] for item in states], 0) for index in range(2))
         previous = torch.nn.functional.one_hot(torch.tensor([a.previous_action for a in agents], device=device), 11)[..., :10].float()
-        (hidden, _), _, posterior = model.rssm.observe(state, previous, embeddings, deterministic=True)
+        hidden, posterior = model.rssm.posterior_step(state, previous, embeddings)
         stochastic = _sample_posteriors(agents, posterior, reconstruction_generator)
         for index, agent in enumerate(agents):
             agent.state = hidden[index:index + 1], stochastic[index:index + 1]
         return model.rssm.features((hidden, stochastic))
+
+    @torch.no_grad()
+    def reconstruct(self, observations: list[dict[str, object]], actions: list[int], generator) -> None:
+        """Rebuild posterior memory under new weights, batching stateless crop encoding.
+
+        Chunked encoding bounds activation memory; posterior sampling remains in
+        original time order using the caller's reconstruction-only RNG.
+        """
+        self.reset_memory()
+        if len(observations) != len(actions):
+            raise ValueError("reconstruction requires one observation per previous decision")
+        for first in range(0, len(observations), 128):
+            chunk = observations[first:first + 128]
+            inputs = {key: torch.as_tensor(np.stack([np.asarray(obs[key]) for obs in chunk]), device=self.device) for key in chunk[0]}
+            embeddings = self.model.encoder(inputs)
+            previous = [10 if index == 0 else actions[index - 1] for index in range(first, first + len(chunk))]
+            encoded_actions = torch.nn.functional.one_hot(torch.tensor(previous, device=self.device), 11)[..., :10].float()
+            for offset in range(len(chunk)):
+                state = self.state if self.state is not None else self.model.rssm.initial(1, self.device)
+                hidden, posterior = self.model.rssm.posterior_step(state, encoded_actions[offset:offset + 1], embeddings[offset:offset + 1])
+                self.state = hidden, _sample_posteriors([self], posterior, generator)
+            self.previous_action = actions[first + len(chunk) - 1]
 
     @staticmethod
     @torch.no_grad()
@@ -148,7 +171,7 @@ class BuiltinCheckpointLoader:
     loader_id = "torch_dreamerv3"
     algorithm_id = "dreamerv3"
 
-    def load(self, path: str, *, deterministic: bool = True) -> WorldModelAgent:
+    def load(self, path: str, *, deterministic: bool = True, latent_deterministic: bool = False) -> WorldModelAgent:
         payload, spec, native = validate_sidecar(Path(path), self.algorithm_id)
         config = environment_config(spec)
         model = WorldModel(spec.model_config, make_env(config, audit=False).observation_space)
@@ -157,10 +180,10 @@ class BuiltinCheckpointLoader:
         model.load_state_dict(weights["model"])
         key = "exploration" if payload["phase"] == "pretrain" else "task"
         behavior.load_state_dict(weights[key])
-        agent = WorldModelAgent(model, behavior, payload["policy_id"], deterministic=deterministic)
+        agent = WorldModelAgent(model, behavior, payload["policy_id"], deterministic=deterministic, latent_deterministic=latent_deterministic)
         agent.environment_config = config
         agent.phase = payload["phase"]
-        agent.evaluation_metadata = {"latent_mode": "modal" if deterministic else "seeded_sample", "phase": agent.phase}
+        agent.evaluation_metadata = {"latent_mode": "modal" if latent_deterministic else "seeded_sample", "phase": agent.phase}
         return agent
 
 
@@ -169,5 +192,5 @@ def _sample_posteriors(agents: list[WorldModelAgent], posterior: Tensor, reconst
     for index, agent in enumerate(agents):
         generator = agent.latent_generator if reconstruction_generator is None else reconstruction_generator
         samples.append(sample_latent(posterior[index:index + 1], agent.model.config.unimix,
-                                     generator=generator, deterministic=agent.deterministic))
+                                     generator=generator, deterministic=agent.latent_deterministic))
     return torch.cat(samples, 0)

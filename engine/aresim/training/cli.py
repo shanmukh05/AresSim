@@ -4,7 +4,7 @@ Heavy optional dependencies load only for the subcommand that needs them.
 
 **Last updated:** September 12, 2026
 
-**Commands:** ``train``, ``evaluate``, ``report``, ``inspect``, ``rollout``.
+**Commands:** ``train``, ``evaluate``, ``compare``, ``report``, ``inspect``, ``rollout``.
 
 **Entry point:** ``aresim-rl`` (console script).
 
@@ -39,11 +39,15 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--action-mode", choices=("deterministic", "stochastic", "both"))
     evaluate.add_argument("--allow-environment-mismatch", action="store_true")
     evaluate.add_argument("--split", choices=("validation", "test"), default="validation")
+    compare = commands.add_parser("compare", help="score several checkpoints on one shared world list")
+    compare.add_argument("config", type=Path)
     commands.add_parser("report", help="generate W&B metric plots under <run>/reports/").add_argument("run", type=Path)
     inspect = commands.add_parser("inspect", help="print a run manifest or checkpoint sidecar")
     inspect.add_argument("path", type=Path)
-    rollout = commands.add_parser("rollout", help="run a Jev agent from rollout YAML")
-    rollout.add_argument("config", type=Path)
+    rollout = commands.add_parser("rollout", help="run the llm_dm Actor/Memory/LLM-Learner workflow")
+    rollout.add_argument("config", type=Path, nargs="?")
+    rollout.add_argument("--config", dest="config_option", type=Path)
+    rollout.add_argument("--env-file", type=Path, help="load configured LLM credential names from a dotenv file")
     return parser
 
 
@@ -75,18 +79,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(evaluate_checkpoint(checkpoint, split=arguments.split, output_directory=output, action_mode=arguments.action_mode,
                                   allow_environment_mismatch=arguments.allow_environment_mismatch))
         return 0
+    if arguments.command == "compare":
+        from .panel import run_panel
+
+        print(run_panel(arguments.config))
+        return 0
     if arguments.command == "report":
         from .reports import generate_report
 
         print(generate_report(arguments.run))
         return 0
     if arguments.command == "rollout":
-        from ..algorithms.jev.rollout import load_jev_rollout, run_jev_rollout
-
-        result = run_jev_rollout(load_jev_rollout(arguments.config))
-        for summary in result.summaries:
-            print(summary.episode_id, summary.length, summary.episode_return)
-        return 0
+        import logging
+        import yaml
+        from .seeds import resolve_checkout_file
+        source = arguments.config_option or arguments.config
+        if source is None or (arguments.config_option and arguments.config):
+            raise ValueError("supply exactly one rollout config path")
+        payload = yaml.safe_load(resolve_checkout_file(source, kind="rollout config").read_text())
+        if not isinstance(payload, dict):
+            raise ValueError("rollout config must be an object")
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+        if payload.get("agent") != "llm_dm":
+            raise ValueError("rollout agent must be llm_dm")
+        from ..algorithms.llm_dm.config import load_llm_dm_run, load_role_credentials
+        from ..algorithms.llm_dm.rollout import run_llm_dm
+        config = load_llm_dm_run(source)
+        if arguments.env_file:
+            load_role_credentials(config, arguments.env_file)
+        manifest = run_llm_dm(config)
+        print(manifest)
+        return 0 if json.loads(manifest.read_text())["status"] == "completed" else 2
     path = arguments.path
     if path.is_dir():
         manifest = path / "manifest.json"
