@@ -4,7 +4,9 @@
  * Keeps `Modal-Key` and `Modal-Secret` strictly server-side in Vercel env vars.
  */
 
-const ALLOWED_PATH = /^\/api\/(health|policies(\/validate-checkpoint)?|sessions(\/[A-Za-z0-9_-]+(\/(actions|pause|resume|save|attach-policy|detach-policy|agent-step|agent-steps|llm-learn))?)?|replays(\/[A-Za-z0-9_-]+\/(step|jump|reset))?)$/;
+import { gzipSync } from "node:zlib";
+
+const ALLOWED_PATH = /^\/api\/(health|policies(\/validate-checkpoint)?|sessions(\/[A-Za-z0-9_-]+(\/(actions|actions-batch|pause|resume|save|attach-policy|detach-policy|agent-step|agent-steps|llm-learn))?)?|replays(\/[A-Za-z0-9_-]+\/(step|jump|reset))?)$/;
 
 function resolveApiPath(req) {
   const raw = req.query?.path;
@@ -70,7 +72,16 @@ export default async function handler(req, res) {
 
     const text = await upstream.text();
     const contentType = upstream.headers.get("content-type") || "application/json";
-    res.status(upstream.status).setHeader("Content-Type", contentType).send(text);
+    res.status(upstream.status).setHeader("Content-Type", contentType);
+    const acceptEncoding = String(req.headers["accept-encoding"] || "");
+    if (acceptEncoding.includes("gzip") && text.length > 1024) {
+      const compressed = gzipSync(Buffer.from(text, "utf-8"));
+      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Vary", "Accept-Encoding");
+      res.send(compressed);
+      return;
+    }
+    res.send(text);
   } catch (error) {
     const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
     res.status(timedOut ? 504 : 502).json({

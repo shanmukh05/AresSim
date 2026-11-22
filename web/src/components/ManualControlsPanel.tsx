@@ -28,13 +28,13 @@ export function ManualControlsPanel({ onClose }: { onClose: () => void }) {
   const moveRover = useAresStore((state) => state.moveRover);
   const dispatchAction = useAresStore((state) => state.dispatchAction);
   const selectedTool = useAresStore((state) => state.selectedTool);
-  const backendBusy = useAresStore((state) => state.backendBusy);
+  const manualQueueCount = useAresStore((state) => state.manualQueueCount);
 
   if (!snapshot) return null;
 
   const rover = snapshot.rovers[0];
   const cell = rover ? snapshot.terrain[rover.y]?.[rover.x] : null;
-  const disabled = snapshot.gameStatus === "game_over" || backendBusy;
+  const disabled = snapshot.gameStatus === "game_over";
   const hasCargo = rover ? rover.cargoIce + rover.cargoOre + rover.cargoSamples > 0 : false;
 
   const triggerMove = (arrow: MovementArrow) => {
@@ -108,6 +108,9 @@ export function ManualControlsPanel({ onClose }: { onClose: () => void }) {
             {rover ? (
               <div className="truncate text-[9px] capitalize text-stone-400">
                 {terrainLabel} · ({rover.x}, {rover.y})
+                {manualQueueCount > 0 ? (
+                  <span className="ml-1 font-mono normal-case text-cyan-300">· {manualQueueCount} queued</span>
+                ) : null}
               </div>
             ) : null}
           </div>

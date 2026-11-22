@@ -172,7 +172,14 @@ class AresService:
         with self._lock:
             return snapshot_from_state(self._session(session_id).engine.state, self.config)
 
-    def apply_action(self, session_id: str, command: ActionCommand, actor: Actor) -> JsonObject:
+    def apply_action(
+        self,
+        session_id: str,
+        command: ActionCommand,
+        actor: Actor,
+        *,
+        compact: bool = False,
+    ) -> JsonObject:
         """Step the engine and record a delta when the world clock actually advanced."""
         with self._lock:
             session = self._session(session_id)
@@ -182,7 +189,36 @@ class AresService:
             after = snapshot_from_state(transition.state, self.config)
             if after["step"] != before["step"]:
                 session.recorder.record(before, after)
-            return after
+            return _compact_snapshot(before, after) if compact else after
+
+    def apply_actions_batch(
+        self,
+        session_id: str,
+        commands: list[ActionCommand],
+        actor: Actor,
+        *,
+        compact: bool = True,
+    ) -> JsonObject:
+        """Apply up to 16 sequential player actions in one round-trip, stopping on invalid or terminal steps."""
+        bounded = commands[:16]
+        if not bounded:
+            raise ServiceError("INVALID_REQUEST", "Provide at least one action in the batch.", 400)
+        snapshots: list[JsonObject] = []
+        with self._lock:
+            session = self._session(session_id)
+            self._invalidate_policy(session, "manual_interruption")
+            for command in bounded:
+                before = snapshot_from_state(session.engine.state, self.config)
+                transition = session.engine.step(command, actor)
+                after = snapshot_from_state(transition.state, self.config)
+                if after["step"] != before["step"]:
+                    session.recorder.record(before, after)
+                snapshots.append(_compact_snapshot(before, after) if compact else after)
+                history = after.get("history")
+                latest_action = history[0].get("action") if isinstance(history, list) and history and isinstance(history[0], dict) else None
+                if after.get("gameStatus") != "running" or latest_action == "invalid":
+                    break
+        return {"snapshots": snapshots}
 
     def pause(self, session_id: str) -> JsonObject:
         """Pause without recording a step. Updates the recorder's current snapshot."""
@@ -340,7 +376,7 @@ class AresService:
                 if session.pending_policy_request == request_id:
                     session.pending_policy_request = None
 
-    def agent_step(self, session_id: str) -> JsonObject:
+    def agent_step(self, session_id: str, *, compact: bool = False) -> JsonObject:
         """Infer outside the session lock, then commit only if the captured revision is current."""
         with self._lock:
             session = self._session(session_id)
@@ -385,7 +421,7 @@ class AresService:
                     )
                 if attached.action_mode is not None:
                     meta["actionMode"] = attached.action_mode
-                return {"snapshot": after, "policyMeta": meta}
+                return {"snapshot": _compact_snapshot(before, after) if compact else after, "policyMeta": meta}
         except EpisodeStop as error:
             if isinstance(agent, TransitionAwareAgent):
                 agent.finish_episode({"transitions": getattr(agent, "step_index", 0), "terminated": False,
@@ -398,7 +434,7 @@ class AresService:
                 if session.pending_policy_request == request_id:
                     session.pending_policy_request = None
 
-    def agent_steps(self, session_id: str, count: int = 10) -> JsonObject:
+    def agent_steps(self, session_id: str, count: int = 10, *, compact: bool = False) -> JsonObject:
         """Advance up to `count` policy steps in one round-trip for smooth remote autoplay."""
         bounded = max(1, min(20, int(count)))
         with self._lock:
@@ -409,7 +445,7 @@ class AresService:
                 bounded = 1
         results: list[JsonObject] = []
         for _ in range(bounded):
-            step_result = self.agent_step(session_id)
+            step_result = self.agent_step(session_id, compact=compact)
             results.append(step_result)
             snapshot = step_result["snapshot"]
             meta = step_result["policyMeta"]
@@ -469,6 +505,22 @@ class AresService:
             replay = self._active_replay(replay_id)
             replay.reset()
             return replay
+
+
+def _compact_snapshot(before: JsonObject, after: JsonObject) -> JsonObject:
+    """Replace unchanged 32x32 terrain matrix with only modified cells for low-latency transport."""
+    before_terrain = before.get("terrain")
+    after_terrain = after.get("terrain")
+    delta: list[object] = []
+    if isinstance(before_terrain, list) and isinstance(after_terrain, list):
+        for row_before, row_after in zip(before_terrain, after_terrain):
+            if isinstance(row_before, list) and isinstance(row_after, list):
+                for cell_before, cell_after in zip(row_before, row_after):
+                    if cell_after != cell_before:
+                        delta.append(cell_after)
+    compact = {key: value for key, value in after.items() if key != "terrain"}
+    compact["terrainDelta"] = delta
+    return compact
 
 
 def _merge_policy_events(snapshot: JsonObject, notes: dict[int, str]) -> None:

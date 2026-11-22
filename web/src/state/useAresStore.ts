@@ -173,6 +173,7 @@ interface AresStore {
   llmFeedOpen: boolean;
   llmConfigOpen: boolean;
   manualControlsOpen: boolean;
+  manualQueueCount: number;
   rllibAvailable: boolean;
   muzeroAvailable: boolean;
   worldModelsAvailable: boolean;
@@ -253,6 +254,142 @@ export const useAresStore = create<AresStore>((set, get) => {
   let policyDetach = Promise.resolve();
   let stepQueue: AgentStepResponse[] = [];
   let prefetchPromise: Promise<void> | null = null;
+  type PendingManualInput =
+    | { kind: "move"; dx: number; dy: number }
+    | { kind: "action"; action: SimAction };
+  let manualQueue: PendingManualInput[] = [];
+  let manualFlushActive = false;
+  let inFlightPlannedPos: { x: number; y: number } | null = null;
+
+  const clearManualQueue = () => {
+    manualQueue = [];
+    inFlightPlannedPos = null;
+    if (get().manualQueueCount !== 0) set({ manualQueueCount: 0 });
+  };
+
+  const computePlannedRoverPos = (): { x: number; y: number } | null => {
+    const snap = get().snapshot;
+    if (!snap || !snap.rovers[0]) return null;
+    let x = inFlightPlannedPos ? inFlightPlannedPos.x : snap.rovers[0].x;
+    let y = inFlightPlannedPos ? inFlightPlannedPos.y : snap.rovers[0].y;
+    const maxX = snap.terrainSize.width - 1;
+    const maxY = snap.terrainSize.height - 1;
+    for (const item of manualQueue) {
+      if (item.kind === "move") {
+        x = Math.max(0, Math.min(maxX, x + item.dx));
+        y = Math.max(0, Math.min(maxY, y + item.dy));
+      } else if (item.action.type === "move" && item.action.target) {
+        x = Math.max(0, Math.min(maxX, item.action.target.x));
+        y = Math.max(0, Math.min(maxY, item.action.target.y));
+      }
+    }
+    return { x, y };
+  };
+
+  const applyManualSnapshot = (nextSnapshot: SimSnapshot, action: SimAction) => {
+    const target = action.type === "move" ? action.target : undefined;
+    set((current) => ({
+      selectedTool: action.type,
+      ...(target ? { selectedTarget: { kind: "cell" as const, ...target } } : {}),
+      snapshot: nextSnapshot,
+      ...(target && current.viewportZoomMode === "manual"
+        ? { viewportCenter: { x: target.x + 0.5, y: target.y + 0.5 } }
+        : target
+          ? { viewportCenter: null }
+          : {}),
+      actionWarning: warningFromSnapshot(nextSnapshot),
+      analyticsSeries: appendSeriesPoint(current.analyticsSeries, nextSnapshot),
+    }));
+  };
+
+  const flushManualQueue = async () => {
+    if (manualFlushActive) return;
+    manualFlushActive = true;
+    try {
+      while (manualQueue.length > 0) {
+        const state = get();
+        const snap = state.snapshot;
+        if (!snap || state.runMode !== "manual" || snap.gameStatus === "game_over") {
+          manualQueue = [];
+          set({ manualQueueCount: 0 });
+          break;
+        }
+        const batch = manualQueue.splice(0, 16);
+        set({ manualQueueCount: manualQueue.length });
+
+        let rx = snap.rovers[0].x;
+        let ry = snap.rovers[0].y;
+        const maxX = snap.terrainSize.width - 1;
+        const maxY = snap.terrainSize.height - 1;
+        const selected = state.selectedTarget;
+        const concreteActions: SimAction[] = batch.map((item) => {
+          if (item.kind === "move") {
+            rx = Math.max(0, Math.min(maxX, rx + item.dx));
+            ry = Math.max(0, Math.min(maxY, ry + item.dy));
+            return { type: "move", target: { x: rx, y: ry } };
+          }
+          const actionTarget =
+            item.action.target ?? (selected?.kind === "cell" ? { x: selected.x, y: selected.y } : undefined);
+          if (item.action.type === "move" && actionTarget) {
+            rx = Math.max(0, Math.min(maxX, actionTarget.x));
+            ry = Math.max(0, Math.min(maxY, actionTarget.y));
+          }
+          return { ...item.action, target: actionTarget };
+        });
+        inFlightPlannedPos = { x: rx, y: ry };
+
+        let returned: SimSnapshot[] = [];
+        const failureTitle = concreteActions.length === 1 && concreteActions[0].type === "move" ? "Movement failed" : "Action failed";
+        if (concreteActions.length === 1) {
+          await runBackend(
+            () => client.dispatchAction(concreteActions[0]),
+            (nextSnapshot) => {
+              returned = [nextSnapshot];
+            },
+            failureTitle,
+            true,
+          );
+        } else {
+          await runBackend(
+            () => client.dispatchActionBatch(concreteActions),
+            (snapshots) => {
+              returned = snapshots;
+            },
+            failureTitle,
+            true,
+          );
+        }
+
+        if (returned.length === 0) {
+          manualQueue = [];
+          set({ manualQueueCount: 0 });
+          break;
+        }
+
+        for (let i = 0; i < returned.length; i += 1) {
+          const stepSnap = returned[i];
+          const action = concreteActions[Math.min(i, concreteActions.length - 1)];
+          applyManualSnapshot(stepSnap, action);
+          const latest = stepSnap.history[0];
+          if (stepSnap.gameStatus !== "running" || latest?.action === "invalid") {
+            manualQueue = [];
+            set({ manualQueueCount: 0 });
+            break;
+          }
+          if (i < returned.length - 1) {
+            await new Promise((resolve) => window.setTimeout(resolve, 90));
+          }
+        }
+        inFlightPlannedPos = null;
+      }
+    } finally {
+      inFlightPlannedPos = null;
+      manualFlushActive = false;
+      if (get().manualQueueCount !== manualQueue.length) {
+        set({ manualQueueCount: manualQueue.length });
+      }
+    }
+  };
 
   const clearStepQueue = () => {
     stepQueue = [];
@@ -367,6 +504,7 @@ export const useAresStore = create<AresStore>((set, get) => {
         const currentSnapshot = get().snapshot;
         if (error instanceof AresApiError && error.code === "SESSION_NOT_FOUND" && currentSnapshot) {
           clearStepQueue();
+          clearManualQueue();
           const fresh = await client.startSession({ seed: currentSnapshot.seed });
           set({
             snapshot: fresh,
@@ -434,6 +572,7 @@ export const useAresStore = create<AresStore>((set, get) => {
   llmFeedOpen: true,
   llmConfigOpen: false,
   manualControlsOpen: true,
+  manualQueueCount: 0,
   rllibAvailable: false,
   muzeroAvailable: false,
   worldModelsAvailable: false,
@@ -464,6 +603,7 @@ export const useAresStore = create<AresStore>((set, get) => {
   start: async (seed) => {
     policyRevision += 1;
     clearStepQueue();
+    clearManualQueue();
     await runBackend(
     async () => {
       const snapshot = await client.startSession({ seed });
@@ -497,6 +637,7 @@ export const useAresStore = create<AresStore>((set, get) => {
   randomize: async () => {
     policyRevision += 1;
     clearStepQueue();
+    clearManualQueue();
     await runBackend(
     async () => {
       const snapshot = await client.randomizeSession();
@@ -554,6 +695,7 @@ export const useAresStore = create<AresStore>((set, get) => {
   loadGameplay: async (content, fileName) => {
     policyRevision += 1;
     clearStepQueue();
+    clearManualQueue();
     await runBackend(
     () => client.loadReplay(content, fileName),
     (response) => {
@@ -687,7 +829,16 @@ export const useAresStore = create<AresStore>((set, get) => {
     }
   },
   dispatchAction: async (action) => {
-    const selected = get().selectedTarget;
+    const state = get();
+    if (!state.snapshot || state.snapshot.gameStatus === "game_over") return;
+    if (state.runMode === "manual") {
+      if (manualQueue.length >= 16) return;
+      manualQueue.push({ kind: "action", action });
+      set({ manualQueueCount: manualQueue.length });
+      await flushManualQueue();
+      return;
+    }
+    const selected = state.selectedTarget;
     const target = action.target ?? (selected?.kind === "cell" ? { x: selected.x, y: selected.y } : undefined);
     await runBackend(
       () => client.dispatchAction({ ...action, target }),
@@ -696,20 +847,26 @@ export const useAresStore = create<AresStore>((set, get) => {
     );
   },
   moveRover: async (dx, dy) => {
-    const snapshot = get().snapshot;
-    if (!snapshot) return;
+    const state = get();
+    const snapshot = state.snapshot;
+    if (!snapshot || snapshot.gameStatus === "game_over") return;
+    if (state.runMode === "manual") {
+      if (manualQueue.length >= 16) return;
+      manualQueue.push({ kind: "move", dx, dy });
+      const planned = computePlannedRoverPos();
+      set({
+        manualQueueCount: manualQueue.length,
+        selectedTool: "move",
+        ...(planned ? { selectedTarget: { kind: "cell", ...planned } } : {}),
+      });
+      await flushManualQueue();
+      return;
+    }
     const rover = snapshot.rovers[0];
     const target = { x: Math.max(0, Math.min(snapshot.terrainSize.width - 1, rover.x + dx)), y: Math.max(0, Math.min(snapshot.terrainSize.height - 1, rover.y + dy)) };
     await runBackend(
       () => client.dispatchAction({ type: "move", target }),
-      (nextSnapshot) => set((current) => ({
-        selectedTool: "move",
-        selectedTarget: { kind: "cell", ...target },
-        snapshot: nextSnapshot,
-        viewportCenter: current.viewportZoomMode === "manual" ? { x: target.x + 0.5, y: target.y + 0.5 } : null,
-        actionWarning: warningFromSnapshot(nextSnapshot),
-        analyticsSeries: appendSeriesPoint(current.analyticsSeries, nextSnapshot),
-      })),
+      (nextSnapshot) => applyManualSnapshot(nextSnapshot, { type: "move", target }),
       "Movement failed",
     );
   },
@@ -731,7 +888,10 @@ export const useAresStore = create<AresStore>((set, get) => {
   },
   setSpeed: (speed) => set({ speed }),
   setRunMode: (mode) => {
-    if (get().runMode !== mode) invalidateLlmPolicy();
+    if (get().runMode !== mode) {
+      clearManualQueue();
+      invalidateLlmPolicy();
+    }
     set({ runMode: mode, policyAttachKey: null });
     if (mode === "algorithm") {
       void get().refreshPolicyCapabilities();

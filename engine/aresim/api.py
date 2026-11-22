@@ -15,6 +15,10 @@ snapshots. Errors use ``{ error: { code, message } }`` so the client switches on
 
 from __future__ import annotations
 
+import base64
+import binascii
+import gzip
+import io
 import os
 from typing import Literal
 
@@ -58,6 +62,14 @@ class ActionRequest(StrictModel):
     """`POST /api/sessions/{id}/actions`. `actor` is Player (manual) or Agent (algorithm)."""
     action: ActionPayload
     actor: Literal["Player", "Agent"]
+    compact: bool = False
+
+
+class ActionsBatchRequest(StrictModel):
+    """`POST /api/sessions/{id}/actions-batch`. Batches rapid manual inputs in one round-trip."""
+    actions: list[ActionPayload] = Field(min_length=1, max_length=16)
+    actor: Literal["Player", "Agent"] = "Player"
+    compact: bool = True
 
 
 class SaveRequest(StrictModel):
@@ -104,9 +116,10 @@ class ValidateCheckpointRequest(StrictModel):
 
 
 class ReplayLoadRequest(StrictModel):
-    """`POST /api/replays`. `content` is trajectory or legacy gameplay JSON."""
+    """`POST /api/replays`. `content` (or gzip+base64 `contentGzipBase64`) is trajectory or legacy gameplay JSON."""
     file_name: str = Field(alias="fileName", max_length=180)
-    content: str
+    content: str | None = None
+    content_gzip_base64: str | None = Field(default=None, alias="contentGzipBase64")
 
 
 class ReplayJumpRequest(StrictModel):
@@ -116,6 +129,7 @@ class ReplayJumpRequest(StrictModel):
 class AgentStepsRequest(StrictModel):
     """`POST /api/sessions/{id}/agent-steps`. Batch non-LLM steps to amortize network RTT."""
     count: int = Field(default=10, ge=1, le=20)
+    compact: bool = False
 
 
 def _error(code: str, message: str, status_code: int) -> JSONResponse:
@@ -223,7 +237,18 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
     def apply_session_action(session_id: str, request: ActionRequest) -> JsonObject:
         target = Position(request.action.target.x, request.action.target.y) if request.action.target is not None else None
         command = ActionCommand(ActionType(request.action.type), target)
-        return {"snapshot": service.apply_action(session_id, command, Actor(request.actor))}
+        return {"snapshot": service.apply_action(session_id, command, Actor(request.actor), compact=request.compact)}
+
+    @app.post("/api/sessions/{session_id}/actions-batch")
+    def apply_session_actions_batch(session_id: str, request: ActionsBatchRequest) -> JsonObject:
+        commands = [
+            ActionCommand(
+                ActionType(item.type),
+                Position(item.target.x, item.target.y) if item.target is not None else None,
+            )
+            for item in request.actions
+        ]
+        return service.apply_actions_batch(session_id, commands, Actor(request.actor), compact=request.compact)
 
     @app.post("/api/sessions/{session_id}/pause")
     def pause_session(session_id: str) -> JsonObject:
@@ -264,7 +289,7 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
 
     @app.post("/api/sessions/{session_id}/agent-steps")
     def agent_steps(session_id: str, request: AgentStepsRequest) -> JsonObject:
-        return service.agent_steps(session_id, request.count)
+        return service.agent_steps(session_id, request.count, compact=request.compact)
 
     @app.post("/api/sessions/{session_id}/llm-learn")
     def llm_learn(session_id: str) -> JsonObject:
@@ -272,7 +297,12 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
 
     @app.post("/api/replays")
     def load_replay(request: ReplayLoadRequest) -> JsonObject:
-        return _replay_response(service.load_replay(request.file_name, request.content), include_gameplay=True)
+        content = request.content
+        if request.content_gzip_base64 is not None:
+            content = _decode_gzip_base64(request.content_gzip_base64, config.replay.max_upload_bytes)
+        if content is None:
+            raise ServiceError("INVALID_GAMEPLAY", "Provide either replay content or gzipped replay content.", 400)
+        return _replay_response(service.load_replay(request.file_name, content), include_gameplay=True)
 
     @app.post("/api/replays/{replay_id}/step")
     def step_replay(replay_id: str) -> JsonObject:
@@ -287,6 +317,25 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
         return _replay_response(service.reset_replay(replay_id))
 
     return app
+
+
+def _decode_gzip_base64(encoded: str, max_bytes: int) -> str:
+    """Decode base64 gzip replay content with an explicit decompressed size cap."""
+    try:
+        compressed = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ServiceError("INVALID_GAMEPLAY", "The compressed gameplay payload is not valid base64.", 400) from error
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed), mode="rb") as stream:
+            raw = stream.read(max_bytes + 1)
+    except (OSError, EOFError, ValueError) as error:
+        raise ServiceError("INVALID_GAMEPLAY", "The compressed gameplay payload is not valid gzip.", 400) from error
+    if len(raw) > max_bytes:
+        raise ServiceError("GAMEPLAY_TOO_LARGE", "The gameplay file exceeds the configured upload limit.", 413)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ServiceError("INVALID_GAMEPLAY", "The gameplay file is not valid UTF-8.", 400) from error
 
 
 app = create_app()

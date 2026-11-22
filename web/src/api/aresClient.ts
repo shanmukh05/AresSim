@@ -5,10 +5,24 @@
  */
 
 import { apiUrl } from "../lib/deployConfig";
-import type { AgentStepResponse, AlgorithmId, AttachPolicyResponse, AresReplayProjectionV1, AresTrajectoryEpisodeV1, LlmDmAttachPayload, LlmLearnResponse, PoliciesResponse, PolicyActionMode, RunMode, SimAction, SimSnapshot } from "../types/sim";
+import type { AgentStepResponse, AlgorithmId, AttachPolicyResponse, AresReplayProjectionV1, AresTrajectoryEpisodeV1, LlmDmAttachPayload, LlmLearnResponse, PoliciesResponse, PolicyActionMode, RunMode, SimAction, SimSnapshot, TerrainCell } from "../types/sim";
+
+type CompactSimSnapshot = Omit<SimSnapshot, "terrain"> & {
+  terrain?: TerrainCell[][];
+  terrainDelta?: TerrainCell[];
+};
 
 interface SnapshotResponse {
-  snapshot: SimSnapshot;
+  snapshot: CompactSimSnapshot;
+}
+
+interface BatchSnapshotResponse {
+  snapshots: CompactSimSnapshot[];
+}
+
+interface CompactAgentStepResponse {
+  snapshot: CompactSimSnapshot;
+  policyMeta: AgentStepResponse["policyMeta"];
 }
 
 export interface ReplayResponse {
@@ -45,6 +59,7 @@ export class AresApiError extends Error {
 export class AresApiClient {
   private sessionId: string | null = null;
   private replayId: string | null = null;
+  private terrainCache: TerrainCell[][] | null = null;
 
   /** Start or replace the live session. Pass no seed to let the backend choose. */
   async startSession({ seed }: { seed?: number } = {}): Promise<SimSnapshot> {
@@ -52,44 +67,64 @@ export class AresApiClient {
       method: "POST",
       body: JSON.stringify({ seed: seed ?? null }),
     });
-    assertSnapshot(response.snapshot);
-    this.sessionId = response.snapshot.sessionId;
+    const snapshot = this.hydrateSnapshot(response.snapshot, true);
+    this.sessionId = snapshot.sessionId;
     this.replayId = null;
-    return response.snapshot;
+    return snapshot;
   }
 
   async randomizeSession(): Promise<SimSnapshot> {
     return this.startSession();
   }
 
-  /** Manual play: send `actor: Player`. */
+  /** Manual play: send `actor: Player` with compact terrain deltas when cached. */
   async dispatchAction(action: SimAction): Promise<SimSnapshot> {
     return this.applyAction(action, "Player");
+  }
+
+  /** Batched manual play: executes queued rapid inputs in one network round-trip. */
+  async dispatchActionBatch(actions: SimAction[]): Promise<SimSnapshot[]> {
+    const sessionId = this.requireSession();
+    const compact = this.terrainCache !== null;
+    const response = await request<BatchSnapshotResponse>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/actions-batch`,
+      {
+        method: "POST",
+        body: JSON.stringify({ actions, actor: "Player", compact }),
+      },
+    );
+    const items = Array.isArray(response.snapshots) ? response.snapshots : [];
+    return items.map((item) => this.hydrateSnapshot(item, true));
   }
 
   /** Algorithm autoplay: server runs the attached policy and steps as Agent. */
   async agentStep(): Promise<AgentStepResponse> {
     const sessionId = this.requireSession();
-    const response = await request<AgentStepResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/agent-step`, {
+    const response = await request<CompactAgentStepResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/agent-step`, {
       method: "POST",
     });
-    assertSnapshot(response.snapshot);
-    return response;
+    return {
+      snapshot: this.hydrateSnapshot(response.snapshot, true),
+      policyMeta: response.policyMeta,
+    };
   }
 
-  /** Batched algorithm steps: amortizes remote round-trip latency for non-LLM policies. */
+  /** Batched algorithm steps: amortizes remote round-trip latency and shrinks payloads via terrain deltas. */
   async agentSteps(count = 10): Promise<AgentStepResponse[]> {
     const sessionId = this.requireSession();
-    const response = await request<{ steps: AgentStepResponse[] }>(
+    const compact = this.terrainCache !== null;
+    const response = await request<{ steps: CompactAgentStepResponse[] }>(
       `/api/sessions/${encodeURIComponent(sessionId)}/agent-steps`,
       {
         method: "POST",
-        body: JSON.stringify({ count }),
+        body: JSON.stringify({ count, compact }),
       },
     );
     const steps = Array.isArray(response.steps) ? response.steps : [];
-    for (const item of steps) assertSnapshot(item.snapshot);
-    return steps;
+    return steps.map((item) => ({
+      snapshot: this.hydrateSnapshot(item.snapshot, true),
+      policyMeta: item.policyMeta,
+    }));
   }
 
   async listPolicies(): Promise<PoliciesResponse> {
@@ -164,9 +199,14 @@ export class AresApiClient {
 
   /** Upload a trajectory (or legacy gameplay file) and switch into replay mode. */
   async loadReplay(content: string, fileName: string): Promise<ReplayResponse> {
+    const compact = compactJsonIfValid(content);
+    const compressed = await gzipToBase64(compact);
+    const body = compressed !== null
+      ? JSON.stringify({ fileName, contentGzipBase64: compressed })
+      : JSON.stringify({ fileName, content: compact });
     const response = await request<ReplayResponse>("/api/replays", {
       method: "POST",
-      body: JSON.stringify({ fileName, content }),
+      body,
     });
     assertSnapshot(response.snapshot);
     if (!response.gameplay) throw new AresApiError("INVALID_RESPONSE", "Backend replay response did not include gameplay data.", 500);
@@ -188,19 +228,47 @@ export class AresApiClient {
 
   private async applyAction(action: SimAction, actor: "Player" | "Agent"): Promise<SimSnapshot> {
     const sessionId = this.requireSession();
+    const compact = this.terrainCache !== null;
     const response = await request<SnapshotResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/actions`, {
       method: "POST",
-      body: JSON.stringify({ action, actor }),
+      body: JSON.stringify({ action, actor, compact }),
     });
-    assertSnapshot(response.snapshot);
-    return response.snapshot;
+    return this.hydrateSnapshot(response.snapshot, true);
   }
 
   private async sessionRequest(operation: "pause" | "resume"): Promise<SimSnapshot> {
     const sessionId = this.requireSession();
     const response = await request<SnapshotResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/${operation}`, { method: "POST" });
-    assertSnapshot(response.snapshot);
-    return response.snapshot;
+    return this.hydrateSnapshot(response.snapshot, true);
+  }
+
+  private hydrateSnapshot(raw: CompactSimSnapshot, updateCache: boolean): SimSnapshot {
+    let terrain = raw.terrain;
+    if (!Array.isArray(terrain) && Array.isArray(raw.terrainDelta) && this.terrainCache) {
+      if (raw.terrainDelta.length === 0) {
+        terrain = this.terrainCache;
+      } else {
+        const nextTerrain = this.terrainCache.slice();
+        const clonedRows = new Set<number>();
+        for (const cell of raw.terrainDelta) {
+          if (cell.y >= 0 && cell.y < nextTerrain.length && cell.x >= 0 && cell.x < nextTerrain[cell.y].length) {
+            if (!clonedRows.has(cell.y)) {
+              nextTerrain[cell.y] = nextTerrain[cell.y].slice();
+              clonedRows.add(cell.y);
+            }
+            nextTerrain[cell.y][cell.x] = cell;
+          }
+        }
+        terrain = nextTerrain;
+      }
+    }
+    const { terrainDelta: _ignored, ...rest } = raw;
+    const hydrated = { ...rest, terrain } as SimSnapshot;
+    assertSnapshot(hydrated);
+    if (updateCache) {
+      this.terrainCache = hydrated.terrain;
+    }
+    return hydrated;
   }
 
   private async replayRequest(operation: "step" | "jump" | "reset", body?: object): Promise<ReplayResponse> {
@@ -229,13 +297,53 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   } catch {
     throw new AresApiError("BACKEND_UNAVAILABLE", "The AresSim backend is unavailable. Start the Python API and retry.", 0);
   }
-  const payload = await response.json().catch(() => null) as ApiErrorPayload | T | null;
+  const rawText = await response.text().catch(() => "");
+  let payload: ApiErrorPayload | T | null = null;
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText) as ApiErrorPayload | T;
+    } catch {
+      payload = null;
+    }
+  }
   if (!response.ok) {
     const error = payload && typeof payload === "object" && "error" in payload ? payload.error : undefined;
-    throw new AresApiError(error?.code ?? "BACKEND_ERROR", error?.message ?? "The backend request failed.", response.status);
+    const fallbackMessage =
+      response.status === 413
+        ? "The uploaded file is too large for the hosted proxy (4.5 MB compressed limit)."
+        : response.status === 504
+          ? "The inference server timed out while processing the request."
+          : rawText && rawText.length < 180
+            ? `Backend error (${response.status}): ${rawText.trim()}`
+            : `The backend request failed (HTTP ${response.status}).`;
+    throw new AresApiError(error?.code ?? `HTTP_${response.status}`, error?.message ?? fallbackMessage, response.status);
   }
   if (payload === null) throw new AresApiError("INVALID_RESPONSE", "The backend returned an invalid JSON response.", response.status);
   return payload as T;
+}
+
+function compactJsonIfValid(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw));
+  } catch {
+    return raw;
+  }
+}
+
+async function gzipToBase64(text: string): Promise<string | null> {
+  if (typeof CompressionStream !== "function") return null;
+  try {
+    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+    const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    const chunks: string[] = [];
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      chunks.push(String.fromCharCode(...bytes.subarray(i, i + chunkSize)));
+    }
+    return btoa(chunks.join(""));
+  } catch {
+    return null;
+  }
 }
 
 function assertSnapshot(value: unknown): asserts value is SimSnapshot {
