@@ -8,7 +8,7 @@ import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber"
 import { Html, Instance, Instances, Line, PerspectiveCamera as DreiPerspectiveCamera } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Color, Group, MathUtils, Matrix4, Quaternion, type OrthographicCamera, type PerspectiveCamera, Vector3 } from "three";
-import { Compass, Eye, Flashlight, Gem, Grid3X3, LocateFixed, Map as MapIcon, Maximize, Minus, Mountain, PackageCheck, Plus, Snowflake, Volume2, VolumeX, Wind } from "lucide-react";
+import { ChevronDown, ChevronUp, Compass, Eye, Flashlight, Gem, Grid3X3, LocateFixed, Map as MapIcon, Maximize, Minus, Mountain, PackageCheck, Plus, Snowflake, Volume2, VolumeX, Wind } from "lucide-react";
 import { snapshotToWorld } from "../presentation/adapters/snapshotToWorld";
 import type { TerrainPresentation, WorldPresentation } from "../presentation/types";
 import { useAresStore } from "../state/useAresStore";
@@ -907,6 +907,7 @@ function WorldNavigation({ width, height, terrain, rover, center, visibleWidth, 
   const overlayMode = useAresStore((state) => state.overlayMode);
   const setOverlayMode = useAresStore((state) => state.setOverlayMode);
   const setViewportCenter = useAresStore((state) => state.setViewportCenter);
+  const [collapsed, setCollapsed] = useState(false);
   const normalized = Math.round(((rotation % 360) + 360) % 360);
   const layers: Array<{ mode: Exclude<OverlayMode, "none">; label: string; icon: React.ReactNode }> = [
     { mode: "ice", label: "Ice layer", icon: <Snowflake size={14} /> },
@@ -916,13 +917,25 @@ function WorldNavigation({ width, height, terrain, rover, center, visibleWidth, 
   ];
   return (
     <div className="absolute right-4 top-4 z-20 w-48 overflow-hidden rounded-xl border border-white/10 bg-[#0b0d0f]/88 shadow-2xl backdrop-blur-xl" aria-label="Environment controls">
-      <div className="flex items-center justify-between border-b border-white/8 px-2.5 py-2">
+      <div className={`flex items-center justify-between px-2.5 py-2 ${collapsed ? "" : "border-b border-white/8"}`}>
         <span className="flex items-center gap-1.5 text-[9px] font-semibold text-stone-300"><Compass size={13} className="text-cyan-200/70" /> Environment</span>
-        {cameraView === "survey" ? <span className="flex items-center gap-1">
-          <label className="flex items-center rounded-md border border-white/10 bg-black/20 px-1.5 py-1 text-[9px] font-bold tabular-nums text-cyan-100"><input aria-label="World angle" className="w-9 bg-transparent text-right outline-none" inputMode="numeric" maxLength={3} onChange={(event) => { const next = Number(event.target.value); if (Number.isFinite(next)) setRotation(Math.max(0, Math.min(359, next))); }} type="text" value={normalized} />°</label>
-          <button aria-label="Reset view angle" className="grid h-6 w-6 place-items-center rounded-md border border-white/10 text-stone-500 hover:border-cyan-200/30 hover:text-cyan-100" onClick={() => setRotation(45)} type="button"><LocateFixed size={12} /></button>
-        </span> : <span className={`rounded-md border px-2 py-1 text-[8px] font-semibold ${cameraView === "top" ? "border-cyan-200/15 bg-cyan-300/8 text-cyan-100" : "border-amber-200/15 bg-amber-300/8 text-amber-100"}`}>{cameraView === "top" ? "TOP VIEW" : "ROVER POV"}</span>}
+        <span className="flex items-center gap-1">
+          {!collapsed && cameraView === "survey" ? <>
+            <label className="flex items-center rounded-md border border-white/10 bg-black/20 px-1.5 py-1 text-[9px] font-bold tabular-nums text-cyan-100"><input aria-label="World angle" className="w-8 bg-transparent text-right outline-none" inputMode="numeric" maxLength={3} onChange={(event) => { const next = Number(event.target.value); if (Number.isFinite(next)) setRotation(Math.max(0, Math.min(359, next))); }} type="text" value={normalized} />°</label>
+            <button aria-label="Reset view angle" className="grid h-6 w-6 place-items-center rounded-md border border-white/10 text-stone-500 hover:border-cyan-200/30 hover:text-cyan-100" onClick={() => setRotation(45)} type="button"><LocateFixed size={12} /></button>
+          </> : !collapsed ? <span className={`rounded-md border px-1.5 py-0.5 text-[8px] font-semibold ${cameraView === "top" ? "border-cyan-200/15 bg-cyan-300/8 text-cyan-100" : "border-amber-200/15 bg-amber-300/8 text-amber-100"}`}>{cameraView === "top" ? "TOP" : "POV"}</span> : null}
+          <button
+            aria-label={collapsed ? "Expand environment controls" : "Collapse environment controls"}
+            aria-expanded={!collapsed}
+            className="grid h-6 w-6 place-items-center rounded-md border border-white/10 text-stone-400 hover:border-cyan-200/30 hover:text-white"
+            onClick={() => setCollapsed((value) => !value)}
+            type="button"
+          >
+            {collapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+          </button>
+        </span>
       </div>
+      {collapsed ? null : <>
       <div className="border-b border-white/8 px-2 pb-2 pt-1.5" aria-label="Environment viewpoints">
         <div className="mb-1 text-[8px] font-medium text-stone-600">Viewpoint</div>
         <div className="grid grid-cols-3 gap-1.5">
@@ -953,6 +966,7 @@ function WorldNavigation({ width, height, terrain, rover, center, visibleWidth, 
       </div>
       {cameraView !== "rover" && zoomMode === "manual" ? <div className="border-t border-white/8 p-2"><MiniView center={center} height={height} onNavigate={setViewportCenter} rover={rover} terrain={terrain} visibleHeight={visibleHeight} visibleWidth={visibleWidth} width={width} /></div> : null}
       <div className="border-t border-white/8 px-2.5 py-1.5 text-center text-[8px] font-semibold uppercase tracking-[0.12em] text-stone-600" data-testid={cameraView === "rover" ? "rover-pov-readout" : zoomMode === "manual" ? "zoom-readout" : undefined}>{cameraView === "rover" ? `${roverFov}° field of view` : zoomMode === "manual" ? `${Math.round(zoomScale * 100)}% zoom` : cameraView === "top" ? "North-up · aligned" : `${rotationLabel(rotation)} 3D survey`}</div>
+      </>}
     </div>
   );
 }

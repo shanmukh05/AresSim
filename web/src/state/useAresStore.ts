@@ -6,12 +6,41 @@
 
 import { create } from "zustand";
 import { AresApiClient, AresApiError, type ReplayResponse } from "../api/aresClient";
+import { BUILD_DEPLOYED } from "../lib/deployConfig";
 import { downloadTrajectoryFile } from "../lib/trajectoryFile";
 import { payloadUsedKg } from "../lib/payload";
-import type { ActionType, AresReplayProjectionV1, AlgorithmId, AnalyticsSeriesPoint, CameraView, LoadedReplay, OverlayMode, PolicyActionMode, RunMode, SelectionTarget, SimAction, SimSnapshot, SimWarning, ViewportZoomMode } from "../types/sim";
+import type { ActionType, AresReplayProjectionV1, AlgorithmId, AnalyticsSeriesPoint, CameraView, LlmDmAttachPayload, LlmDmCatalog, LlmDmStepMeta, LlmFeedMessage, LlmGoalSummary, LlmLearningStatement, LoadedReplay, OverlayMode, PolicyActionMode, RunMode, SelectionTarget, SimAction, SimSnapshot, SimWarning, ViewportZoomMode } from "../types/sim";
 import { supportsActionSampling, usesCheckpoint } from "../types/sim";
 
 const client = new AresApiClient();
+
+const DEFAULT_LLM_DM_CONFIG: LlmDmAttachPayload = {
+  actorProvider: "decision_models",
+  actorModel: "jev-1.14.0",
+  actorRoute: null,
+  actorApiKey: "",
+  actorContextWindow: 131072,
+  actorMaxOutputTokens: 2048,
+  learnerEnabled: true,
+  learnerProvider: "gemini",
+  learnerModel: "gemini-4-neon",
+  learnerRoute: null,
+  learnerApiKey: "",
+  learnerContextWindow: 262144,
+  learnerMaxOutputTokens: 16384,
+  historyMode: "focused",
+  adviceLimit: 3,
+  attemptTimeoutSeconds: 60,
+  maxEpisodeSteps: 256,
+};
+
+function nowStamp(): string {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function feedId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
 
 function buildInitialSeries(snapshot: SimSnapshot): AnalyticsSeriesPoint[] {
   return [seriesPointFromSnapshot(snapshot)];
@@ -130,6 +159,20 @@ interface AresStore {
   algorithmId: AlgorithmId;
   checkpointPath: string;
   policyActionMode: PolicyActionMode;
+  deployedMode: boolean;
+  defaultCheckpoints: Record<string, string | boolean>;
+  llmDmCatalog: LlmDmCatalog | null;
+  llmDmConfig: LlmDmAttachPayload;
+  llmLearnings: LlmLearningStatement[];
+  llmFeed: LlmFeedMessage[];
+  llmCurrentGoal: LlmGoalSummary | null;
+  llmLastAppliedIds: string[];
+  llmLearnerConfigured: boolean;
+  llmLearningBusy: boolean;
+  llmAutoLearn: boolean;
+  llmFeedOpen: boolean;
+  llmConfigOpen: boolean;
+  manualControlsOpen: boolean;
   rllibAvailable: boolean;
   muzeroAvailable: boolean;
   worldModelsAvailable: boolean;
@@ -175,6 +218,13 @@ interface AresStore {
   setAlgorithmId: (id: AlgorithmId) => void;
   setCheckpointPath: (path: string) => void;
   setPolicyActionMode: (mode: PolicyActionMode) => void;
+  updateLlmDmConfig: (patch: Partial<LlmDmAttachPayload>) => void;
+  setLlmAutoLearn: (enabled: boolean) => void;
+  setLlmFeedOpen: (open: boolean) => void;
+  setLlmConfigOpen: (open: boolean) => void;
+  setManualControlsOpen: (open: boolean) => void;
+  clearLlmFeed: () => void;
+  runLlmLearn: () => Promise<void>;
   refreshPolicyCapabilities: () => Promise<void>;
   attachCurrentPolicy: () => Promise<void>;
   setSpeed: (speed: number) => void;
@@ -257,9 +307,23 @@ export const useAresStore = create<AresStore>((set, get) => {
   paused: false,
   speed: 1,
   runMode: "manual",
-  algorithmId: "random",
+  algorithmId: "random_valid",
   checkpointPath: "",
-  policyActionMode: "stochastic",
+  policyActionMode: BUILD_DEPLOYED ? "deterministic" : "stochastic",
+  deployedMode: BUILD_DEPLOYED,
+  defaultCheckpoints: {},
+  llmDmCatalog: null,
+  llmDmConfig: { ...DEFAULT_LLM_DM_CONFIG },
+  llmLearnings: [],
+  llmFeed: [],
+  llmCurrentGoal: null,
+  llmLastAppliedIds: [],
+  llmLearnerConfigured: false,
+  llmLearningBusy: false,
+  llmAutoLearn: true,
+  llmFeedOpen: true,
+  llmConfigOpen: false,
+  manualControlsOpen: true,
   rllibAvailable: false,
   muzeroAvailable: false,
   worldModelsAvailable: false,
@@ -439,19 +503,40 @@ export const useAresStore = create<AresStore>((set, get) => {
     if (state.runMode === "algorithm") {
       await get().attachCurrentPolicy();
       if (!get().policyAttachKey) return;
+      let shouldAutoLearn = false;
       await runBackend(
         () => client.agentStep(),
-        (response) => set((current) => ({
-          snapshot: response.snapshot,
-          policyEpisodeDone: response.policyMeta.episodeDone === true,
-          actionWarning: response.policyMeta.episodeDone ? {
-            id: response.snapshot.step, kind: "progress", title: "Policy episode complete",
-            message: `${response.policyMeta.endingReason ?? "Episode ended"}. Reset the game to start another episode.`, severity: "success",
-          } : warningFromSnapshot(response.snapshot),
-          analyticsSeries: appendSeriesPoint(current.analyticsSeries, response.snapshot),
-        })),
+        (response) => {
+          const llmMeta = response.policyMeta.llmDm;
+          const appendedFeed = llmMeta ? messagesFromLlmStep(response.snapshot.step, llmMeta) : [];
+          if (
+            response.policyMeta.episodeDone &&
+            get().algorithmId === "llm_dm" &&
+            get().llmAutoLearn &&
+            llmMeta?.learnerConfigured
+          ) {
+            shouldAutoLearn = true;
+          }
+          set((current) => ({
+            snapshot: response.snapshot,
+            policyEpisodeDone: response.policyMeta.episodeDone === true,
+            llmCurrentGoal: llmMeta?.goal ?? current.llmCurrentGoal,
+            llmLastAppliedIds: (llmMeta?.applied_advice ?? []).map((item) => item.id),
+            llmLearnerConfigured: llmMeta?.learnerConfigured ?? current.llmLearnerConfigured,
+            llmLearnings: llmMeta?.learnings ?? current.llmLearnings,
+            llmFeed: appendedFeed.length ? [...current.llmFeed, ...appendedFeed].slice(-160) : current.llmFeed,
+            actionWarning: response.policyMeta.episodeDone ? {
+              id: response.snapshot.step, kind: "progress", title: "Policy episode complete",
+              message: `${response.policyMeta.endingReason ?? "Episode ended"}. Reset the game to start another episode.`, severity: "success",
+            } : warningFromSnapshot(response.snapshot),
+            analyticsSeries: appendSeriesPoint(current.analyticsSeries, response.snapshot),
+          }));
+        },
         "Action failed",
       );
+      if (shouldAutoLearn) {
+        await get().runLlmLearn();
+      }
       return;
     }
     const action = { type: state.selectedTool } satisfies SimAction;
@@ -513,14 +598,91 @@ export const useAresStore = create<AresStore>((set, get) => {
   },
   setAlgorithmId: (id) => {
     if (get().algorithmId !== id) invalidateLlmPolicy();
-    set({ algorithmId: id, policyActionMode: "stochastic", policyAttachKey: null, policyEpisodeDone: false });
+    const { deployedMode, defaultCheckpoints } = get();
+    const defaultPath = !deployedMode && typeof defaultCheckpoints[id] === "string"
+      ? String(defaultCheckpoints[id])
+      : "";
+    set({
+      algorithmId: id,
+      checkpointPath: usesCheckpoint(id) ? defaultPath : "",
+      policyActionMode: deployedMode ? "deterministic" : "stochastic",
+      policyAttachKey: null,
+      policyEpisodeDone: false,
+      ...(id === "llm_dm" ? { llmFeedOpen: true } : {}),
+    });
   },
   setCheckpointPath: (path) => set({ checkpointPath: path, policyAttachKey: null }),
   setPolicyActionMode: (mode) => set({ policyActionMode: mode, policyAttachKey: null }),
+  updateLlmDmConfig: (patch) => {
+    invalidateLlmPolicy();
+    set((state) => ({
+      llmDmConfig: { ...state.llmDmConfig, ...patch },
+      policyAttachKey: null,
+    }));
+  },
+  setLlmAutoLearn: (enabled) => set({ llmAutoLearn: enabled }),
+  setLlmFeedOpen: (open) => set({ llmFeedOpen: open }),
+  setLlmConfigOpen: (open) => set({ llmConfigOpen: open }),
+  setManualControlsOpen: (open) => set({ manualControlsOpen: open }),
+  clearLlmFeed: () => set({ llmFeed: [] }),
+  runLlmLearn: async () => {
+    const state = get();
+    if (!state.snapshot || state.algorithmId !== "llm_dm" || state.llmLearningBusy) return;
+    set({ llmLearningBusy: true });
+    try {
+      const result = await client.llmLearn();
+      const author = result.learnerModel || state.llmDmConfig.learnerModel || "Learner";
+      const message: LlmFeedMessage = {
+        id: feedId("learn"),
+        kind: "learner",
+        step: state.snapshot.step,
+        author,
+        badge: result.addedLearning ? `${result.addedLearning.code} LEARNED` : "NO CHANGE",
+        text: result.addedLearning
+          ? result.addedLearning.text
+          : result.reason || "Learner reviewed the episode and proposed no new rule change.",
+        learning: result.addedLearning ?? null,
+        reason: result.reason,
+        timestamp: nowStamp(),
+      };
+      set((current) => ({
+        llmLearnings: result.learnings,
+        llmFeed: [...current.llmFeed, message].slice(-160),
+        actionWarning: result.addedLearning ? {
+          id: current.snapshot?.step ?? 0,
+          kind: "progress",
+          title: `New learning ${result.addedLearning.code}`,
+          message: "Learner synthesized a new rule and added it to live memory.",
+          severity: "success",
+        } : current.actionWarning,
+      }));
+    } catch (error) {
+      const msg = error instanceof AresApiError ? error.message : "Failed to generate learning.";
+      set((current) => ({
+        actionWarning: current.snapshot
+          ? { id: current.snapshot.step, kind: "blocked", title: "Learner reflection failed", message: msg, severity: "warning" }
+          : current.actionWarning,
+      }));
+    } finally {
+      set({ llmLearningBusy: false });
+    }
+  },
   refreshPolicyCapabilities: async () => {
     try {
       const policies = await client.listPolicies();
+      const deployed = BUILD_DEPLOYED || policies.deployed === true;
+      const defaults = policies.defaultCheckpoints ?? {};
+      const currentAlgo = get().algorithmId;
+      const autoPath =
+        !deployed && usesCheckpoint(currentAlgo) && !get().checkpointPath.trim() && typeof defaults[currentAlgo] === "string"
+          ? String(defaults[currentAlgo])
+          : get().checkpointPath;
       set({
+        deployedMode: deployed,
+        defaultCheckpoints: defaults,
+        checkpointPath: autoPath,
+        policyActionMode: deployed ? "deterministic" : get().policyActionMode,
+        llmDmCatalog: policies.llmDmCatalog ?? null,
         rllibAvailable: policies.capabilities.rllib,
         muzeroAvailable: policies.capabilities.muzero === true,
         worldModelsAvailable: policies.capabilities.world_models === true,
@@ -530,7 +692,10 @@ export const useAresStore = create<AresStore>((set, get) => {
     } catch {
       try {
         const health = await client.fetchHealth();
+        const deployed = BUILD_DEPLOYED || health.deployed === true;
         set({
+          deployedMode: deployed,
+          policyActionMode: deployed ? "deterministic" : get().policyActionMode,
           rllibAvailable: health.rllibAvailable,
           muzeroAvailable: health.muzeroAvailable,
           worldModelsAvailable: health.worldModelsAvailable,
@@ -544,12 +709,28 @@ export const useAresStore = create<AresStore>((set, get) => {
   },
   attachCurrentPolicy: async () => {
     await policyDetach;
-    const { algorithmId, checkpointPath, policyActionMode, snapshot, runMode } = get();
+    const { algorithmId, checkpointPath, policyActionMode, snapshot, runMode, deployedMode, defaultCheckpoints, llmDmConfig, llmLearnings } = get();
     if (!snapshot || runMode !== "algorithm") return;
-    const actionMode = supportsActionSampling(algorithmId) ? policyActionMode : undefined;
-    const key = `${algorithmId}:${usesCheckpoint(algorithmId) ? checkpointPath.trim() : ""}:${actionMode ?? ""}`;
+    const actionMode = supportsActionSampling(algorithmId)
+      ? (deployedMode ? "deterministic" : policyActionMode)
+      : undefined;
+    const effectiveCheckpoint = usesCheckpoint(algorithmId)
+      ? (deployedMode ? undefined : (checkpointPath.trim() || (typeof defaultCheckpoints[algorithmId] === "string" ? String(defaultCheckpoints[algorithmId]) : "")))
+      : undefined;
+    const llmPayload: LlmDmAttachPayload | undefined = algorithmId === "llm_dm"
+      ? {
+          ...llmDmConfig,
+          actorApiKey: llmDmConfig.actorApiKey?.trim() || null,
+          learnerApiKey: llmDmConfig.learnerApiKey?.trim() || null,
+          carryLearnings: llmLearnings,
+        }
+      : undefined;
+    const llmKeyPart = llmPayload
+      ? `${llmPayload.actorProvider}:${llmPayload.actorModel}:${llmPayload.actorContextWindow}:${llmPayload.actorMaxOutputTokens}:${llmPayload.learnerEnabled}:${llmPayload.learnerProvider}:${llmPayload.learnerModel}:${llmPayload.learnerContextWindow}:${llmPayload.learnerMaxOutputTokens}:${llmPayload.historyMode}:${llmPayload.adviceLimit}:${llmPayload.maxEpisodeSteps}:${Boolean(llmPayload.actorApiKey)}:${Boolean(llmPayload.learnerApiKey)}`
+      : "";
+    const key = `${algorithmId}:${effectiveCheckpoint ?? ""}:${actionMode ?? ""}:${llmKeyPart}`;
     if (get().policyAttachKey === key) return;
-    if (usesCheckpoint(algorithmId) && !checkpointPath.trim()) {
+    if (usesCheckpoint(algorithmId) && !deployedMode && !effectiveCheckpoint) {
       set({
         actionWarning: {
           id: snapshot.step,
@@ -563,16 +744,39 @@ export const useAresStore = create<AresStore>((set, get) => {
     }
     if (algorithmId === "llm_dm" && get().policyCapabilitiesLoaded && !get().llmDmAvailable) {
       set({ actionWarning: { id: snapshot.step, kind: "blocked", title: "LLM/DM unavailable",
-        message: "Configure a learned policy bundle on the backend before selecting LLM/DM.", severity: "warning" } });
+        message: "Install the llm_dm optional dependency (jsonschema) on the backend.", severity: "warning" } });
       return;
     }
     await runBackend(
       () => client.attachPolicy({
         algorithmId,
-        checkpointPath: usesCheckpoint(algorithmId) ? checkpointPath.trim() : undefined,
+        checkpointPath: effectiveCheckpoint || undefined,
         actionMode,
+        llmDm: llmPayload,
       }),
-      () => set({ policyAttachKey: key, actionWarning: null }),
+      (attached) => {
+        if (algorithmId === "llm_dm" && attached.llmDm) {
+          const info = attached.llmDm;
+          const sysMsg: LlmFeedMessage = {
+            id: feedId("sys"),
+            kind: "system",
+            step: snapshot.step,
+            author: "System",
+            badge: "ONLINE",
+            text: `Connected ${info.actorModel}${info.learnerConfigured && info.learnerModel ? ` + Learner ${info.learnerModel}` : " (Actor only)"}${info.learnings.length ? ` · ${info.learnings.length} learning${info.learnings.length === 1 ? "" : "s"} active` : ""}.`,
+            timestamp: nowStamp(),
+          };
+          set((current) => ({
+            policyAttachKey: key,
+            actionWarning: null,
+            llmLearnerConfigured: info.learnerConfigured,
+            llmLearnings: info.learnings,
+            llmFeed: [...current.llmFeed, sysMsg].slice(-160),
+          }));
+          return;
+        }
+        set({ policyAttachKey: key, actionWarning: null });
+      },
       "Policy attach failed",
     );
   },
@@ -604,6 +808,44 @@ export const useAresStore = create<AresStore>((set, get) => {
   toggleRoverVisibility: () => set((state) => ({ showRoverVisibility: !state.showRoverVisibility })),
   };
 });
+
+function messagesFromLlmStep(step: number, meta: LlmDmStepMeta): LlmFeedMessage[] {
+  const messages: LlmFeedMessage[] = [];
+  const ts = nowStamp();
+  if (meta.goal_event?.goal) {
+    const g = meta.goal_event.goal;
+    const coords = Array.isArray(g.position) ? ` (${g.position[0]}, ${g.position[1]})` : "";
+    messages.push({
+      id: feedId("goal"),
+      kind: "goal",
+      step,
+      author: "Goal Planner",
+      badge: g.kind.replace(/_/g, " ").toUpperCase(),
+      text: `Targeted ${g.kind.replace(/_/g, " ")}${coords} · ${meta.goal_event.reason.replace(/_/g, " ")}`,
+      timestamp: ts,
+    });
+  }
+  const actorName = meta.model || meta.provider || "Actor";
+  const actionLabel = (meta.action || "wait").replace(/_/g, " ");
+  const confidence = typeof meta.actor_details?.confidence === "number" ? meta.actor_details.confidence : undefined;
+  const probabilities = meta.actor_details?.probabilities;
+  messages.push({
+    id: feedId("act"),
+    kind: "actor",
+    step,
+    author: actorName,
+    badge: meta.fallback ? "FALLBACK" : "ACTOR",
+    action: meta.action,
+    text: meta.fallback ? `Fallback → ${actionLabel} (${meta.fallback})` : `Chose ${actionLabel}`,
+    confidence,
+    probabilities,
+    latencySec: typeof meta.latency_seconds === "number" ? meta.latency_seconds : undefined,
+    appliedAdvice: meta.applied_advice && meta.applied_advice.length ? meta.applied_advice : undefined,
+    fallback: meta.fallback ?? null,
+    timestamp: ts,
+  });
+  return messages;
+}
 
 function appendSeriesPoint(series: AnalyticsSeriesPoint[], snapshot: SimSnapshot): AnalyticsSeriesPoint[] {
   const point = seriesPointFromSnapshot(snapshot);

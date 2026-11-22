@@ -1,0 +1,33 @@
+# Pool these games with the first five by experiment name. Learner advice starts fresh.
+schema_version: aresim.llm_dm.ablation.v1
+base_config: ablation.yaml
+run:
+  output_directory: results/llm_dm/ablation-five-more
+  episodes:
+    - {id: game-06, environment_seed: 79050, agent_seed: 0}
+    - {id: game-07, environment_seed: 32894, agent_seed: 0}
+    - {id: game-08, environment_seed: 46823, agent_seed: 0}
+    - {id: game-09, environment_seed: 55684, agent_seed: 0}
+    - {id: game-10, environment_seed: 89845, agent_seed: 0}
+
+experiments:
+  - jev--gpt-6-2-sol
+  - jev--gpt-6-1-terra
+  - jev--gpt-6-luna
+  - jev--gpt-6-luna-low
+  - jev--gpt-6-luna-high
+  - jev--gemini-4-carbon
+  - jev--gemini-4-carbon-medium
+  - jev--gemini-4-neon
+  - jev--gemini-4-hydrogen
+  - jev--gemini-4-hydrogen-low
+  - jev--gemini-4-hydrogen-high
+  - jev--claude-opus-5-5
+  - jev--claude-sonnet-5-5
+  - jev--claude-haiku-5-5
+  - jev--claude-haiku-5-5-low
+  - jev--claude-haiku-5-5-high
+  - jev--deepseek-flash
+  - liquid-d1-2-ultra--gemini-4-neon
+  - perplexity-decider-v1-3-free--gemini-4-neon
+  - luna-decisions--gemini-4-neon

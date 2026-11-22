@@ -18,6 +18,7 @@ checkpoint path validation, and a small LRU checkpoint cache.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from copy import deepcopy
 from collections import OrderedDict
@@ -36,9 +37,56 @@ from ..factory import make_agent
 from ..registry import ComponentBuildContext, ComponentRegistry, create_default_registry
 from ..types import ActionCommand, Actor, EngineTransition, GameStatus
 
-_CHECKPOINT_CACHE_MAX = 4
+_CHECKPOINT_CACHE_MAX = 6
 _checkpoint_cache: OrderedDict[str, Agent[Any, Any]] = OrderedDict()
 _checkpoint_cache_lock = threading.Lock()
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+# Curated best reference checkpoints (matching configs/evaluation/reference_panel.yaml).
+# Resolved under ARESIM_CHECKPOINTS_DIR when set, else <repo_root>/results.
+DEFAULT_BEST_CHECKPOINTS: dict[str, str] = {
+    "masked_ppo": "ppo/seed_37/checkpoints/final/checkpoint.json",
+    "masked_dqn": "double_duelling_dqn/seed_3_sample_credit_030/checkpoints/step_985600/checkpoint.json",
+    "recurrent_dqn": "recurrent_dqn/seed_11/checkpoints/step_1966080/checkpoint.json",
+    "muzero": "muzero/seed_7_sample_credit_030_parallel_lossnorm/checkpoints/step_2048000/checkpoint.json",
+    "dreamerv3": "dreamerv3/seed_11/checkpoints/step_2097152/checkpoint.json",
+    "plan2explore": "plan2explore/adapt/seed_11_loopfix/checkpoints/step_1048576/checkpoint.json",
+}
+
+
+def is_deployed_mode() -> bool:
+    """Return whether the API host is running in public deployment mode."""
+    return os.environ.get("ARESIM_DEPLOYED", "").strip().lower() in {"1", "true", "yes"}
+
+
+def checkpoints_root() -> Path:
+    """Return the root directory holding curated checkpoints (ARESIM_CHECKPOINTS_DIR or repo results/)."""
+    override = os.environ.get("ARESIM_CHECKPOINTS_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return (_REPO_ROOT / "results").resolve()
+
+
+def default_checkpoint_path(algorithm_id: str) -> str | None:
+    """Resolve the curated best checkpoint path for an RL algorithm if present on disk."""
+    rel = DEFAULT_BEST_CHECKPOINTS.get(algorithm_id)
+    if not rel:
+        return None
+    candidate = (checkpoints_root() / rel).resolve()
+    if _is_safe_resolved_checkpoint(candidate):
+        return str(candidate)
+    return None
+
+
+def default_checkpoints_payload(*, deployed: bool) -> dict[str, object]:
+    """Expose best-checkpoint availability; hide server filesystem paths in deployed mode."""
+    result: dict[str, object] = {}
+    for algorithm_id in DEFAULT_BEST_CHECKPOINTS:
+        resolved = default_checkpoint_path(algorithm_id)
+        if resolved is None:
+            continue
+        result[algorithm_id] = True if deployed else resolved
+    return result
 
 
 class PolicyError(Exception):
@@ -79,18 +127,10 @@ def world_models_available() -> bool:
 
 
 def llm_dm_available() -> bool:
-    """Report configured frozen-bundle readiness without calls or credential disclosure."""
-    import os
+    """Report whether interactive LLM + Decision Model runtime dependencies are installed."""
     from importlib.util import find_spec
-    path = os.environ.get("ARESIM_LLM_DM_CONFIG")
-    if not path or find_spec("jsonschema") is None:
-        return False
-    try:
-        from ..algorithms.llm_dm.config import load_llm_dm_run
-        config = load_llm_dm_run(Path(path))
-        return config.execution_mode == "frozen_evaluation" and (config.transport == "fake" or bool(os.environ.get(config.actor.credential_env)))
-    except (ValueError, TypeError, OSError, KeyError):
-        return False
+
+    return find_spec("jsonschema") is not None
 
 
 def _is_safe_resolved_checkpoint(candidate: Path) -> bool:
@@ -195,30 +235,74 @@ def resolve_action_mode(algorithm_id: str, action_mode: str | None = None) -> st
     return mode
 
 
-def resolve_agent(algorithm_id: str, checkpoint_path: str | None = None, *, action_mode: str | None = None) -> tuple[Agent[Any, Any], str, str | None]:
-    """Build or load one agent for ``algorithm_id`` and return ``(agent, policy_id, resolved_path)``."""
+def resolve_agent(
+    algorithm_id: str,
+    checkpoint_path: str | None = None,
+    *,
+    action_mode: str | None = None,
+    llm_dm_config: dict[str, object] | None = None,
+    environment: EnvironmentConfig | None = None,
+    deployed: bool | None = None,
+) -> tuple[Agent[Any, Any], str, str | None, Any | None]:
+    """Build or load one agent for ``algorithm_id`` and return ``(agent, policy_id, resolved_path, llm_controller)``."""
+    is_deployed = is_deployed_mode() if deployed is None else deployed
     if algorithm_id in BASELINE_ALGORITHMS:
         agent = make_agent(algorithm_id)
-        return agent, agent.policy_id, None
+        return agent, agent.policy_id, None, None
     if algorithm_id == "llm_dm":
+        if llm_dm_config is not None or not os.environ.get("ARESIM_LLM_DM_CONFIG"):
+            try:
+                from ..algorithms.llm_dm.live import LiveLLMDMConfig, build_live_llm_dm_controller
+
+                raw = llm_dm_config or {}
+                live_cfg = LiveLLMDMConfig(
+                    actor_provider=str(raw.get("actorProvider") or "decision_models"),
+                    actor_model=str(raw.get("actorModel") or "jev-1.14.0"),
+                    actor_route=str(raw["actorRoute"]) if raw.get("actorRoute") else None,
+                    actor_api_key=str(raw["actorApiKey"]) if raw.get("actorApiKey") else None,
+                    actor_context_window=int(raw.get("actorContextWindow") or 131072),
+                    actor_max_output_tokens=int(raw.get("actorMaxOutputTokens") or 2048),
+                    learner_enabled=bool(raw.get("learnerEnabled", True)),
+                    learner_provider=str(raw.get("learnerProvider") or "gemini"),
+                    learner_model=str(raw.get("learnerModel") or "gemini-4-neon"),
+                    learner_route=str(raw["learnerRoute"]) if raw.get("learnerRoute") else None,
+                    learner_api_key=str(raw["learnerApiKey"]) if raw.get("learnerApiKey") else None,
+                    learner_context_window=int(raw.get("learnerContextWindow") or 262144),
+                    learner_max_output_tokens=int(raw.get("learnerMaxOutputTokens") or 16384),
+                    history_mode=str(raw.get("historyMode") or "focused"),
+                    advice_limit=int(raw.get("adviceLimit") or 3),
+                    attempt_timeout_seconds=float(raw.get("attemptTimeoutSeconds") or 60.0),
+                    max_episode_steps=int(raw.get("maxEpisodeSteps") or 256),
+                    carry_learnings=list(raw.get("carryLearnings") or []),
+                )
+                controller = build_live_llm_dm_controller(
+                    live_cfg,
+                    environment=environment or DEFAULT_ENVIRONMENT_CONFIG,
+                    deployed=is_deployed,
+                )
+            except (ValueError, OSError, ImportError, KeyError) as error:
+                raise PolicyError("LLM_DM_UNAVAILABLE", str(error)) from error
+            return controller.agent, controller.agent.policy_id, None, controller
         try:
             agent = make_agent("llm_dm")
         except (ValueError, OSError, ImportError) as error:
             raise PolicyError("LLM_DM_UNAVAILABLE", str(error)) from error
-        return agent, agent.policy_id, None
+        return agent, agent.policy_id, None, None
     if algorithm_id in CHECKPOINT_ALGORITHMS:
-        if checkpoint_path is None or not checkpoint_path.strip():
+        effective_path = (checkpoint_path or "").strip() or default_checkpoint_path(algorithm_id)
+        if not effective_path:
             raise PolicyError("CHECKPOINT_NOT_FOUND", "Checkpoint path is required for this learned policy.")
-        sidecar = resolve_checkpoint_path(checkpoint_path)
+        sidecar = resolve_checkpoint_path(effective_path)
         try:
             checkpoint_algorithm = json.loads(sidecar.read_text(encoding="utf-8")).get("algorithm_id")
         except (ValueError, json.JSONDecodeError) as error:
             raise PolicyError("CHECKPOINT_INCOMPATIBLE", str(error)) from error
         if checkpoint_algorithm != algorithm_id:
             raise PolicyError("CHECKPOINT_INCOMPATIBLE", "Checkpoint algorithm does not match the selected policy.")
-        mode = resolve_action_mode(algorithm_id, action_mode)
-        agent = load_checkpoint_agent(checkpoint_path, deterministic=mode == "deterministic")
-        return agent, agent.policy_id, str(sidecar)
+        default_mode = "deterministic" if is_deployed else None
+        mode = resolve_action_mode(algorithm_id, action_mode or default_mode)
+        agent = load_checkpoint_agent(str(sidecar), deterministic=mode == "deterministic")
+        return agent, agent.policy_id, str(sidecar), None
     raise PolicyError("UNKNOWN_ALGORITHM", f"Unknown algorithm id: {algorithm_id}")
 
 
@@ -365,12 +449,16 @@ def policy_meta_from_result(result: PolicyStepResult) -> dict[str, object]:
 __all__ = [
     "BASELINE_ALGORITHMS",
     "CHECKPOINT_ALGORITHMS",
+    "DEFAULT_BEST_CHECKPOINTS",
     "LLM_ALGORITHMS",
     "POLICY_CATALOG",
     "PolicyBridge",
     "PolicyError",
     "PolicyStepResult",
     "command_to_ui_payload",
+    "default_checkpoint_path",
+    "default_checkpoints_payload",
+    "is_deployed_mode",
     "load_checkpoint_agent",
     "policy_meta_from_result",
     "resolve_agent",

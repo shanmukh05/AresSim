@@ -66,6 +66,7 @@ def provider_known(name: str) -> bool:
             "openrouter",
             "deepseek",
             "decision_models",
+            "openrouter_decisions",
             "fake",
         }
         or name in _REGISTRY
@@ -79,7 +80,13 @@ def register_provider(name: str, factory: ProviderFactory) -> None:
     _REGISTRY[name] = factory
 
 
-def make_provider(config: RoleConfig, *, fake: bool = False) -> LLMProvider:
+def make_provider(
+    config: RoleConfig,
+    *,
+    fake: bool = False,
+    api_key: str | None = None,
+    allow_env_fallback: bool = True,
+) -> LLMProvider:
     """Import only the selected optional integration."""
     if fake:
         from .fake import FakeProvider
@@ -99,4 +106,13 @@ def make_provider(config: RoleConfig, *, fake: bool = False) -> LLMProvider:
         factory = _REGISTRY[config.provider]
     except KeyError as error:
         raise ValueError(f"unregistered provider: {config.provider}") from error
+    if api_key is not None or not allow_env_fallback:
+        from .http import NativeHTTPProvider
+
+        if factory is NativeHTTPProvider:
+            return NativeHTTPProvider(
+                config,
+                api_key=api_key,
+                allow_env_fallback=allow_env_fallback,
+            )
     return factory(config)

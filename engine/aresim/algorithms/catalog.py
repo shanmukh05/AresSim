@@ -18,8 +18,8 @@ class AlgorithmId(StrEnum):
 
 
 _POLICY_METADATA = {
-    AlgorithmId.RANDOM: ("Random", "baseline"),
-    AlgorithmId.RANDOM_VALID: ("Random (valid)", "baseline"),
+    AlgorithmId.RANDOM: ("Random (all)", "baseline"),
+    AlgorithmId.RANDOM_VALID: ("Random", "baseline"),
     AlgorithmId.WAIT: ("Wait", "baseline"),
     AlgorithmId.SCRIPTED: ("Scripted", "baseline"),
     AlgorithmId.LLM_DM: ("LLM + Decision Model", "llm"),
@@ -30,10 +30,18 @@ _POLICY_METADATA = {
     AlgorithmId.DREAMERV3: ("DreamerV3", "checkpoint"),
     AlgorithmId.PLAN2EXPLORE: ("Plan2Explore", "checkpoint"),
 }
+_UI_HIDDEN_ALGORITHMS = frozenset({AlgorithmId.RANDOM, AlgorithmId.WAIT})
 POLICY_CATALOG: list[dict[str, object]] = [
     {"id": identifier.value, "label": label, "kind": kind, "requiresPath": kind == "checkpoint"}
     for identifier, (label, kind) in _POLICY_METADATA.items()
+    if identifier not in _UI_HIDDEN_ALGORITHMS
 ]
-BASELINE_ALGORITHMS = frozenset(item["id"] for item in POLICY_CATALOG if item["kind"] == "baseline")
-CHECKPOINT_ALGORITHMS = frozenset(item["id"] for item in POLICY_CATALOG if item["kind"] == "checkpoint")
-LLM_ALGORITHMS = frozenset(item["id"] for item in POLICY_CATALOG if item["kind"] == "llm")
+BASELINE_ALGORITHMS = frozenset(
+    identifier.value for identifier, (_, kind) in _POLICY_METADATA.items() if kind == "baseline"
+)
+CHECKPOINT_ALGORITHMS = frozenset(
+    identifier.value for identifier, (_, kind) in _POLICY_METADATA.items() if kind == "checkpoint"
+)
+LLM_ALGORITHMS = frozenset(
+    identifier.value for identifier, (_, kind) in _POLICY_METADATA.items() if kind == "llm"
+)

@@ -15,11 +15,13 @@ snapshots. Errors use ``{ error: { code, message } }`` so the client switches on
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,7 +29,7 @@ from .algorithms.catalog import AlgorithmId
 from .config import EngineConfig
 from .defaults import DEFAULT_ENGINE_CONFIG
 from .gameplay import CHECKPOINT_REASON_PRIORITY, TRAJECTORY_EPISODE_SCHEMA, TRAJECTORY_REPLAY_SCHEMA, JsonObject, ReplayCursor
-from .integrations.policy import llm_dm_available, rllib_available, muzero_available, world_models_available
+from .integrations.policy import is_deployed_mode, llm_dm_available, rllib_available, muzero_available, world_models_available
 from .service import AresService, ServiceError
 from .types import ActionCommand, ActionType, Actor, Position
 
@@ -65,11 +67,34 @@ class SaveRequest(StrictModel):
     checkpoint_path: str | None = Field(default=None, alias="checkpointPath", max_length=500)
 
 
+class LlmDmAttachConfig(StrictModel):
+    """Live LLM + Decision Model attachment parameters; keys stay strictly in memory."""
+    actor_provider: str = Field(default="decision_models", alias="actorProvider", max_length=64)
+    actor_model: str = Field(default="jev-1.14.0", alias="actorModel", max_length=160)
+    actor_route: str | None = Field(default=None, alias="actorRoute", max_length=120)
+    actor_api_key: str | None = Field(default=None, alias="actorApiKey", max_length=512)
+    actor_context_window: int = Field(default=131072, alias="actorContextWindow", ge=8192, le=2000000)
+    actor_max_output_tokens: int = Field(default=2048, alias="actorMaxOutputTokens", ge=256, le=65536)
+    learner_enabled: bool = Field(default=True, alias="learnerEnabled")
+    learner_provider: str = Field(default="gemini", alias="learnerProvider", max_length=64)
+    learner_model: str = Field(default="gemini-4-neon", alias="learnerModel", max_length=160)
+    learner_route: str | None = Field(default=None, alias="learnerRoute", max_length=120)
+    learner_api_key: str | None = Field(default=None, alias="learnerApiKey", max_length=512)
+    learner_context_window: int = Field(default=262144, alias="learnerContextWindow", ge=16384, le=2000000)
+    learner_max_output_tokens: int = Field(default=16384, alias="learnerMaxOutputTokens", ge=1024, le=131072)
+    history_mode: Literal["focused", "facts_recent", "recent", "none"] = Field(default="focused", alias="historyMode")
+    advice_limit: int = Field(default=3, alias="adviceLimit", ge=1, le=10)
+    attempt_timeout_seconds: float = Field(default=60.0, alias="attemptTimeoutSeconds", ge=10.0, le=300.0)
+    max_episode_steps: int = Field(default=256, alias="maxEpisodeSteps", ge=16, le=2000)
+    carry_learnings: list[dict[str, object]] = Field(default_factory=list, alias="carryLearnings")
+
+
 class AttachPolicyRequest(StrictModel):
     """`POST /api/sessions/{id}/attach-policy`."""
     algorithm_id: AlgorithmId = Field(alias="algorithmId")
     checkpoint_path: str | None = Field(default=None, alias="checkpointPath", max_length=500)
     action_mode: Literal["stochastic", "deterministic"] | None = Field(default=None, alias="actionMode")
+    llm_dm: LlmDmAttachConfig | None = Field(default=None, alias="llmDm")
 
 
 class ValidateCheckpointRequest(StrictModel):
@@ -115,11 +140,38 @@ def _replay_response(replay: ReplayCursor, include_gameplay: bool = False) -> Js
     return response
 
 
+_DEFAULT_CORS_ORIGINS = [
+    "https://www.tensorwrites.com",
+    "https://tensorwrites.com",
+    "https://aressim.vercel.app",
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://127.0.0.1:4173",
+    "http://localhost:4173",
+]
+
+
+def _cors_origins() -> list[str]:
+    raw = os.environ.get("ARESIM_CORS_ORIGINS", "").strip()
+    if not raw:
+        return list(_DEFAULT_CORS_ORIGINS)
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
     """Build the API with one `AresService`. Tests pass a custom `config`."""
     service = AresService(config)
     app = FastAPI(title="AresSim Local API", version=config.replay.app_version)
     app.state.ares_service = service
+    origins = _cors_origins()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_origin_regex=None if "*" in origins else r"^https://aressim(-[a-z0-9-]+)?\.vercel\.app$",
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type"],
+    )
 
     @app.exception_handler(ServiceError)
     async def handle_service_error(_request: Request, error: ServiceError) -> JSONResponse:
@@ -141,6 +193,7 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
             "muzeroAvailable": muzero_available(),
             "worldModelsAvailable": world_models_available(),
             "llmDmAvailable": llm_dm_available(),
+            "deployed": is_deployed_mode(),
         }
 
     @app.get("/api/policies")
@@ -185,7 +238,14 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
 
     @app.post("/api/sessions/{session_id}/attach-policy")
     def attach_policy(session_id: str, request: AttachPolicyRequest) -> JsonObject:
-        return service.attach_policy(session_id, request.algorithm_id, request.checkpoint_path, action_mode=request.action_mode)
+        llm_dm_payload = request.llm_dm.model_dump(by_alias=True) if request.llm_dm is not None else None
+        return service.attach_policy(
+            session_id,
+            request.algorithm_id,
+            request.checkpoint_path,
+            action_mode=request.action_mode,
+            llm_dm_config=llm_dm_payload,
+        )
 
     @app.post("/api/sessions/{session_id}/detach-policy")
     def detach_policy(session_id: str) -> JsonObject:
@@ -194,6 +254,10 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
     @app.post("/api/sessions/{session_id}/agent-step")
     def agent_step(session_id: str) -> JsonObject:
         return service.agent_step(session_id)
+
+    @app.post("/api/sessions/{session_id}/llm-learn")
+    def llm_learn(session_id: str) -> JsonObject:
+        return service.llm_learn(session_id)
 
     @app.post("/api/replays")
     def load_replay(request: ReplayLoadRequest) -> JsonObject:

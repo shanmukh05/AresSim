@@ -8,6 +8,8 @@ episode_count: 20
 action_mode: deterministic
 workers: 4
 allow_environment_mismatch: true
+# Wait, Random-valid, and Scripted play the first checkpoint's frozen world.
+baselines: true
 checkpoints:
   - name: PPO seed_7
     path: results/ppo/seed_7/checkpoints/final/checkpoint.json
@@ -37,3 +39,5 @@ checkpoints:
     path: results/ppo/seed_33/checkpoints/final/checkpoint.json
   - name: PPO seed_35
     path: results/ppo/seed_35/checkpoints/final/checkpoint.json
+  - name: PPO seed_37
+    path: results/ppo/seed_37/checkpoints/final/checkpoint.json

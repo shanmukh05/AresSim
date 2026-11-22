@@ -38,9 +38,16 @@ class RunArtifacts:
     """Five primary files plus one portable replay per completed game."""
 
     def __init__(
-        self, directory: Path, run_id: str, *, debug_trace: bool = False
+        self,
+        directory: Path,
+        run_id: str,
+        *,
+        debug_trace: bool = False,
+        resumable: bool = False,
     ) -> None:
-        directory.mkdir(parents=True, exist_ok=False)
+        directory.mkdir(parents=True, exist_ok=resumable)
+        self.resumable = resumable
+        self.resumed = False
         self.directory, self.run_id, self.debug_trace = directory, run_id, debug_trace
         self.manifest: Json = {}
         self.games: dict[str, Json] = {}
@@ -51,6 +58,39 @@ class RunArtifacts:
         self._roles: dict[str, Json] = {}
         self._latencies: dict[str, list[float]] = {}
         self._content_ids: dict[str, str] = {}
+
+    def restore(self, manifest: Json, committed_ids: list[str]) -> None:
+        """Restore completed games and the audit trail without counting an abandoned prefix."""
+        self.resumed = True
+        games = {row["episode_id"]: row for row in manifest["games"]}
+        self.games = {key: games[key] for key in committed_ids}
+        phases = {row["phase"] for row in self.games.values()}
+        self.replays = [row for row in manifest["replays"] if row["phase"] in phases]
+        self.versions = {row["bundle_id"]: row for row in manifest["policy_versions"]}
+        self._roles = deepcopy(manifest["model_calls"])
+        self.progress = {key: [] for key in committed_ids}
+
+        def rows(name: str):
+            path = self.directory / name
+            if path.exists():
+                with path.open("rb+") as handle:
+                    while line := handle.readline():
+                        if not line.endswith(b"\n"):
+                            handle.seek(-len(line), os.SEEK_CUR)
+                            handle.truncate()
+                            break
+                        yield json.loads(line)
+
+        for row in rows("games.jsonl"):
+            if row["event"] == "transition" and row["episode_id"] in self.progress:
+                self.progress[row["episode_id"]].append(row)
+        for row in rows("learning.jsonl"):
+            if row["event"] == "evidence":
+                self._content_ids[row["content_id"]] = (
+                    f"learning.jsonl#record_id={row['record_id']}"
+                )
+            else:
+                self.learning.append(row)
 
     def write(self, relative: str, value: object) -> str:
         atomic_json(self.directory / relative, value)
@@ -114,6 +154,8 @@ class RunArtifacts:
         calls = deepcopy(self._roles)
         for role, values in self._latencies.items():
             if values:
+                if self.resumed:
+                    calls[role]["latency_scope"] = "current_process"
                 calls[role]["latency_seconds"] = {
                     "mean": float(np.mean(values)),
                     "p50": float(np.quantile(values, 0.5)),
@@ -143,6 +185,9 @@ class RunArtifacts:
     def call_record(self, event: Json) -> None:
         """Aggregate successful calls; retain actionable errors and optional exact trace."""
         self.trace("model_call", event)
+        if event["event"] == "attempt_started" and self.resumable:
+            self.manifest["budget"] = deepcopy(event["budget"])
+            self.flush(summary=False)
         if event["event"] != "attempt_completed":
             return
         role, result = event["role"], event["result"]

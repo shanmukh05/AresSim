@@ -15,7 +15,7 @@ from uuid import uuid4
 from ...algorithms.base import EpisodeStop
 from .artifacts import RunArtifacts
 from .budget import BudgetLedger
-from .config import RoleConfig
+from .config import CHOICE_PROVIDERS, RoleConfig
 from .contracts import Json, canonical, json_value
 from .providers import LLMProvider, ProviderRequest, ProviderResult
 
@@ -37,6 +37,14 @@ class ModelCalls:
         self.role, self.config, self.provider = role, config, provider
         self.budget, self.artifacts = budget, artifacts
         self.cancellation = cancellation or Event()
+        self._next_attempt_at = 0.0
+        self._attempt_spacing = (
+            3.1
+            if config.provider.startswith("openrouter")
+            and config.model.endswith(":free")
+            and not budget.fake
+            else 0.0
+        )
 
     def generate(
         self,
@@ -52,6 +60,11 @@ class ModelCalls:
             deadline_at if deadline_at is not None else float("inf"),
         )
         user = canonical(packet)
+        schema_bytes = (
+            0
+            if self.config.provider in CHOICE_PROVIDERS
+            else len(canonical(schema).encode())
+        )
         request_kind = (
             "goal"
             if packet.get("schema_version") == "aresim.llm_dm.goal_packet.v1"
@@ -72,11 +85,19 @@ class ModelCalls:
         for attempt in range(self.config.transient_retries + 1):
             if self.cancellation.is_set():
                 raise EpisodeStop("cancelled")
+            now = time.monotonic()
+            earliest = max(now, self._next_attempt_at)
+            if earliest >= deadline:
+                break
+            if earliest > now and self.cancellation.wait(earliest - now):
+                raise EpisodeStop("cancelled")
             if time.monotonic() >= deadline:
                 break
             if attempt:
                 logger.info("%s retry %d", self.role, attempt + 1)
-            reservation = self.budget.reserve(self.role, self.config, system, user)
+            reservation = self.budget.reserve(
+                self.role, self.config, system, user, schema_bytes=schema_bytes
+            )
             request = ProviderRequest(self.role, uuid4().hex, system, user, schema)
             self.artifacts.call_record(
                 {
@@ -100,9 +121,13 @@ class ModelCalls:
                         if key in packet
                     },
                     "reservation": json_value(reservation),
+                    "budget": self.budget.snapshot(),
                 },
             )
             start = time.monotonic()
+            if start >= deadline:
+                break
+            self._next_attempt_at = start + self._attempt_spacing
             result = self.provider.generate(
                 request,
                 min(self.config.attempt_timeout_seconds, deadline - start),

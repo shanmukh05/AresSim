@@ -4,7 +4,8 @@
 Materialize an independent config per model, preflight the whole panel, and retain
 normal run artifacts. Read native replay statistics for the comparison CSV; never
 send evaluator-only replay state to either model. No paid calls occur in dry-run/fake mode.
-The same report directory receives the metric bars and the shared action-path figure.
+A panel with ``runs`` skips new games and rebuilds the report from those saved run
+directories. The same report directory receives the metric bars and the shared action-path figure.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from pathlib import Path
 import re
 from statistics import fmean, pstdev
 import sys
+from types import SimpleNamespace
 
 import yaml
 
@@ -532,6 +534,13 @@ def _no_change_text(proposal: dict) -> str:
     return "No new lesson. The review kept the advice already written."
 
 
+def _recorded_float(value: object) -> float | None:
+    """Blank cells are unplayed games, not a return of zero."""
+    if value is None or str(value).strip() == "":
+        return None
+    return float(value)
+
+
 def _learning_rows(directory: Path) -> list[dict]:
     summary_path = directory / "summary.json"
     episodes_path = directory / "episodes.csv"
@@ -556,11 +565,16 @@ def _learning_rows(directory: Path) -> list[dict]:
                     reviews[int(event["batch"])] = ("no_change", _no_change_text(event.get("proposal") or {}))
         games = []
         for row in grouped.get(model["name"], []):
+            shaped = _recorded_float(row["shaped_return"])
+            ice = _recorded_float(row["ice_delivered"])
+            samples = _recorded_float(row["samples_delivered"])
+            if shaped is None or ice is None or samples is None:
+                continue
             games.append({
                 "game": int(str(row["episode_id"]).rsplit("-", 1)[-1]),
-                "ice": float(row["ice_delivered"]),
-                "samples": float(row["samples_delivered"]),
-                "shaped": float(row["shaped_return"]),
+                "ice": ice,
+                "samples": samples,
+                "shaped": shaped,
                 "success": str(row["success"]) in {"True", "true", "1"},
                 "ending": row["ending_reason"],
                 "statements": int(float(row["learning_statement_count"] or 0)),
@@ -720,6 +734,97 @@ def _short_lesson(text: str, conditions: list) -> str:
     return _clip(text, 140)
 
 
+def _declared_role(item: dict, role: str) -> dict:
+    declared = mapping(item.get(role), role)
+    extra = set(declared) - {"provider", "model", "generation"}
+    if extra or declared.get("provider") not in CREDENTIALS or not isinstance(declared.get("model"), str) or not declared["model"].strip():
+        raise ValueError(f"{role} requires a provider, model, and optional generation")
+    return declared
+
+
+def _matching_role(declared: dict, actual: dict, label: str) -> None:
+    if declared["provider"] != actual.get("provider") or declared["model"] != actual.get("model"):
+        raise ValueError(f"{label} does not match the saved run")
+    if "generation" in declared and declared["generation"] != (actual.get("generation") or {}):
+        raise ValueError(f"{label} generation does not match the saved run")
+
+
+def evaluate_saved_runs(source: Path, panel: dict, output: Path | None) -> Path:
+    """Rebuild the comparison report from completed run directories. No model calls."""
+    allowed = {"schema_version", "experiment_name", "output_directory", "runs"}
+    if set(panel) - allowed or panel.get("schema_version") != SCHEMA:
+        raise ValueError("unsupported saved-run panel schema or unknown fields")
+    runs = panel.get("runs")
+    if not isinstance(runs, list) or not runs:
+        raise ValueError("runs must be a non-empty list")
+    report = (output or ROOT / panel["output_directory"]).expanduser().resolve()
+    if report == ROOT or ROOT not in report.parents:
+        raise ValueError("saved-run output must stay inside the repository")
+    report.mkdir(parents=True, exist_ok=True)
+    (report / "runs").mkdir(exist_ok=True)
+    rows = []
+    models = []
+    seen = set()
+    for raw in runs:
+        item = mapping(raw, "run")
+        extra = set(item) - {"name", "path", "actor", "learner"}
+        name = item.get("name")
+        if extra or not isinstance(name, str) or not name.strip() or "/" in name or name in {".", ".."}:
+            raise ValueError("each saved run needs a name, path, actor, and learner")
+        if name.casefold() in seen:
+            raise ValueError(f"duplicate run name: {name}")
+        seen.add(name.casefold())
+        run_dir = Path(item["path"])
+        if not run_dir.is_absolute():
+            run_dir = (ROOT / run_dir).resolve()
+        manifest_path = run_dir / "manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(manifest_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        actor = manifest.get("config", {}).get("actor", {})
+        learner = manifest.get("config", {}).get("learner", {}).get("role", {})
+        _matching_role(_declared_role(item, "actor"), actor, f"{name} actor")
+        _matching_role(_declared_role(item, "learner"), learner, f"{name} learner")
+        link = report / "runs" / name
+        if link.is_symlink():
+            link.unlink()
+        elif link.exists():
+            raise FileExistsError(f"saved-run link is already a real directory: {link}")
+        link.symlink_to(run_dir, target_is_directory=True)
+        episodes = tuple(SimpleNamespace(**episode) for episode in manifest["config"]["episodes"])
+        job = SimpleNamespace(
+            name=name,
+            manifest=link / "manifest.json",
+            config_path=link / "manifest.json",
+            config=SimpleNamespace(
+                actor=SimpleNamespace(provider=actor["provider"], model=actor["model"]),
+                episodes=episodes,
+            ),
+        )
+        recorded = episode_rows(job, manifest, report)
+        rows.extend(recorded)
+        result = model_result(job, manifest, recorded, report)
+        result["learner"] = {"provider": learner.get("provider"), "model": learner.get("model")}
+        models.append(result)
+        logger.info("%s: %s games from %s", name, len(recorded), run_dir)
+    summary = {
+        "schema_version": SCHEMA,
+        "created_at": datetime.now(UTC).isoformat(),
+        "source_config": str(source),
+        "source_sha256": sha256(source.read_bytes()).hexdigest(),
+        "experiment_name": panel["experiment_name"],
+        "transport": "saved",
+        "status": "completed" if all(model["status"] == "completed" for model in models) else "incomplete",
+        "dry_run": False,
+        "comparison_kind": "saved_run_evaluation",
+        "games_per_model": 5,
+        "note": "Rebuilt from saved run directories. No new model calls.",
+        "models": models,
+    }
+    save_reports(report, summary, rows)
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -752,6 +857,12 @@ def main() -> int:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     source = args.config.expanduser().resolve()
+    panel = mapping(yaml.safe_load(source.read_text()), "LLM model panel")
+    if "runs" in panel:
+        if {"models", "run"} & set(panel):
+            raise ValueError("a saved-run panel cannot also declare models or run")
+        print(evaluate_saved_runs(source, panel, args.output))
+        return 0
     directory, panel, jobs, _ = prepare(source, args)
     summary = {
         "schema_version": SCHEMA,

@@ -35,19 +35,22 @@ export function AnalyticsModal({ open, onOpenChange, initialTab = "rewards" }: {
                 Reward, resource, behavior, progress, and environment visualizations for the current {data.mode} run.
               </Dialog.Description>
             </div>
-            <div className="flex items-center gap-3 text-right text-xs text-stone-400">
+            <div className="flex shrink-0 items-center gap-4 text-right text-xs text-stone-400">
               <div>
                 <div className="text-[10px] uppercase tracking-wide">Source</div>
                 <div className={`font-semibold ${data.mode === "load" ? "text-cyan-200" : "text-emerald-200"}`}>{data.mode === "load" ? "Loaded trajectory" : "Live session"}</div>
               </div>
               <div>
                 <div className="text-[10px] uppercase tracking-wide">Steps</div>
-                <div className="font-semibold text-stone-100">{data.totalSteps}</div>
+                <div className="font-semibold tabular-nums text-stone-100">{data.totalSteps}</div>
               </div>
               <div>
                 <div className="text-[10px] uppercase tracking-wide">Seed</div>
-                <div className="font-semibold text-stone-100">{snapshot.seed}</div>
+                <div className="font-semibold tabular-nums text-stone-100">{snapshot.seed}</div>
               </div>
+              <Dialog.Close className="grid h-9 w-9 shrink-0 place-items-center rounded border border-stone-700 bg-stone-950 text-stone-300 transition hover:border-stone-500 hover:text-white" aria-label="Close analytics">
+                <span aria-hidden="true" className="text-lg leading-none">×</span>
+              </Dialog.Close>
             </div>
           </div>
 
@@ -88,10 +91,6 @@ export function AnalyticsModal({ open, onOpenChange, initialTab = "rewards" }: {
               </Tabs.Content>
             </div>
           </Tabs.Root>
-
-          <Dialog.Close className="grid absolute right-3 top-3 h-9 w-9 place-items-center rounded border border-stone-700 bg-stone-950 text-stone-300 hover:border-stone-500" aria-label="Close analytics">
-            <span aria-hidden="true" className="text-lg leading-none">×</span>
-          </Dialog.Close>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

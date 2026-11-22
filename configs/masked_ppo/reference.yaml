@@ -1,9 +1,9 @@
 schema_version: aresim.experiment.v1
 experiment_id: ppo
-trial_id: seed_35
+trial_id: seed_37
 algorithm: masked_ppo
 model: local_cnn_actor_critic
-learner_seed: 35
+learner_seed: 37
 environment:
   scenario_id: phase1_default_v1
   observation: local_memory
@@ -11,6 +11,9 @@ environment:
   reward: shaped_train
   task: resource_mission
   max_episode_steps: 800
+  reward_overrides:
+    time_cost: -0.025
+    samples_collected: 0.3
 algorithm_config:
   total_environment_steps: 2097152
   rollout_batch_size: 8192
@@ -35,7 +38,7 @@ tracking:
   mode: online
   project: aresim
   group: reference
-  tags: [reference, explore, gpu, goal_potential, objective_progress_table]
+  tags: [reference, explore, gpu, goal_potential, objective_progress_table, time_cost_025, sample_credit_030]
 artifacts:
   root: results
   reject_existing: true

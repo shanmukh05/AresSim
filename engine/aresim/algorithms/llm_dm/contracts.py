@@ -68,15 +68,27 @@ def _unique_object(pairs: list[tuple[str, object]]) -> Json:
     return result
 
 
-def strict_json(text: str) -> Json:
+def strict_json(text: str | bytes) -> Json:
     """Read exactly one JSON object, rejecting duplicate keys and nonfinite numbers."""
 
     def invalid_constant(value: str) -> None:
         raise ValueError(f"invalid JSON constant: {value}")
 
-    result = json.loads(
-        text, object_pairs_hook=_unique_object, parse_constant=invalid_constant
-    )
+    def finite_float(value: str) -> float:
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("nonfinite JSON number")
+        return number
+
+    try:
+        result = json.loads(
+            text,
+            object_pairs_hook=_unique_object,
+            parse_constant=invalid_constant,
+            parse_float=finite_float,
+        )
+    except RecursionError as error:
+        raise ValueError("JSON nesting exceeds parser limit") from error
     if not isinstance(result, dict):
         raise ValueError("expected one JSON object")
     return result
@@ -101,12 +113,13 @@ def validate(value: object, schema: Json) -> Json:
         key=lambda error: str(error.path),
     )
     if errors:
-        raise ValueError(
-            f"invalid model output at {list(errors[0].path)}: {errors[0].message}"
-        )
+        error = errors[0]
+        detail = error.message[:384]
+        detail = "".join(char if char.isprintable() else " " for char in detail)
+        raise ValueError(f"invalid model output at {list(error.path)}: {detail}")
     if not isinstance(value, dict):
         raise ValueError("expected JSON object")
-    canonical(value)
+    canonical(value).encode("utf-8")
     return value
 
 

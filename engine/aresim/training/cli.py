@@ -48,6 +48,7 @@ def _parser() -> argparse.ArgumentParser:
     rollout.add_argument("config", type=Path, nargs="?")
     rollout.add_argument("--config", dest="config_option", type=Path)
     rollout.add_argument("--env-file", type=Path, help="load configured LLM credential names from a dotenv file")
+    rollout.add_argument("--resume", action="store_true", help="resume a named sequential run from its last saved game or review")
     return parser
 
 
@@ -105,9 +106,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         from ..algorithms.llm_dm.config import load_llm_dm_run, load_role_credentials
         from ..algorithms.llm_dm.rollout import run_llm_dm
         config = load_llm_dm_run(source)
-        if arguments.env_file:
+        if arguments.env_file and config.transport == "live":
             load_role_credentials(config, arguments.env_file)
-        manifest = run_llm_dm(config)
+        manifest = run_llm_dm(config, resume=arguments.resume)
         print(manifest)
         return 0 if json.loads(manifest.read_text())["status"] == "completed" else 2
     path = arguments.path

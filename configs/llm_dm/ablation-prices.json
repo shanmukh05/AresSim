@@ -1,0 +1,29 @@
+{
+  "as_of": "2026-11-21",
+  "source": [
+    "https://developers.openai.com/api/docs/pricing",
+    "https://aistudio.google.com/docs/pricing",
+    "https://platform.claude.com/docs/en/models/overview",
+    "https://docs.typesafe.ai/models",
+    "https://openrouter.ai/api/v1/models?output_modalities=decisions",
+    "https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash-1017/endpoints",
+    "https://openrouter.ai/liquid/d1.2-ultra",
+    "https://openrouter.ai/perplexity/pplx-decider-v1.3:free"
+  ],
+  "models": {
+    "decision_models/jev-1.14.0": {"input_per_million": 0.042, "output_per_million": 0},
+    "openrouter_decisions/liquid/d1.2-ultra": {"input_per_million": 0.042, "output_per_million": 0},
+    "openrouter_decisions/perplexity/pplx-decider-v1.3:free": {"input_per_million": 0, "output_per_million": 0},
+    "openrouter_decisions/openai/gpt-6-luna-decisions": {"input_per_million": 0.1, "output_per_million": 0},
+    "openai/gpt-6.2-sol": {"input_per_million": 2, "output_per_million": 10},
+    "openai/gpt-6.1-terra": {"input_per_million": 1, "output_per_million": 5},
+    "openai/gpt-6-luna": {"input_per_million": 0.1, "output_per_million": 0.5},
+    "gemini/gemini-4-carbon": {"input_per_million": 4, "output_per_million": 20},
+    "gemini/gemini-4-neon": {"input_per_million": 3, "output_per_million": 15},
+    "gemini/gemini-4-hydrogen": {"input_per_million": 1.5, "output_per_million": 7.5},
+    "anthropic/claude-opus-5-5": {"input_per_million": 4, "output_per_million": 20},
+    "anthropic/claude-sonnet-5-5": {"input_per_million": 2, "output_per_million": 10},
+    "anthropic/claude-haiku-5-5": {"input_per_million": 0.1, "output_per_million": 0.5},
+    "openrouter/deepseek/deepseek-v4.1-flash-1017@wafer/us": {"input_per_million": 0.036, "output_per_million": 0.5}
+  }
+}

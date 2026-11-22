@@ -29,6 +29,8 @@ from ..common.config_decode import (
 )
 from ..common.learnings import resolve_learnings_file
 
+CHOICE_PROVIDERS = {"decision_models", "openrouter_decisions"}
+
 ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -83,7 +85,7 @@ class RoleConfig:
         ):
             raise ValueError("model must be explicit and resolved")
         expected_mode = (
-            "choice" if self.provider == "decision_models" else "native_schema"
+            "choice" if self.provider in CHOICE_PROVIDERS else "native_schema"
         )
         if self.output_mode != expected_mode:
             raise ValueError(f"{self.provider} requires {expected_mode} output")
@@ -108,6 +110,23 @@ class RoleConfig:
             and not re.fullmatch(r"[A-Z][A-Z0-9_]+", self.credential_env)
         ):
             raise ValueError("credential_env must name an environment variable")
+        model_name = self.model.lower().rsplit("/", 1)[-1].strip()
+        if self.provider != "fake" and (
+            model_name == "jev" or model_name.startswith("jev-")
+        ):
+            if (
+                self.provider != "decision_models"
+                or self.credential_env != "JEV_API_KEY"
+                or "/" in self.model
+            ):
+                raise ValueError(
+                    "Jev requires the decision_models provider, a direct Jev model ID, and JEV_API_KEY"
+                )
+        if self.credential_env == "JEV_API_KEY" and self.provider not in {
+            "decision_models",
+            "fake",
+        }:
+            raise ValueError("JEV_API_KEY is only for the direct TypeSafe API")
         if not isinstance(self.generation, dict):
             raise ValueError("generation must be an object")
         supported = {
@@ -118,6 +137,7 @@ class RoleConfig:
             "openrouter": {"temperature", "top_p", "seed", "reasoning"},
             "fake": set(),
             "decision_models": set(),
+            "openrouter_decisions": set(),
         }.get(self.provider)
         if supported is not None and set(self.generation) - supported:
             raise ValueError(
@@ -251,23 +271,6 @@ def _episodes(raw: object, label: str) -> tuple[EpisodeSpec, ...]:
     return tuple(episodes)
 
 
-def _resolve(value: object) -> object:
-    if isinstance(value, str):
-
-        def substitute(match: re.Match) -> str:
-            found = os.environ.get(match.group(1), "")
-            if not found:
-                raise ValueError(f"unresolved configuration variable: {match.group(1)}")
-            return found
-
-        return re.sub(r"\$\{([A-Z][A-Z0-9_]*)\}", substitute, value)
-    if isinstance(value, dict):
-        return {key: _resolve(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_resolve(item) for item in value]
-    return value
-
-
 def role_config(raw: object, base: Path) -> RoleConfig:
     """Decode a role without loading credentials or selecting a mutable model default."""
     values = mapping(raw, "role")
@@ -325,7 +328,12 @@ def load_llm_dm_run(path: Path) -> RunConfig:
     import yaml
 
     source = resolve_checkout_file(path, kind="LLM run config")
-    v = mapping(_resolve(yaml.safe_load(source.read_text())), "LLM run")
+    v = mapping(yaml.safe_load(source.read_text()), "LLM run")
+    if v.get("policy_bundle") == "${ARESIM_LLM_DM_BUNDLE}":
+        bundle_path = os.environ.get("ARESIM_LLM_DM_BUNDLE", "").strip()
+        if not bundle_path:
+            raise ValueError("set ARESIM_LLM_DM_BUNDLE to a trusted policy bundle path")
+        v["policy_bundle"] = bundle_path
     allowed = {
         "schema_version",
         "agent",
@@ -383,7 +391,7 @@ def load_llm_dm_run(path: Path) -> RunConfig:
             if comparison is not None
             else (),
         )
-        if learner.role.provider == "decision_models":
+        if learner.role.provider in CHOICE_PROVIDERS:
             raise ValueError(
                 "Decision Models can act only as Actor; the Learner must be an LLM"
             )

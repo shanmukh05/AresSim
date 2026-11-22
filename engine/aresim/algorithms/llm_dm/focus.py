@@ -335,7 +335,7 @@ class FocusedContext:
             "current_cell": deepcopy(current["value"]),
         }
 
-    def working_memory(self, state: Json) -> Json:
+    def working_memory(self, state: Json, *, planning: bool = False) -> Json:
         origin, step = point(state), self.memory.last_observation
         goal = (
             None
@@ -360,7 +360,7 @@ class FocusedContext:
                 for pos, fact in self.memory.facts.items()
                 if fact["value"]["terrain"] == "build_pad"
             ]
-            if return_needed
+            if return_needed or planning
             else []
         )
         routes = [{"position": list(pos), **self.route(origin, pos)} for pos in pads]

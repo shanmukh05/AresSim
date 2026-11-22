@@ -1,0 +1,140 @@
+# Keep the five worlds and settings fixed. Change only the selected Actor or Learner.
+schema_version: aresim.llm_dm.ablation.v1
+run:
+  schema_version: aresim.llm_dm.run.v1
+  agent: llm_dm
+  execution_mode: sequential_diagnostic
+  transport: live
+  split: diagnostic
+  output_directory: results/llm_dm/ablation
+  max_episode_steps: 128
+  history:
+    mode: focused
+  budgets:
+    max_provider_attempts: 1600
+    max_total_tokens: 15000000
+    max_wall_seconds: 10800
+    max_usd: 5.0
+    price_sheet: ablation-prices.json
+  episodes:
+    - {id: game-01, environment_seed: 91585, agent_seed: 0}
+    - {id: game-02, environment_seed: 80522, agent_seed: 0}
+    - {id: game-03, environment_seed: 17507, agent_seed: 0}
+    - {id: game-04, environment_seed: 91676, agent_seed: 0}
+    - {id: game-05, environment_seed: 34130, agent_seed: 0}
+
+actor_defaults:
+  output_mode: choice
+  max_input_tokens: 32768
+  max_output_tokens: 1024
+  attempt_timeout_seconds: 30
+  decision_deadline_seconds: 90
+
+learner_defaults:
+  enabled: true
+  batch_episodes: 1
+  max_rounds: 4
+  max_input_tokens: 98304
+  max_output_tokens: 16384
+  attempt_timeout_seconds: 150
+  decision_deadline_seconds: 330
+  context_window: 262144
+  guidance: This is a sequential diagnostic. Carry forward supported advice as tentative.
+
+actors:
+  jev: {provider: decision_models, model: jev-1.14.0, credential_env: JEV_API_KEY}
+  liquid-d1-2-ultra: {provider: openrouter_decisions, model: liquid/d1.2-ultra, credential_env: OPENROUTER_API_KEY, context_window: 65536}
+  perplexity-decider-v1-3-free: {provider: openrouter_decisions, model: "perplexity/pplx-decider-v1.3:free", credential_env: OPENROUTER_API_KEY}
+  luna-decisions: {provider: openrouter_decisions, model: openai/gpt-6-luna-decisions, credential_env: OPENROUTER_API_KEY}
+
+learners:
+  gpt-6-2-sol:
+    provider: openai
+    model: gpt-6.2-sol
+    credential_env: OPENAI_API_KEY
+    generation: &openai_medium {reasoning: {effort: medium}}
+  gpt-6-1-terra:
+    provider: openai
+    model: gpt-6.1-terra
+    credential_env: OPENAI_API_KEY
+    generation: *openai_medium
+  gpt-6-luna: &luna
+    provider: openai
+    model: gpt-6-luna
+    credential_env: OPENAI_API_KEY
+    generation: *openai_medium
+  gemini-4-carbon: &carbon
+    provider: gemini
+    model: gemini-4-carbon
+    credential_env: GEMINI_API_KEY
+    attempt_timeout_seconds: 300
+    decision_deadline_seconds: 630
+    generation: {thinkingConfig: {thinkingLevel: LOW}}
+  gemini-4-carbon-medium:
+    <<: *carbon
+    max_output_tokens: 32768
+    attempt_timeout_seconds: 420
+    decision_deadline_seconds: 870
+    generation: {thinkingConfig: {thinkingLevel: MEDIUM}}
+  gemini-4-neon:
+    provider: gemini
+    model: gemini-4-neon
+    credential_env: GEMINI_API_KEY
+    generation: &gemini_medium {thinkingConfig: {thinkingLevel: MEDIUM}}
+  gemini-4-hydrogen: &hydrogen
+    provider: gemini
+    model: gemini-4-hydrogen
+    credential_env: GEMINI_API_KEY
+    generation: *gemini_medium
+  claude-opus-5-5:
+    provider: anthropic
+    model: claude-opus-5-5
+    credential_env: ANTHROPIC_API_KEY
+    generation: &claude_medium {output_config: {effort: medium}}
+  claude-sonnet-5-5:
+    provider: anthropic
+    model: claude-sonnet-5-5
+    credential_env: ANTHROPIC_API_KEY
+    generation: *claude_medium
+  claude-haiku-5-5: &haiku
+    provider: anthropic
+    model: claude-haiku-5-5
+    credential_env: ANTHROPIC_API_KEY
+    generation: *claude_medium
+  deepseek-flash:
+    provider: openrouter
+    model: deepseek/deepseek-v4.1-flash-1017
+    route: wafer/us
+    credential_env: OPENROUTER_API_KEY
+    max_output_tokens: 65536
+    attempt_timeout_seconds: 360
+    decision_deadline_seconds: 750
+    generation: {reasoning: {effort: medium}}
+
+  # Reuse the completed medium runs above for the thinking-level comparison.
+  gpt-6-luna-low:
+    <<: *luna
+    generation: {reasoning: {effort: low}}
+  gpt-6-luna-high:
+    <<: *luna
+    generation: {reasoning: {effort: high}}
+  gemini-4-hydrogen-low:
+    <<: *hydrogen
+    generation: {thinkingConfig: {thinkingLevel: LOW}}
+  gemini-4-hydrogen-high:
+    <<: *hydrogen
+    max_output_tokens: 65536
+    attempt_timeout_seconds: 360
+    decision_deadline_seconds: 750
+    generation: {thinkingConfig: {thinkingLevel: HIGH}}
+  claude-haiku-5-5-low:
+    <<: *haiku
+    generation: {output_config: {effort: low}}
+  claude-haiku-5-5-high:
+    <<: *haiku
+    generation: {output_config: {effort: high}}
+
+# Jev × each Learner, then each remaining Actor × Gemini 4 Neon.
+design:
+  fixed_actor: jev
+  fixed_learner: gemini-4-neon

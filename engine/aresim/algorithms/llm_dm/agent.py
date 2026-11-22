@@ -19,7 +19,7 @@ from ...components.actions import ACTION_IDS, ACTION_SCHEMA
 from ...config import EnvironmentConfig
 from .artifacts import RunArtifacts
 from .calls import ModelCalls
-from .config import HistoryConfig
+from .config import CHOICE_PROVIDERS, HistoryConfig
 from .contracts import (
     Json,
     action_schema,
@@ -107,6 +107,7 @@ class LLMDMAgent:
         self._budget_start = deepcopy(self.calls.budget.snapshot())
         self._next_mask = None
         self.last_info = None
+        self._last_goal_event = None
         self.calls.cancellation.clear()
         self._inflight_decision = None
 
@@ -168,7 +169,11 @@ class LLMDMAgent:
             # learning intact, and fit this view to the remaining whole-request limit.
             overflow = (
                 estimate_input_tokens(
-                    self.bundle["actor_system_prompt"], canonical(packet)
+                    self.bundle["actor_system_prompt"],
+                    canonical(packet),
+                    schema_bytes=0
+                    if self.calls.config.provider in CHOICE_PROVIDERS
+                    else len(canonical(action_schema()).encode()),
                 )
                 - self.calls.config.max_input_tokens
             )
@@ -328,6 +333,13 @@ class LLMDMAgent:
             "latency_seconds": latency,
             "usage": result.usage,
             "actor_details": result.details,
+            "goal": deepcopy(self.focus.goal) if self.focus and self.focus.goal else None,
+            "goal_event": deepcopy(self._last_goal_event),
+            "applied_advice": deepcopy(
+                packet.get("advice", []) if self.focus else packet.get("lessons", [])
+            ),
+            "deferred_advice_count": packet.get("deferred_advice_count", 0),
+            "learnings_count": len(self.learnings),
             "summary": f"llm_dm actor={self.calls.config.provider} action={action}; fallback={bool(fallback)}; decision={decision_id}",
         }
         place = state["rover"]["position_cells"]
@@ -359,6 +371,7 @@ class LLMDMAgent:
     ) -> Json:
         """Select a persistent goal only when needed, under the same tick deadline."""
         focus = self.focus
+        self._last_goal_event = None
         candidates = focus.candidates(state, self.environment_config.engine.payload)
         reason = focus.review_reason(state, candidates)
         if reason:
@@ -370,43 +383,66 @@ class LLMDMAgent:
                 "decision_id": goal_decision,
                 "step_index": self.step_index,
                 "state": focus.state_view(state),
-                "memory": focus.working_memory(state),
+                "memory": focus.working_memory(state, planning=True),
                 "review_reason": reason,
                 "goals": candidates,
                 "learnings": planning_advice,
             }
             self._inflight_decision = goal_decision
             schema = goal_schema([goal["id"] for goal in candidates])
-            result = self.calls.generate(
-                self.bundle["goal_system_prompt"],
-                goal_packet,
-                schema,
-                deadline_at=deadline,
-            )
-            try:
-                if result.status != "ok":
-                    raise ValueError(result.error_code or result.status)
-                choice = validate(strict_json(result.text), schema)
-                if any(
-                    choice[key] != goal_packet[key]
-                    for key in ("episode_id", "decision_id", "step_index")
-                ):
-                    raise ValueError("wrong_goal_identity")
+            for attempt in range(2):
+                result = self.calls.generate(
+                    self.bundle["goal_system_prompt"],
+                    goal_packet,
+                    schema,
+                    deadline_at=deadline,
+                )
+                try:
+                    if result.status != "ok":
+                        raise ValueError(result.error_code or result.status)
+                    choice = validate(strict_json(result.text), schema)
+                    if any(
+                        choice[key] != goal_packet[key]
+                        for key in ("episode_id", "decision_id", "step_index")
+                    ):
+                        raise ValueError("wrong_goal_identity")
+                except ValueError as error:
+                    can_correct = (
+                        attempt == 0
+                        and time.monotonic() < deadline
+                        and (
+                            result.status == "ok"
+                            or result.error_code == "missing_or_invalid_choice"
+                        )
+                    )
+                    self.artifacts.record(
+                        "games.jsonl",
+                        {
+                            "event": "goal_correction"
+                            if can_correct
+                            else "goal_selection_failed",
+                            "episode_id": self.episode_id,
+                            "step_index": self.step_index,
+                            "reason": str(error)[:512],
+                        },
+                    )
+                    if not can_correct:
+                        raise EpisodeStop("goal_selection_failed") from error
+                    goal_packet["validation_feedback"] = (
+                        "The previous answer failed validation. Return exactly one goal "
+                        "from the supplied options. Copy its ID without changing it."
+                    )
+                    continue
                 selected = next(
                     goal for goal in candidates if goal["id"] == choice["goal_id"]
                 )
-            except (ValueError, StopIteration) as error:
-                self.artifacts.record(
-                    "games.jsonl",
-                    {
-                        "event": "goal_selection_failed",
-                        "episode_id": self.episode_id,
-                        "step_index": self.step_index,
-                        "reason": str(error),
-                    },
-                )
-                raise EpisodeStop("goal_selection_failed") from error
+                break
             focus.select(selected, reason, state, candidates)
+            self._last_goal_event = {
+                "goal": deepcopy(selected),
+                "reason": reason,
+                "step_index": self.step_index,
+            }
             self.artifacts.record(
                 "games.jsonl",
                 {

@@ -7,28 +7,30 @@
   background: #090a0d;
 }
 
-* {
-  box-sizing: border-box;
-}
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
 
-body {
-  margin: 0;
-  background:
-    radial-gradient(circle at 20% 10%, rgba(194, 88, 45, 0.14), transparent 34rem),
-    radial-gradient(circle at 80% 0%, rgba(45, 212, 191, 0.08), transparent 30rem),
-    #090a0d;
-}
+  body {
+    margin: 0;
+    background:
+      radial-gradient(circle at 20% 10%, rgba(194, 88, 45, 0.14), transparent 34rem),
+      radial-gradient(circle at 80% 0%, rgba(45, 212, 191, 0.08), transparent 30rem),
+      #090a0d;
+  }
 
-#root {
-  min-height: 100dvh;
-}
+  #root {
+    min-height: 100dvh;
+  }
 
-button {
-  font: inherit;
-}
+  button {
+    font: inherit;
+  }
 
-canvas {
-  display: block;
+  canvas {
+    display: block;
+  }
 }
 
 .ambient-time-sky {

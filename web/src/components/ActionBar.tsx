@@ -9,11 +9,15 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   BatteryCharging,
   Check,
+  ChevronDown,
   Construction,
   Cpu,
   Drill,
   FileJson,
   Gamepad2,
+  KeyRound,
+  Loader2,
+  MessageSquareText,
   Pause,
   PackageOpen,
   Play,
@@ -29,8 +33,9 @@ import {
   X,
 } from "lucide-react";
 import { useAresStore } from "../state/useAresStore";
-import type { ActionType, AlgorithmId, LoadedReplay, RunMode, SimAction } from "../types/sim";
-import { ALGORITHMS, ALGORITHM_CATALOG, CAPABILITY_REQUIREMENTS, supportsActionSampling, usesCheckpoint } from "../lib/algorithms";
+import type { ActionType, LoadedReplay, RunMode } from "../types/sim";
+import { ALGORITHM_CATALOG } from "../lib/algorithms";
+import { AgentSettingsPanel, DeployedAgentPicker } from "./AgentSettingsPanel";
 
 const MODE_STYLE: Record<RunMode, { label: string; icon: ReactNode; accent: string; active: string }> = {
   manual: { label: "Manual", icon: <Gamepad2 size={13} />, accent: "#39d5e8", active: "border-cyan-500/40 bg-cyan-500/10 text-cyan-200 shadow-[0_0_12px_rgba(57,213,232,0.15)]" },
@@ -56,6 +61,15 @@ export function ActionBar() {
   const policyEpisodeDone = useAresStore((state) => state.policyEpisodeDone);
   const snapshotSeed = useAresStore((state) => state.snapshot?.seed ?? 0);
   const runMode = useAresStore((state) => state.runMode);
+  const algorithmId = useAresStore((state) => state.algorithmId);
+  const deployedMode = useAresStore((state) => state.deployedMode);
+  const backendBusy = useAresStore((state) => state.backendBusy);
+  const manualControlsOpen = useAresStore((state) => state.manualControlsOpen);
+  const setManualControlsOpen = useAresStore((state) => state.setManualControlsOpen);
+  const llmFeedOpen = useAresStore((state) => state.llmFeedOpen);
+  const setLlmFeedOpen = useAresStore((state) => state.setLlmFeedOpen);
+  const setLlmConfigOpen = useAresStore((state) => state.setLlmConfigOpen);
+  const llmLearningsCount = useAresStore((state) => state.llmLearnings.length);
   const selectedTool = useAresStore((state) => state.selectedTool);
   const loadedReplay = useAresStore((state) => state.loadedReplay);
   const paused = useAresStore((state) => state.paused);
@@ -76,13 +90,19 @@ export function ActionBar() {
   const [seed, setSeed] = useState(String(snapshotSeed));
   const [playing, setPlaying] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
-  const [agentSettingsOpen, setAgentSettingsOpen] = useState(true);
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(!deployedMode);
+  const [deployedPickerOpen, setDeployedPickerOpen] = useState(false);
   const agentSettingsToggleRef = useRef<HTMLButtonElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const terminal = gameStatus === "game_over" || (runMode === "algorithm" && policyEpisodeDone);
   const replayEnded = !!loadedReplay && loadedReplay.cursor >= loadedReplay.totalSteps;
   const modeStyle = MODE_STYLE[runMode];
   const controlsDisabled = terminal;
+  const activeAlgoDef = ALGORITHM_CATALOG[algorithmId];
+
+  useEffect(() => {
+    if (deployedMode) setAgentSettingsOpen(false);
+  }, [deployedMode]);
 
   useEffect(() => setSeed(String(snapshotSeed)), [snapshotSeed]);
   useEffect(() => setPlaying(false), [runMode, sessionId]);
@@ -133,9 +153,17 @@ export function ActionBar() {
 
   return (
       <footer className="relative flex min-h-[60px] shrink-0 items-center justify-center border-t border-white/10 bg-[#07090b] px-4 py-1.5 max-[899px]:py-3 shadow-[0_-12px_34px_rgba(0,0,0,0.34),inset_0_1px_rgba(255,255,255,0.025)]" data-mode={runMode} data-testid="action-bar">
-        {runMode === "algorithm" && agentSettingsOpen ? (
+        {runMode === "algorithm" && !deployedMode && agentSettingsOpen ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-full z-40 flex justify-center px-4 pb-3">
-            <AlgorithmSetup onClose={closeAgentSettings} />
+            <AgentSettingsPanel onClose={closeAgentSettings} />
+          </div>
+        ) : null}
+        {runMode === "algorithm" && deployedMode && deployedPickerOpen ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-full z-40 flex justify-center px-4 pb-3">
+            <DeployedAgentPicker
+              onClose={() => setDeployedPickerOpen(false)}
+              onOpenLlmSetup={() => setLlmConfigOpen(true)}
+            />
           </div>
         ) : null}
         <span className="absolute inset-x-0 top-0 h-px opacity-90" style={{ background: `linear-gradient(90deg, transparent 22%, ${modeStyle.accent} 50%, transparent 78%)` }} />
@@ -143,17 +171,71 @@ export function ActionBar() {
           <section className="relative flex min-h-12 w-fit max-w-full flex-wrap justify-self-start items-center gap-2 rounded-lg border border-white/[0.07] bg-[#090b11]/80 px-3 pt-1 pb-1 shadow-[0_4px_20px_rgba(0,0,0,0.4),inset_0_1px_rgba(255,255,255,0.03)]" aria-label="Mode and source controls" data-testid="action-bar-left">
             <ZoneLabel color={modeStyle.accent}>Mode</ZoneLabel>
             <ModeSwitch active={runMode} onChange={(mode) => void changeMode(mode)} />
-            {runMode === "algorithm" ? (
+            {runMode === "manual" ? (
               <TooltipButton
-                label="Agent settings"
-                buttonRef={agentSettingsToggleRef}
-                ariaExpanded={agentSettingsOpen}
-                ariaControls="agent-settings-panel"
-                className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg border transition ${agentSettingsOpen ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/[0.06] bg-white/[0.02] text-stone-400 hover:bg-white/[0.06] hover:text-white"}`}
-                onClick={() => setAgentSettingsOpen((open) => !open)}
+                label={manualControlsOpen ? "Hide manual controls pad" : "Show manual controls pad"}
+                ariaExpanded={manualControlsOpen}
+                className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg border transition ${manualControlsOpen ? "border-cyan-500/40 bg-cyan-500/12 text-cyan-200" : "border-white/[0.06] bg-white/[0.02] text-stone-400 hover:bg-white/[0.06] hover:text-white"}`}
+                onClick={() => setManualControlsOpen(!manualControlsOpen)}
               >
-                <SlidersHorizontal size={15} />
+                <Gamepad2 size={15} />
               </TooltipButton>
+            ) : null}
+            {runMode === "algorithm" ? (
+              <>
+                <Divider />
+                {!deployedMode ? (
+                  <TooltipButton
+                    label="Agent settings"
+                    buttonRef={agentSettingsToggleRef}
+                    ariaExpanded={agentSettingsOpen}
+                    ariaControls="agent-settings-panel"
+                    className={`flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-semibold transition ${agentSettingsOpen ? "border-violet-500/45 bg-violet-500/15 text-violet-100" : "border-white/[0.08] bg-white/[0.03] text-stone-200 hover:border-violet-400/35 hover:bg-white/[0.06] hover:text-white"}`}
+                    onClick={() => setAgentSettingsOpen((open) => !open)}
+                  >
+                    <SlidersHorizontal size={13} className="text-violet-300" />
+                    <span className="max-w-[116px] truncate">{activeAlgoDef.shortLabel}</span>
+                    <ChevronDown size={12} className={`text-stone-400 transition-transform ${agentSettingsOpen ? "rotate-180" : ""}`} />
+                  </TooltipButton>
+                ) : (
+                  <TooltipButton
+                    label="Choose agent"
+                    ariaExpanded={deployedPickerOpen}
+                    className={`flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-semibold transition ${deployedPickerOpen ? "border-violet-500/45 bg-violet-500/15 text-violet-100" : "border-white/[0.08] bg-white/[0.03] text-stone-200 hover:border-violet-400/35 hover:bg-white/[0.06] hover:text-white"}`}
+                    onClick={() => setDeployedPickerOpen((open) => !open)}
+                  >
+                    <Cpu size={13} className="text-violet-300" />
+                    <span className="max-w-[116px] truncate">{activeAlgoDef.shortLabel}</span>
+                    <ChevronDown size={12} className={`text-stone-400 transition-transform ${deployedPickerOpen ? "rotate-180" : ""}`} />
+                  </TooltipButton>
+                )}
+                {algorithmId === "llm_dm" ? (
+                  <>
+                    <TooltipButton
+                      label={llmFeedOpen ? "Hide LLM stream & learnings" : "Show LLM stream & learnings"}
+                      ariaExpanded={llmFeedOpen}
+                      className={`relative grid h-9 w-9 shrink-0 place-items-center rounded-lg border transition ${llmFeedOpen ? "border-cyan-400/45 bg-cyan-500/15 text-cyan-200" : "border-white/[0.06] bg-white/[0.02] text-stone-400 hover:bg-white/[0.06] hover:text-white"}`}
+                      onClick={() => setLlmFeedOpen(!llmFeedOpen)}
+                    >
+                      <MessageSquareText size={15} />
+                      {llmLearningsCount > 0 ? (
+                        <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-emerald-500 px-1 text-[8px] font-black text-black">
+                          {llmLearningsCount}
+                        </span>
+                      ) : null}
+                    </TooltipButton>
+                    {deployedMode ? (
+                      <TooltipButton
+                        label="LLM-DM models & API keys"
+                        className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-200 transition hover:bg-cyan-500/20"
+                        onClick={() => setLlmConfigOpen(true)}
+                      >
+                        <KeyRound size={14} />
+                      </TooltipButton>
+                    ) : null}
+                  </>
+                ) : null}
+              </>
             ) : null}
             {runMode === "load" ? <><Divider /><ReplaySource loadedReplay={loadedReplay} uploadRef={uploadRef} onUpload={uploadReplay} /></> : null}
           </section>
@@ -161,7 +243,7 @@ export function ActionBar() {
           <section className="relative flex min-h-12 w-fit max-w-full flex-wrap justify-self-center items-center justify-center gap-2 rounded-lg border border-white/[0.1] bg-[#0c0f16]/95 px-4 pt-1 pb-1 max-[899px]:order-3 max-[899px]:mx-auto shadow-[0_4px_20px_rgba(0,0,0,0.5),inset_0_1px_rgba(255,255,255,0.04)]" aria-label="Active game controls" data-testid="action-bar-center" style={{ borderColor: `${modeStyle.accent}30`, boxShadow: `0_4px_20px_rgba(0,0,0,0.5), inset_0_1px_rgba(255,255,255,0.04), 0_0_16px_${modeStyle.accent}08` }}>
             <ZoneLabel color={modeStyle.accent}>{runMode === "manual" ? "Rover commands" : runMode === "algorithm" ? "Run controls" : "Replay controls"}</ZoneLabel>
             {runMode === "manual" ? <><div className="flex gap-1.5" aria-label="Environment actions">{ACTIONS.map((action) => <CommandButton key={action.id} label={action.label} active={selectedTool === action.id} accent={modeStyle.accent} disabled={controlsDisabled} onClick={() => void dispatchAction({ type: action.id })}>{action.icon}</CommandButton>)}</div><Divider /><RunUtilities onReset={() => void resetCurrentRun()} onSave={() => setSaveOpen(true)} /></> : null}
-            {runMode === "algorithm" ? <><Transport playing={playing} paused={paused} disabled={controlsDisabled} stepDisabled={controlsDisabled || (playing && !paused)} onToggle={() => void togglePlay()} onStep={() => void step()} /><SpeedControl speed={speed} onChange={setSpeed} accent={modeStyle.accent} /><Divider /><RunUtilities onReset={() => void resetCurrentRun()} onSave={() => setSaveOpen(true)} /></> : null}
+            {runMode === "algorithm" ? <><Transport playing={playing} paused={paused} busy={backendBusy} disabled={controlsDisabled} stepDisabled={controlsDisabled || (playing && !paused)} onToggle={() => void togglePlay()} onStep={() => void step()} /><SpeedControl speed={speed} onChange={setSpeed} accent={modeStyle.accent} /><Divider /><RunUtilities onReset={() => void resetCurrentRun()} onSave={() => setSaveOpen(true)} /></> : null}
             {runMode === "load" ? <ReplayControls loadedReplay={loadedReplay} playing={playing} paused={paused} ended={replayEnded} speed={speed} onToggle={() => void togglePlay()} onStep={() => void step()} onSpeed={setSpeed} onRepeat={() => { setPlaying(false); void resetReplay(); }} onJump={(target) => void jumpToReplayStep(target)} accent={modeStyle.accent} /> : null}
           </section>
 
@@ -225,118 +307,16 @@ function EnvironmentTools({ seed, setSeed, applySeed, randomize, disabled = fals
   );
 }
 
-function Transport({ playing, paused, disabled, stepDisabled, onToggle, onStep }: { playing: boolean; paused: boolean; disabled: boolean; stepDisabled: boolean; onToggle: () => void; onStep: () => void }) {
+function Transport({ playing, paused, busy = false, disabled, stepDisabled, onToggle, onStep }: { playing: boolean; paused: boolean; busy?: boolean; disabled: boolean; stepDisabled: boolean; onToggle: () => void; onStep: () => void }) {
   return (
-    <div className="flex gap-1.5">
+    <div className="flex items-center gap-1.5">
       <CommandButton label={!playing ? "Start run" : paused ? "Resume run" : "Pause run"} disabled={disabled} onClick={onToggle}>
         {playing && !paused ? <Pause size={15} /> : <Play size={15} />}
       </CommandButton>
-      <CommandButton label="Step simulation" disabled={stepDisabled} onClick={onStep}>
-        <StepForward size={15} />
+      <CommandButton label="Step simulation" disabled={stepDisabled || busy} onClick={onStep}>
+        {busy ? <Loader2 size={15} className="animate-spin text-violet-300" /> : <StepForward size={15} />}
       </CommandButton>
     </div>
-  );
-}
-
-function AlgorithmSetup({ onClose }: { onClose: () => void }) {
-  const algorithmId = useAresStore((state) => state.algorithmId);
-  const checkpointPath = useAresStore((state) => state.checkpointPath);
-  const policyActionMode = useAresStore((state) => state.policyActionMode);
-  const setPolicyActionMode = useAresStore((state) => state.setPolicyActionMode);
-  const backendBusy = useAresStore((state) => state.backendBusy);
-  const rllibAvailable = useAresStore((state) => state.rllibAvailable);
-  const muzeroAvailable = useAresStore((state) => state.muzeroAvailable);
-  const worldModelsAvailable = useAresStore((state) => state.worldModelsAvailable);
-  const llmDmAvailable = useAresStore((state) => state.llmDmAvailable);
-  const policyCapabilitiesLoaded = useAresStore((state) => state.policyCapabilitiesLoaded);
-  const capabilities = { rllib: rllibAvailable, muzero: muzeroAvailable, world_models: worldModelsAvailable, llm_dm: llmDmAvailable };
-  const actionSelection = ALGORITHM_CATALOG[algorithmId].actionSelection;
-  const setAlgorithmId = useAresStore((state) => state.setAlgorithmId);
-  const setCheckpointPath = useAresStore((state) => state.setCheckpointPath);
-  const attachCurrentPolicy = useAresStore((state) => state.attachCurrentPolicy);
-  const refreshPolicyCapabilities = useAresStore((state) => state.refreshPolicyCapabilities);
-
-  useEffect(() => {
-    void refreshPolicyCapabilities();
-  }, [refreshPolicyCapabilities]);
-
-  return (
-    <section
-      id="agent-settings-panel"
-      className="pointer-events-auto w-fit max-w-full shrink-0 rounded-lg border border-violet-400/20 bg-[#0c0f16]/95 p-3 shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
-      aria-label="Agent settings"
-      data-testid="agent-settings-panel"
-      onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }}
-    >
-      <div className="mb-2 flex items-center justify-between gap-6">
-        <span className="flex items-center gap-2 text-[10px] font-semibold text-violet-200"><SlidersHorizontal size={13} />Agent settings</span>
-        <button type="button" aria-label="Close agent settings" className="grid h-6 w-6 place-items-center rounded text-stone-400 transition hover:bg-white/10 hover:text-white" onClick={onClose}><X size={14} /></button>
-      </div>
-      <div className="flex min-w-0 flex-wrap items-end gap-3">
-        <label className="flex min-w-0 flex-col gap-1 text-[9px] font-semibold text-stone-400 max-[767px]:w-full">
-          <span>Agent</span>
-          <span className="flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-[#090b11] px-2.5 focus-within:border-violet-500/40 transition">
-            <Cpu size={13} className="text-violet-300" />
-            <select aria-label="Algorithm policy" className="w-[200px] min-w-0 bg-transparent font-semibold text-white outline-none cursor-pointer text-[11px] max-[767px]:w-full" value={algorithmId} onChange={(event) => setAlgorithmId(event.target.value as AlgorithmId)}>
-              {ALGORITHMS.map((option) => {
-                const blocked = option.capability !== null && policyCapabilitiesLoaded && !capabilities[option.capability];
-                const suffix = blocked && option.capability !== null ? ` (${CAPABILITY_REQUIREMENTS[option.capability]})` : "";
-                return (
-                  <option key={option.value} value={option.value} disabled={blocked} className="bg-[#0b0e14] text-white">
-                    {option.label}{suffix}
-                  </option>
-                );
-              })}
-            </select>
-          </span>
-        </label>
-        {usesCheckpoint(algorithmId) ? (
-          <div className="flex w-[320px] min-w-0 max-w-full flex-col gap-1 text-[9px] font-semibold text-stone-400 max-[767px]:w-full">
-            <label htmlFor="policy-checkpoint-path">Checkpoint</label>
-            <span className="flex min-w-0 items-center gap-1.5">
-              <span className="flex h-9 min-w-0 flex-1 items-center rounded-lg border border-white/[0.08] bg-[#090b11] px-2.5 focus-within:border-violet-500/40 transition">
-                <input
-                  id="policy-checkpoint-path"
-                  aria-label="Checkpoint path"
-                  className="w-full min-w-0 bg-transparent font-mono text-[11px] font-normal text-white outline-none placeholder:text-stone-500"
-                  placeholder="/absolute/path/to/checkpoint.json"
-                  value={checkpointPath}
-                  onChange={(event) => setCheckpointPath(event.target.value)}
-                  onBlur={() => void attachCurrentPolicy()}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void attachCurrentPolicy();
-                    }
-                  }}
-                />
-              </span>
-              <CommandButton label="Apply checkpoint path" onClick={() => void attachCurrentPolicy()}>
-                <Check size={15} />
-              </CommandButton>
-            </span>
-          </div>
-        ) : null}
-        {supportsActionSampling(algorithmId) ? (
-          <label className="flex min-w-0 flex-col gap-1 text-[9px] font-semibold text-stone-400 max-[767px]:w-full">
-            <span>Action selection</span>
-            <select
-              aria-label="Policy action selection"
-              className="h-9 w-[180px] max-w-full rounded-lg border border-white/[0.08] bg-[#090b11] px-2.5 text-[11px] font-semibold text-white outline-none focus:border-violet-500/40 cursor-pointer disabled:opacity-50 max-[767px]:w-full"
-              value={policyActionMode}
-              disabled={backendBusy}
-              onChange={(event) => {
-                setPolicyActionMode(event.target.value as "stochastic" | "deterministic");
-                void attachCurrentPolicy();
-              }}
-            >
-              <option value="stochastic" className="bg-[#0b0e14]">{(actionSelection === "q") ? "Sampling (ε-greedy)" : "Sampling"}</option>
-              <option value="deterministic" className="bg-[#0b0e14]">{(actionSelection === "q") ? "Highest Q-value" : "Highest probability"}</option>
-            </select>
-          </label>
-        ) : null}
-      </div>
-    </section>
   );
 }
 

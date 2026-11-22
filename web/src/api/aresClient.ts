@@ -4,7 +4,8 @@
  * logic belongs in `useAresStore`.
  */
 
-import type { AgentStepResponse, AlgorithmId, AttachPolicyResponse, AresReplayProjectionV1, AresTrajectoryEpisodeV1, PoliciesResponse, PolicyActionMode, RunMode, SimAction, SimSnapshot } from "../types/sim";
+import { apiUrl } from "../lib/deployConfig";
+import type { AgentStepResponse, AlgorithmId, AttachPolicyResponse, AresReplayProjectionV1, AresTrajectoryEpisodeV1, LlmDmAttachPayload, LlmLearnResponse, PoliciesResponse, PolicyActionMode, RunMode, SimAction, SimSnapshot } from "../types/sim";
 
 interface SnapshotResponse {
   snapshot: SimSnapshot;
@@ -80,7 +81,7 @@ export class AresApiClient {
     return request<PoliciesResponse>("/api/policies");
   }
 
-  async attachPolicy({ algorithmId, checkpointPath, actionMode }: { algorithmId: AlgorithmId; checkpointPath?: string; actionMode?: PolicyActionMode }): Promise<AttachPolicyResponse> {
+  async attachPolicy({ algorithmId, checkpointPath, actionMode, llmDm }: { algorithmId: AlgorithmId; checkpointPath?: string; actionMode?: PolicyActionMode; llmDm?: LlmDmAttachPayload }): Promise<AttachPolicyResponse> {
     const sessionId = this.requireSession();
     return request<AttachPolicyResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/attach-policy`, {
       method: "POST",
@@ -88,6 +89,7 @@ export class AresApiClient {
         algorithmId,
         checkpointPath: checkpointPath ?? null,
         actionMode,
+        ...(llmDm ? { llmDm } : {}),
       }),
     });
   }
@@ -99,6 +101,13 @@ export class AresApiClient {
     });
   }
 
+  async llmLearn(): Promise<LlmLearnResponse> {
+    const sessionId = this.requireSession();
+    return request<LlmLearnResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/llm-learn`, {
+      method: "POST",
+    });
+  }
+
   async validateCheckpoint(checkpointPath: string): Promise<{ valid: boolean; policyId?: string; loaderId?: string; error?: string; code?: string }> {
     return request("/api/policies/validate-checkpoint", {
       method: "POST",
@@ -106,9 +115,15 @@ export class AresApiClient {
     });
   }
 
-  async fetchHealth(): Promise<{ rllibAvailable: boolean; muzeroAvailable: boolean; worldModelsAvailable: boolean; llmDmAvailable: boolean }> {
-    const response = await request<{ rllibAvailable?: boolean; muzeroAvailable?: boolean; worldModelsAvailable?: boolean; llmDmAvailable?: boolean }>("/api/health");
-    return { rllibAvailable: response.rllibAvailable === true, muzeroAvailable: response.muzeroAvailable === true, worldModelsAvailable: response.worldModelsAvailable === true, llmDmAvailable: response.llmDmAvailable === true };
+  async fetchHealth(): Promise<{ rllibAvailable: boolean; muzeroAvailable: boolean; worldModelsAvailable: boolean; llmDmAvailable: boolean; deployed: boolean }> {
+    const response = await request<{ rllibAvailable?: boolean; muzeroAvailable?: boolean; worldModelsAvailable?: boolean; llmDmAvailable?: boolean; deployed?: boolean }>("/api/health");
+    return {
+      rllibAvailable: response.rllibAvailable === true,
+      muzeroAvailable: response.muzeroAvailable === true,
+      worldModelsAvailable: response.worldModelsAvailable === true,
+      llmDmAvailable: response.llmDmAvailable === true,
+      deployed: response.deployed === true,
+    };
   }
 
   /** @deprecated Use agentStep after attachPolicy. Kept for manual pre-decoded agent actions if needed. */
@@ -192,7 +207,7 @@ export class AresApiClient {
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetch(apiUrl(url), {
       ...init,
       headers: { "Content-Type": "application/json", ...init.headers },
     });

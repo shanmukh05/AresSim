@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -20,9 +21,9 @@ from .contracts import Json, strict_json
 logger = logging.getLogger(__name__)
 
 
-def estimate_input_tokens(system: str, user: str) -> int:
+def estimate_input_tokens(system: str, user: str, *, schema_bytes: int = 0) -> int:
     """Use the same conservative byte reservation for input fitting and billing limits."""
-    return len(system.encode()) + len(user.encode()) + 1024
+    return len(system.encode()) + len(user.encode()) + schema_bytes + 1024
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,14 @@ class BudgetLedger:
             if not isinstance(self.prices, dict):
                 raise ValueError("price sheet models must be an object")
 
+    def restore(self, saved: Json) -> None:
+        """Carry forward charged and outstanding reservations across process restarts."""
+        self.attempts = saved["attempts"]
+        self.tokens = saved["tokens_charged_or_reserved"]
+        self.usd = saved["usd_charged_or_reserved"]
+        self.started = time.monotonic() - saved["elapsed_seconds"]
+        self.roles = deepcopy(saved["roles"])
+
     def check(self) -> None:
         if (
             time.monotonic() - self.started >= self.config.max_wall_seconds
@@ -90,11 +99,17 @@ class BudgetLedger:
         return values
 
     def reserve(
-        self, role: str, config: RoleConfig, system: str, user: str
+        self,
+        role: str,
+        config: RoleConfig,
+        system: str,
+        user: str,
+        *,
+        schema_bytes: int = 0,
     ) -> Reservation:
         """UTF-8 byte count is a conservative token estimate for standalone JSON/text."""
         self.check()
-        input_tokens = estimate_input_tokens(system, user)
+        input_tokens = estimate_input_tokens(system, user, schema_bytes=schema_bytes)
         if input_tokens > config.max_input_tokens:
             self.input_budget_failure = {
                 "role": role,
@@ -104,6 +119,7 @@ class BudgetLedger:
                 "max_input_tokens": config.max_input_tokens,
                 "system_bytes": len(system.encode()),
                 "packet_bytes": len(user.encode()),
+                "schema_bytes": schema_bytes,
                 "note": "Conservative UTF-8-byte reservation plus 1024 overhead; not provider-reported token usage.",
             }
             logger.error(

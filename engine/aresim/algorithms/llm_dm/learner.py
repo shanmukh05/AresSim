@@ -13,10 +13,12 @@ from copy import deepcopy
 from ...algorithms.base import EpisodeStop
 from .artifacts import RunArtifacts
 from .calls import ModelCalls
+from .budget import estimate_input_tokens
 from .contracts import Json, canonical, digest, proposal_schema, strict_json
 from .knowledge import stage_proposal
 
 logger = logging.getLogger(__name__)
+COMPACT_REVIEW_INPUT_LIMIT = 48 * 1024
 
 
 def _timeline_row(row: Json) -> Json:
@@ -103,7 +105,14 @@ def development_evidence(
         packet["omitted_timeline_transitions"] = total - sum(
             len(e["timeline"]) for e in selected
         )
-        if len(system.encode()) + len(canonical(packet).encode()) + 1024 <= max_input:
+        if (
+            estimate_input_tokens(
+                system,
+                canonical(packet),
+                schema_bytes=len(canonical(evidence_schema(packet)).encode()),
+            )
+            <= max_input
+        ):
             return packet
         candidate = next((e for e in selected if len(e["transitions"]) > 1), None)
         if candidate:
@@ -155,9 +164,23 @@ def propose(
     batch: int,
 ) -> tuple[Json | None, Json]:
     """Actually invoke the configured Learner; failure stops the learning run."""
-    evidence = development_evidence(
-        episodes, parent, system, calls.config.max_input_tokens - 4096
+    evidence_limit = calls.config.max_input_tokens - 4096
+    # The restored audit trail also covers a truncation from an earlier process.
+    recovering = evidence_limit > COMPACT_REVIEW_INPUT_LIMIT and any(
+        row["event"] == "learner_failed" and row.get("error_code") == "max_output_tokens"
+        for row in artifacts.learning
     )
+    if recovering:
+        try:
+            evidence = development_evidence(
+                episodes, parent, system, COMPACT_REVIEW_INPUT_LIMIT
+            )
+        except EpisodeStop as error:
+            if error.reason != "input_budget_exceeded":
+                raise
+            recovering = False
+    if not recovering:
+        evidence = development_evidence(episodes, parent, system, evidence_limit)
     evidence_ref = artifacts.content("evidence", evidence)
     artifacts.learning_record(
         {
@@ -165,6 +188,7 @@ def propose(
             "batch": batch,
             "parent_bundle_id": parent["bundle_id"],
             "evidence_reference": evidence_ref,
+            **({"review_mode": "compact_after_output_limit"} if recovering else {}),
             "system_prompt_reference": "manifest.json#learner_system_prompt",
             "selection": evidence["selection"],
             "omitted_transitions": evidence["omitted_transitions"],
@@ -187,9 +211,27 @@ def propose(
         calls.config.provider,
         calls.config.model,
     )
-    packet = evidence
-    for attempt in range(2):
-        result = calls.generate(system, packet, evidence_schema(evidence))
+    packet = (
+        {
+            **evidence,
+            "validation_feedback": (
+                "A previous review ran out of output tokens. Use the retained evidence "
+                "to check one consequential decision and write a concise proposal. "
+                "Return no_change if the evidence cannot support a specific change."
+            ),
+        }
+        if recovering
+        else evidence
+    )
+    # Claude compiles a grammar for each schema. Keep it reusable across reviews.
+    # stage_proposal still checks the parent and every submitted citation locally.
+    schema = (
+        proposal_schema()
+        if calls.config.provider == "anthropic"
+        else evidence_schema(evidence)
+    )
+    for attempt in range(3):
+        result = calls.generate(system, packet, schema)
         if result.status != "ok":
             logger.info(
                 "Learner batch %d: %s", batch + 1, result.error_code or result.status
@@ -218,11 +260,11 @@ def propose(
                     "batch": batch,
                     "validation_attempt": attempt + 1,
                     "reason": reason,
-                    "raw_output": result.text,
+                    **({"raw_output": result.text} if artifacts.debug_trace else {}),
                     "parent_retained": parent["bundle_id"],
                 }
             )
-            if attempt:
+            if attempt == 2:
                 raise EpisodeStop("learner_error") from error
             rejected = (
                 canonical(proposal.get("conditions", []))[:512]
@@ -235,6 +277,12 @@ def propose(
                 + rejected
                 + ". Correct the proposal using cited pre-action states, or return no_change. "
                 "mission.ice_remaining_fraction and mission.samples_remaining_fraction are undelivered quota fractions."
+                " Copy IDs exactly from episode_id, transition_id or source_transition_id."
+                " For a change, write one short sentence in text and select target lesson"
+                " (1–512 characters) or actor_guidance (1–1024 characters)."
+                " For no_change, set target and text to null and leave conditions empty."
+                f" For no_change, use support={canonical([evidence['episodes'][-1]['episode_id']])}"
+                " and counterexamples=[]."
             )
             packet = {**evidence, "validation_feedback": feedback}
             artifacts.learning_record(

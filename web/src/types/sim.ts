@@ -28,6 +28,127 @@ export type { AlgorithmId } from "../lib/algorithms";
 export { supportsActionSampling, usesCheckpoint, usesWorldModel } from "../lib/algorithms";
 export type PolicyActionMode = "stochastic" | "deterministic";
 
+export interface LlmLearningCondition {
+  field: string;
+  operator: "eq" | "lt" | "lte" | "gt" | "gte";
+  value: string | number | boolean;
+}
+
+export interface LlmLearningStatement {
+  code: string;
+  id: string;
+  target: "lesson" | "actor_guidance";
+  text: string;
+  conditions: LlmLearningCondition[];
+  status?: string;
+  reason?: string | null;
+  expectedBenefit?: string | null;
+  failureCase?: string | null;
+  author?: string | null;
+  round?: number | null;
+}
+
+export interface LlmDmProviderOption {
+  id: string;
+  label: string;
+  credentialEnv: string;
+  defaultModel: string;
+  defaultRoute?: string;
+  placeholder: string;
+}
+
+export interface LlmDmCatalog {
+  dmProviders: LlmDmProviderOption[];
+  llmProviders: LlmDmProviderOption[];
+  envKeysConfigured: Record<string, boolean>;
+}
+
+export type LlmHistoryMode = "focused" | "facts_recent" | "recent" | "none";
+
+export interface LlmDmAttachPayload {
+  actorProvider: string;
+  actorModel: string;
+  actorRoute?: string | null;
+  actorApiKey?: string | null;
+  actorContextWindow: number;
+  actorMaxOutputTokens: number;
+  learnerEnabled: boolean;
+  learnerProvider: string;
+  learnerModel: string;
+  learnerRoute?: string | null;
+  learnerApiKey?: string | null;
+  learnerContextWindow: number;
+  learnerMaxOutputTokens: number;
+  historyMode: LlmHistoryMode;
+  adviceLimit: number;
+  attemptTimeoutSeconds: number;
+  maxEpisodeSteps: number;
+  carryLearnings?: LlmLearningStatement[];
+}
+
+export interface LlmGoalSummary {
+  id: string;
+  kind: string;
+  position?: [number, number];
+}
+
+export interface LlmDmStepMeta {
+  decision_id?: string;
+  episode_id?: string;
+  action?: string;
+  fallback?: string | null;
+  provider?: string;
+  model?: string;
+  latency_seconds?: number;
+  usage?: { input_tokens?: number; output_tokens?: number } | null;
+  actor_details?: {
+    choice?: string;
+    confidence?: number;
+    probabilities?: Record<string, number>;
+  } | null;
+  goal?: LlmGoalSummary | null;
+  goal_event?: { goal: LlmGoalSummary; reason: string; step_index: number } | null;
+  applied_advice?: Array<{ id: string; text: string }>;
+  deferred_advice_count?: number;
+  learnings_count?: number;
+  learnerConfigured?: boolean;
+  learnerProvider?: string | null;
+  learnerModel?: string | null;
+  learnings?: LlmLearningStatement[];
+  episodeTransitions?: number;
+  summary?: string;
+}
+
+export interface LlmLearnResponse {
+  outcome: "change" | "no_change" | string;
+  reason?: string | null;
+  expectedBenefit?: string | null;
+  failureCase?: string | null;
+  round: number;
+  learnerProvider?: string | null;
+  learnerModel?: string | null;
+  addedLearning?: LlmLearningStatement | null;
+  learnings: LlmLearningStatement[];
+}
+
+export interface LlmFeedMessage {
+  id: string;
+  kind: "system" | "goal" | "actor" | "learner";
+  step: number;
+  author: string;
+  text: string;
+  badge?: string;
+  action?: string;
+  confidence?: number;
+  probabilities?: Record<string, number>;
+  latencySec?: number;
+  appliedAdvice?: Array<{ id: string; text: string }>;
+  learning?: LlmLearningStatement | null;
+  reason?: string | null;
+  fallback?: string | null;
+  timestamp: string;
+}
+
 export interface PolicyMeta {
   actionMode?: PolicyActionMode;
   algorithmId: AlgorithmId;
@@ -37,8 +158,7 @@ export interface PolicyMeta {
   actionMask: number[];
   episodeDone?: boolean;
   endingReason?: string | null;
-  llmDm?: Record<string, unknown>;
-
+  llmDm?: LlmDmStepMeta;
 }
 
 export interface AgentStepResponse {
@@ -55,6 +175,9 @@ export interface PolicyCatalogEntry {
 
 export interface PoliciesResponse {
   policies: PolicyCatalogEntry[];
+  deployed?: boolean;
+  defaultCheckpoints?: Record<string, string | boolean>;
+  llmDmCatalog?: LlmDmCatalog | null;
   capabilities: { rllib: boolean; muzero?: boolean; world_models?: boolean; llm_dm?: boolean };
 }
 
@@ -63,6 +186,14 @@ export interface AttachPolicyResponse {
   algorithmId: AlgorithmId;
   policyId: string;
   checkpointPath?: string | null;
+  llmDm?: {
+    actorProvider: string;
+    actorModel: string;
+    learnerConfigured: boolean;
+    learnerProvider?: string | null;
+    learnerModel?: string | null;
+    learnings: LlmLearningStatement[];
+  };
 }
 export type LegacyLlmAgentId = "mock_llm";
 

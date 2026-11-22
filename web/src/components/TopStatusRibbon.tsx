@@ -6,6 +6,7 @@
 import { Activity, Archive, BarChart3, Battery, BookOpen, Clock3, CloudSun, HeartPulse, History, House, Target, Zap } from "lucide-react";
 import type { ReactNode } from "react";
 import { useAresStore } from "../state/useAresStore";
+import { assetUrl } from "../lib/deployConfig";
 import { formatFixed, formatSignedFixed } from "../lib/format";
 import { payloadUsedKg } from "../lib/payload";
 import { getPowerMargin } from "../lib/power";
@@ -23,7 +24,7 @@ export function TopStatusRibbon({ onOpenGuide, onOpenHistory, onOpenMission }: {
   return (
     <header className="relative z-50 flex h-[58px] shrink-0 items-center gap-3 border-b border-orange-100/10 bg-gradient-to-r from-[#120b09]/96 via-[#0b0c0e]/96 to-[#071013]/96 px-3 shadow-[0_14px_38px_rgba(0,0,0,0.42)] backdrop-blur-xl sm:px-4">
       <div className="flex min-w-0 items-center gap-2.5">
-        <img src="/logo.png" alt="" width={36} height={36} className="h-9 w-9 shrink-0 rounded-lg border border-orange-300/25 object-cover shadow-[0_0_24px_rgba(249,115,22,0.16)]" />
+        <img src={assetUrl("logo.png")} alt="" width={36} height={36} className="h-9 w-9 shrink-0 rounded-lg border border-orange-300/25 object-cover shadow-[0_0_24px_rgba(249,115,22,0.16)]" />
         <div className="hidden leading-none sm:block">
           <div className="text-xs font-black tracking-[0.2em] text-white">ARESIM</div>
           <div className="mt-1.5 text-[8px] font-semibold uppercase tracking-[0.18em] text-orange-100/40">Habitat One</div>
@@ -41,6 +42,13 @@ export function TopStatusRibbon({ onOpenGuide, onOpenHistory, onOpenMission }: {
       </div>
 
       <div className="flex-1" />
+
+      <div className="hidden items-center gap-1.5 md:flex lg:hidden" aria-label="Compact rover telemetry">
+        <TelemetryGroup label="Vitals" testId="header-compact-group">
+          <Telemetry icon={<Battery size={13} />} label="Battery" value={formatFixed(snapshot.resources.battery, "%")} tone={snapshot.resources.battery > 35 ? "good" : "bad"} />
+          <Telemetry icon={<HeartPulse size={13} />} label="Livability" value={formatFixed(snapshot.resources.livability, "%")} tone={snapshot.resources.livability > 30 ? "good" : "bad"} />
+        </TelemetryGroup>
+      </div>
 
       <div className="hidden items-center gap-1.5 lg:flex" aria-label="Grouped mission telemetry">
         <TelemetryGroup label="Rover" testId="header-rover-group">

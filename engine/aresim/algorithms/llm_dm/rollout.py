@@ -22,6 +22,7 @@ from .artifacts import ReplayWriter, RunArtifacts
 from .budget import BudgetLedger
 from .calls import ModelCalls
 from .config import (
+    CHOICE_PROVIDERS,
     ROOT,
     RoleConfig,
     RunConfig,
@@ -175,47 +176,65 @@ def _sequential_trial(
     learner_system: str,
     artifacts: RunArtifacts,
     cycles: list[Json],
+    checkpoint: Json | None = None,
 ) -> list[Json]:
-    trial = bundle
-    for index, episode in enumerate(config.episodes):
-        label = "development-0000" if index == 0 else f"candidate-{index - 1:04d}"
-        game = _collect(
-            config, trial, actor, artifacts, (episode,), label, evaluating=index > 0
-        )
-        metrics = game.metrics[0]
-        logger.info(
-            "Game %d learning context: %d retained statements; advice supplied on %d action decisions",
-            index + 1,
-            metrics["learning_statement_count"],
-            metrics["learning_context_decisions"],
-        )
-        logger.info(
-            "Game %d/%d: %s after %d turns; tentative advice conditions matched on %d decisions",
-            index + 1,
-            len(config.episodes),
-            metrics["ending_reason"],
-            metrics["steps"],
-            metrics["candidate_advice_exposed_decisions"],
-        )
-        if cycles:
-            cycles[-1]["candidate_advice_exposed_decisions"] = metrics[
-                "candidate_advice_exposed_decisions"
-            ]
-            cycles[-1]["learning_statement_count"] = metrics["learning_statement_count"]
-            cycles[-1]["learning_context_decisions"] = metrics[
-                "learning_context_decisions"
-            ]
-            artifacts.learning_record(
-                {
-                    "event": "sequential_trial_completed",
-                    **cycles[-1],
-                    "note": "Diagnostic only; selected initial policy retained.",
-                }
+    trial = checkpoint["trial"] if checkpoint is not None else bundle
+    start = checkpoint["next_game"] if checkpoint is not None else 0
+
+    def save(**updates):
+        if checkpoint is not None:
+            checkpoint.update(updates, trial=trial, cycles=cycles)
+            artifacts.write("resume.json", checkpoint)
+
+    for index in range(start, len(config.episodes)):
+        episode = config.episodes[index]
+        pending = checkpoint.get("pending_evidence") if checkpoint is not None else None
+        if pending is not None:
+            evidence = pending
+        else:
+            label = "development-0000" if index == 0 else f"candidate-{index - 1:04d}"
+            game = _collect(
+                config, trial, actor, artifacts, (episode,), label, evaluating=index > 0
             )
+            metrics = game.metrics[0]
+            evidence = game.completed_evidence
+            logger.info(
+                "Game %d learning context: %d retained statements; advice supplied on %d action decisions",
+                index + 1,
+                metrics["learning_statement_count"],
+                metrics["learning_context_decisions"],
+            )
+            logger.info(
+                "Game %d/%d: %s after %d turns; tentative advice conditions matched on %d decisions",
+                index + 1,
+                len(config.episodes),
+                metrics["ending_reason"],
+                metrics["steps"],
+                metrics["candidate_advice_exposed_decisions"],
+            )
+            if cycles:
+                cycles[-1]["candidate_advice_exposed_decisions"] = metrics[
+                    "candidate_advice_exposed_decisions"
+                ]
+                cycles[-1]["learning_statement_count"] = metrics[
+                    "learning_statement_count"
+                ]
+                cycles[-1]["learning_context_decisions"] = metrics[
+                    "learning_context_decisions"
+                ]
+                artifacts.learning_record(
+                    {
+                        "event": "sequential_trial_completed",
+                        **cycles[-1],
+                        "note": "Diagnostic only; selected initial policy retained.",
+                    }
+                )
+            save(game_ids=list(artifacts.games), pending_evidence=evidence)
         if index == len(config.episodes) - 1:
+            save(next_game=index + 1, pending_evidence=None)
             break
         item, proposal = propose(
-            learner, learner_system, trial, game.completed_evidence, artifacts, index
+            learner, learner_system, trial, evidence, artifacts, index
         )
         parent_id = trial["bundle_id"]
         trial = candidate_bundle(trial, item) if item else trial
@@ -243,13 +262,69 @@ def _sequential_trial(
                 "note": "All earlier statements remain in subsequent game context. Promotion is separate from within-run reuse.",
             }
         )
+        save(next_game=index + 1, pending_evidence=None)
         logger.info("Learner after game %d: %s", index + 1, proposal["outcome"])
     return cycles
 
 
-def run_llm_dm(config: RunConfig, *, sequential_diagnostic: bool = False) -> Path:
-    """Run learning/evaluation or an explicitly selected sequential diagnostic."""
-    if config.learner and config.learner.role.provider == "decision_models":
+def run_llm_dm(
+    config: RunConfig, *, sequential_diagnostic: bool = False, resume: bool = False
+) -> Path:
+    """Run with optional game/review checkpoints and one writer per experiment."""
+    if not resume:
+        return _run_llm_dm(config, sequential_diagnostic=sequential_diagnostic)
+    if config.execution_mode != "sequential_diagnostic":
+        raise ValueError("--resume requires sequential_diagnostic")
+    import fcntl
+
+    name = validate_experiment_name(config.experiment_name)
+    config.output_directory.mkdir(parents=True, exist_ok=True)
+    lock_path = config.output_directory / f".{name}.lock"
+    with lock_path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError(f"{name} is already running") from error
+        return _run_llm_dm(config, resume_directory=config.output_directory / name)
+
+
+def _resume_settings(config: Json, *, allow_thinking_change: bool) -> Json:
+    """Compare policy settings separately from operational limits."""
+    settings = {key: value for key, value in config.items() if key != "budgets"}
+    learner = settings["learner"]
+    if learner is not None:
+        role = {
+            key: value
+            for key, value in learner["role"].items()
+            if key not in {
+                "attempt_timeout_seconds",
+                "decision_deadline_seconds",
+                "max_output_tokens",
+            }
+        }
+        if allow_thinking_change and role["provider"] == "gemini":
+            generation = role["generation"]
+            thinking = generation.get("thinkingConfig")
+            if isinstance(thinking, dict):
+                role["generation"] = {
+                    **generation,
+                    "thinkingConfig": {
+                        key: value
+                        for key, value in thinking.items()
+                        if key != "thinkingLevel"
+                    },
+                }
+        settings["learner"] = {**learner, "role": role}
+    return settings
+
+
+def _run_llm_dm(
+    config: RunConfig,
+    *,
+    sequential_diagnostic: bool = False,
+    resume_directory: Path | None = None,
+) -> Path:
+    if config.learner and config.learner.role.provider in CHOICE_PROVIDERS:
         raise ValueError("Decision Models cannot act as Learner")
     sequential_diagnostic = (
         sequential_diagnostic or config.execution_mode == "sequential_diagnostic"
@@ -267,6 +342,78 @@ def run_llm_dm(config: RunConfig, *, sequential_diagnostic: bool = False) -> Pat
     imported = load_learnings_file(config.learnings_file)
     bundle, actor = _acting_config(config, imported)
     budget = BudgetLedger(config.budgets, fake=config.transport == "fake")
+    saved = None
+    checkpoint = None
+    pricing = (
+        json.loads(Path(config.budgets.price_sheet).read_text())
+        if config.transport == "live"
+        else None
+    )
+    if resume_directory is not None:
+        manifest_path = resume_directory / "manifest.json"
+        resume_path = resume_directory / "resume.json"
+        if manifest_path.exists():
+            if not resume_path.exists():
+                raise ValueError(
+                    "Existing run has no resume checkpoint. Choose another experiment_name."
+                )
+            saved = json.loads(manifest_path.read_text())
+            checkpoint = json.loads(resume_path.read_text())
+            if checkpoint.get("schema") != 1:
+                raise ValueError("Unsupported resume checkpoint")
+            requested = json_value(config)
+            prior = saved["config"]
+            allow_thinking_change = (
+                saved["status"] == "incomplete"
+                and checkpoint["next_game"] == 0
+                and checkpoint["pending_evidence"] is not None
+                and not checkpoint["cycles"]
+            )
+            if _resume_settings(
+                prior, allow_thinking_change=allow_thinking_change
+            ) != _resume_settings(requested, allow_thinking_change=allow_thinking_change):
+                raise ValueError(
+                    "Run settings changed. Choose another experiment_name."
+                )
+            previous_output_limit = prior["learner"]["role"]["max_output_tokens"]
+            if requested["learner"]["role"]["max_output_tokens"] < previous_output_limit:
+                raise ValueError("Learner output limit can only increase on resume.")
+            if (
+                prior["budgets"]["price_sheet"] != requested["budgets"]["price_sheet"]
+                or saved.get("pricing") != pricing
+            ):
+                raise ValueError(
+                    "Run pricing changed. Restore the original price sheet to resume."
+                )
+            if saved["status"] == "completed":
+                logger.info("Skipping completed experiment %s", config.experiment_name)
+                return manifest_path
+            if saved["initial_bundle_id"] != bundle["bundle_id"]:
+                raise ValueError(
+                    "Actor prompts or imported advice changed. Choose another experiment_name."
+                )
+            budget.restore(saved["budget"])
+        else:
+            if resume_directory.exists() and any(
+                p.name
+                not in {
+                    "resume.json",
+                    "resume.json.partial",
+                    "manifest.json.partial",
+                    "selected-bundle.json",
+                    "selected-bundle.json.partial",
+                }
+                for p in resume_directory.iterdir()
+            ):
+                raise ValueError("Existing experiment directory has no manifest")
+            checkpoint = {
+                "schema": 1,
+                "next_game": 0,
+                "game_ids": [],
+                "cycles": [],
+                "pending_evidence": None,
+                "trial": bundle,
+            }
     actor_provider = make_provider(actor, fake=config.transport == "fake")
     learner_provider = (
         make_provider(config.learner.role, fake=config.transport == "fake")
@@ -282,7 +429,18 @@ def run_llm_dm(config: RunConfig, *, sequential_diagnostic: bool = False) -> Pat
         learner_system = render_prompt(
             "learner", config.learner.role, config.environment
         )
-    artifacts = _run_artifacts(config)
+    if saved and saved.get("learner_system_prompt") != learner_system:
+        raise ValueError("Learner prompt changed. Choose another experiment_name.")
+    artifacts = (
+        RunArtifacts(
+            resume_directory,
+            config.experiment_name,
+            debug_trace=config.debug_trace,
+            resumable=True,
+        )
+        if resume_directory is not None
+        else _run_artifacts(config)
+    )
     run_id = artifacts.run_id
     manifest = {
         "schema_version": "aresim.llm.run.v1",
@@ -304,11 +462,47 @@ def run_llm_dm(config: RunConfig, *, sequential_diagnostic: bool = False) -> Pat
         "imported_learning_count": len(imported["statements"]),
         "initial_learning_count": len(run_learnings(bundle)),
     }
-    if config.transport != "fake":
-        manifest["pricing"] = json.loads(Path(config.budgets.price_sheet).read_text())
+    if pricing is not None:
+        manifest["pricing"] = pricing
+    if saved is not None:
+        artifacts.restore(saved, checkpoint["game_ids"])
+        manifest["provenance"] = saved["provenance"]
+        manifest["resume_count"] = saved.get("resume_count", 0) + 1
+        manifest["learning_cycles"] = checkpoint["cycles"]
+        artifacts.record(
+            "games.jsonl",
+            {
+                "event": "run_resumed",
+                "next_game_index": checkpoint["next_game"],
+                "retained_episode_ids": checkpoint["game_ids"],
+            },
+        )
+    elif checkpoint is not None:
+        artifacts.write("resume.json", checkpoint)
     artifacts.select_bundle(bundle)
     artifacts.set_manifest(manifest)
-    if config.learnings_file:
+    if saved is not None:
+        prior_generation = saved["config"]["learner"]["role"]["generation"]
+        generation = manifest["config"]["learner"]["role"]["generation"]
+        output_limit = config.learner.role.max_output_tokens
+        if previous_output_limit != output_limit:
+            artifacts.learning_record(
+                {
+                    "event": "learner_output_limit_increased",
+                    "before_game_index": checkpoint["next_game"],
+                    "previous": previous_output_limit,
+                    "current": output_limit,
+                }
+            )
+        if prior_generation != generation:
+            artifacts.learning_record(
+                {
+                    "event": "learner_generation_changed_before_first_review",
+                    "previous": prior_generation,
+                    "current": generation,
+                }
+            )
+    if config.learnings_file and saved is None:
         artifacts.learning_record(
             {
                 "event": "learnings_imported",
@@ -338,6 +532,7 @@ def run_llm_dm(config: RunConfig, *, sequential_diagnostic: bool = False) -> Pat
                 learner_system,
                 artifacts,
                 manifest["learning_cycles"],
+                checkpoint,
             )
         elif config.execution_mode in {"frozen_evaluation", "actor_ablation"}:
             _collect(config, bundle, actor_calls, artifacts, config.episodes, "frozen")

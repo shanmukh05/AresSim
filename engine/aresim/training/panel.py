@@ -2,8 +2,11 @@
 
 The panel generates episode identities from a seed manifest, scores each checkpoint
 with :func:`aresim.training.evaluation.evaluate_episodes`, and writes the raw rows
-before the aggregate bars and the shared action-path figure. Each policy keeps its
+before the aggregate bars, the shared action-path figure, the action-share /
+step-reward figure, and one visit heatmap per policy. Each policy keeps its
 frozen environment. Shaped return therefore follows that checkpoint's reward profile.
+``baselines: true`` also scores Wait, Random-valid, and Scripted in the first
+checkpoint's frozen environment.
 
 **Contains:** :func:`load_panel`, :func:`generate_episodes`, :func:`run_panel`.
 """
@@ -15,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from statistics import fmean, pstdev
 
-from .evaluation import evaluate_episodes
+from .evaluation import evaluate_agent, evaluate_episodes
 from .experiments import parse_experiment
 from .provenance import environment_config, verify_provenance
 from .runner import EpisodeSpec
@@ -35,8 +38,15 @@ _METRICS = (
 )
 _PANEL_FIELDS = {
     "schema_version", "output", "seed_manifest", "split", "episode_count", "action_mode", "workers",
-    "allow_environment_mismatch", "checkpoints",
+    "allow_environment_mismatch", "checkpoints", "baselines",
 }
+_BASELINE_LABELS = {
+    "wait": "Wait",
+    "random": "Random",
+    "random_valid": "Random-valid",
+    "scripted": "Scripted",
+}
+_DEFAULT_BASELINES = ("wait", "random_valid", "scripted")
 _CHECKPOINT_FIELDS = {"name", "path"}
 _REWARD_FIELDS = ("samples_collected", "time_cost", "ice_collected", "ice_delivered", "samples_delivered", "mission_success")
 
@@ -61,6 +71,7 @@ class PanelSpec:
     allow_environment_mismatch: bool
     output: Path
     checkpoints: tuple[PanelCheckpoint, ...]
+    baselines: tuple[str, ...] = ()
 
 
 def load_panel(path: str | Path) -> PanelSpec:
@@ -94,8 +105,12 @@ def load_panel(path: str | Path) -> PanelSpec:
     manifest = load_seed_manifest(payload["seed_manifest"])
     if episode_count > len(getattr(manifest, split)):
         raise ValueError("episode_count exceeds the selected seed split")
+    baselines = _baselines(payload.get("baselines", False))
+    if baselines and not checkpoints:
+        raise ValueError("baselines need a checkpoint whose frozen environment they can play")
     return PanelSpec(
-        str(payload["seed_manifest"]), split, episode_count, action_mode, workers, allow_mismatch, output, checkpoints)
+        str(payload["seed_manifest"]), split, episode_count, action_mode, workers, allow_mismatch, output,
+        checkpoints, baselines)
 
 
 def generate_episodes(spec: PanelSpec) -> tuple[EpisodeSpec, ...]:
@@ -121,13 +136,54 @@ def run_panel(config: str | Path | PanelSpec) -> Path:
         item_rows = [_episode_record(item, _checkpoint_context(item.path), row) for row in evaluated]
         _append_jsonl(spec.output / "episodes.jsonl", item_rows)
         rows.extend(item_rows)
+    if spec.baselines:
+        rows.extend(_score_baselines(spec, episodes))
     summary = _summarize(spec, episodes, rows)
     _write_json(spec.output / "summary.json", summary)
     _write_summary_csv(spec.output / "summary.csv", summary)
     figure_dir = spec.output / "figures"
     _write_figures(figure_dir, summary)
     _write_action_paths(figure_dir / "action_paths.png", rows)
+    _write_action_rewards(figure_dir / "action_rewards.png", rows)
+    _write_path_heatmaps(figure_dir / "path_heatmaps.png", rows)
     return spec.output
+
+
+def _baselines(value: object) -> tuple[str, ...]:
+    if value is None or value is False:
+        return ()
+    if value is True:
+        names = _DEFAULT_BASELINES
+    elif isinstance(value, list) and value and all(isinstance(name, str) and name.strip() for name in value):
+        names = tuple(value)
+    else:
+        raise ValueError("baselines must be true or a non-empty list of baseline names")
+    unknown = [name for name in names if name not in _BASELINE_LABELS]
+    if unknown or len(set(names)) != len(names):
+        raise ValueError(f"unknown or duplicate baselines: {', '.join(names)}")
+    return names
+
+
+def _score_baselines(spec: PanelSpec, episodes: tuple[EpisodeSpec, ...]) -> list[dict[str, object]]:
+    """Play the built-in agents in the first checkpoint's frozen environment."""
+    reference = spec.checkpoints[0]
+    sidecar = json.loads(reference.path.read_text(encoding="utf-8"))
+    experiment = parse_experiment(sidecar["experiment"])
+    config = environment_config(experiment)
+    context = _checkpoint_context(reference.path)
+    rows = []
+    for agent in spec.baselines:
+        label = _BASELINE_LABELS[agent]
+        print(f"Panel {label}: {len(episodes)} {spec.action_mode} episodes", flush=True)
+        evaluated = evaluate_agent(agent, episodes, config, experiment.environment.max_episode_steps)
+        item_rows = []
+        for row in evaluated:
+            record = _episode_record(reference, context, row)
+            record.update(name=label, algorithm_id=agent, phase="baseline", checkpoint=agent, environment_steps=None)
+            item_rows.append(record)
+        _append_jsonl(spec.output / "episodes.jsonl", item_rows)
+        rows.extend(item_rows)
+    return rows
 
 
 def _invalid_count(value: object) -> bool:
@@ -213,6 +269,9 @@ def _episode_record(item: PanelCheckpoint, context: dict[str, object], row) -> d
         "extract_opportunities": row.extract_opportunities,
         "action_counts": row.action_counts,
         "actions": list(row.actions),
+        "action_shaped_sums": list(row.action_shaped_sums),
+        "positions": [list(point) for point in row.positions],
+        "map_size": row.map_size,
     }
 
 
@@ -231,6 +290,24 @@ def _summarize(spec: PanelSpec, episodes: tuple[EpisodeSpec, ...], rows: list[di
             "std": {key: pstdev(float(row[key]) for row in selected) for key, _title in _METRICS},
             "ending_reasons": _counts(selected, "ending_reason"),
         })
+    if spec.baselines:
+        reference = algorithms[0]
+        for agent in spec.baselines:
+            label = _BASELINE_LABELS[agent]
+            selected = [row for row in rows if row["name"] == label]
+            algorithms.append({
+                "name": label,
+                "checkpoint": agent,
+                "environment_comparable": reference["environment_comparable"],
+                "algorithm_id": agent,
+                "environment_steps": None,
+                "phase": "baseline",
+                "reward": reference["reward"],
+                "episode_count": len(selected),
+                "means": {key: fmean(float(row[key]) for row in selected) for key, _title in _METRICS},
+                "std": {key: pstdev(float(row[key]) for row in selected) for key, _title in _METRICS},
+                "ending_reasons": _counts(selected, "ending_reason"),
+            })
     profiles = [item["reward"] for item in algorithms]
     return {
         "schema_version": PANEL_SCHEMA,
@@ -347,6 +424,123 @@ def _write_action_paths(path: Path, rows: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(figure)
+
+
+def _write_action_rewards(path: Path, rows: list[dict[str, object]]) -> None:
+    """One figure: each action is a subplot of step share and mean shaped reward."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    names = list(dict.fromkeys(str(row["name"]) for row in rows))
+    shares = np.zeros((len(_ACTION_LABELS), len(names)))
+    rewards = np.full((len(_ACTION_LABELS), len(names)), np.nan)
+    for name_index, name in enumerate(names):
+        selected = [row for row in rows if row["name"] == name]
+        totals = np.zeros(len(_ACTION_LABELS))
+        summed = np.zeros(len(_ACTION_LABELS))
+        steps = 0
+        for row in selected:
+            actions = np.asarray(row["actions"], dtype=np.int16)
+            sums = np.asarray(row.get("action_shaped_sums") or [], dtype=np.float64)
+            if actions.size == 0 or sums.shape != (len(_ACTION_LABELS),):
+                continue
+            counts = np.bincount(actions, minlength=len(_ACTION_LABELS))[:len(_ACTION_LABELS)]
+            totals += counts
+            summed += sums
+            steps += int(actions.size)
+        if steps:
+            shares[:, name_index] = 100 * totals / steps
+            present = totals > 0
+            rewards[present, name_index] = summed[present] / totals[present]
+    figure, axes = plt.subplots(2, 5, figsize=(16, 7.4), constrained_layout=True)
+    positions = np.arange(len(names))
+    ticks = [_short_name(name) for name in names]
+    for action_id, label in enumerate(_ACTION_LABELS):
+        axis = axes.flat[action_id]
+        axis.barh(positions, shares[action_id], color="#4C78A8", height=0.62)
+        reward_axis = axis.twiny()
+        reward_axis.plot(rewards[action_id], positions, color="#E45756", marker="o", linewidth=1.4)
+        axis.set_title(label)
+        axis.set_yticks(positions, ticks if action_id % 5 == 0 else [])
+        axis.invert_yaxis()
+        axis.set_xlabel("step share (%)" if action_id >= 5 else "")
+        reward_axis.set_xlabel("mean shaped reward" if action_id < 5 else "")
+        axis.grid(axis="x", linestyle=":", alpha=0.5)
+    figure.suptitle("Action share (bars) and mean shaped reward (line) on steps that issued that action")
+    figure.legend(
+        [plt.Rectangle((0, 0), 1, 1, color="#4C78A8"), plt.Line2D([0], [0], color="#E45756", marker="o")],
+        ["step share", "mean shaped reward"],
+        loc="outside lower center", ncol=2, frameon=False,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=150)
+    plt.close(figure)
+
+
+def _write_path_heatmaps(path: Path, rows: list[dict[str, object]]) -> None:
+    """One figure: where each policy spent time, one heatmap per policy.
+
+    The color scale is shared and logarithmic. Subplots line up only when every
+    policy was scored on the same seeds and the same frozen world settings, so a
+    cell is the same place on a given seed. Policies with no recorded positions
+    are skipped.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    names = list(dict.fromkeys(str(row["name"]) for row in rows if row.get("positions")))
+    if not names:
+        return
+    size = max(int(row.get("map_size") or 0) for row in rows)
+    for row in rows:
+        for point in row.get("positions") or []:
+            size = max(size, int(point[0]) + 1, int(point[1]) + 1)
+    counts = {name: np.zeros((size, size), dtype=np.float64) for name in names}
+    for row in rows:
+        grid = counts.get(str(row["name"]))
+        if grid is None:
+            continue
+        for point in row.get("positions") or []:
+            x, y = int(point[0]), int(point[1])
+            grid[y, x] += 1
+    columns = 3 if len(names) > 3 else len(names)
+    grid_rows = (len(names) + columns - 1) // columns
+    figure, axes = plt.subplots(
+        grid_rows, columns, figsize=(4.2 * columns, 4.0 * grid_rows), squeeze=False, constrained_layout=True,
+    )
+    image = None
+    vmax = max(float(np.log1p(grid).max()) for grid in counts.values())
+    cmap = plt.get_cmap("magma").copy()
+    cmap.set_bad("#f4f4f4")
+    for index, name in enumerate(names):
+        axis = axes.flat[index]
+        shown = np.ma.masked_where(counts[name] == 0, np.log1p(counts[name]))
+        image = axis.imshow(shown, cmap=cmap, vmin=0, vmax=vmax, origin="upper", interpolation="nearest")
+        axis.set_title(_short_name(name))
+        axis.set_xticks([])
+        axis.set_yticks([])
+    for axis in axes.flat[len(names):]:
+        axis.axis("off")
+    figure.colorbar(image, ax=axes, fraction=0.03, pad=0.02, label="log(1 + steps in cell)")
+    figure.suptitle("Visit time on the same validation maps. North is up.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=150)
+    plt.close(figure)
+
+
+def _short_name(name: str) -> str:
+    return {
+        "Double Duelling DQN": "DQN",
+        "DreamerV3": "Dreamer",
+        "Plan2Explore": "P2E",
+        "Recurrent DQN": "RDQN",
+    }.get(name, name)
 
 
 def _action_mix(sequences: list[object], bins: int):

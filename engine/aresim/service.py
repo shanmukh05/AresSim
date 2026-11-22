@@ -15,9 +15,11 @@ snapshots are camelCase UI JSON from :mod:`aresim.integrations.ui`.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 import json
 import secrets
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -34,6 +36,8 @@ from .gameplay import (
 from .integrations.policy import (
     PolicyBridge,
     CHECKPOINT_ALGORITHMS,
+    default_checkpoints_payload,
+    is_deployed_mode,
     resolve_action_mode,
     PolicyError,
     policy_meta_from_result,
@@ -62,6 +66,7 @@ class AttachedPolicy:
     policy_id: str
     checkpoint_path: str | None
     action_mode: str | None = None
+    llm_controller: object | None = None
 
 
 @dataclass
@@ -75,39 +80,74 @@ class LiveSession:
     revision: int = 0
     pending_policy_request: str | None = None
     policy_needs_reset: bool = False
+    last_accessed: float = field(default_factory=time.monotonic)
+
+
+_MAX_SESSIONS = 64
+_MAX_REPLAYS = 32
+_SESSION_TTL_SECONDS = 7200.0
 
 
 class AresService:
-    """Session, action, save, and replay use cases. Mutations are serialized with a lock."""
+    """Multi-session live play and replay use cases with bounded LRU/TTL eviction."""
     def __init__(self, config: EngineConfig) -> None:
         config.validate()
         self.config = config
-        self._live: LiveSession | None = None
-        self._replay: ReplayCursor | None = None
+        self._sessions: OrderedDict[str, LiveSession] = OrderedDict()
+        self._replays: OrderedDict[str, tuple[ReplayCursor, float]] = OrderedDict()
         self._lock = threading.RLock()
 
+    def _evict_stale(self) -> None:
+        now = time.monotonic()
+        expired_sessions = [
+            sid for sid, sess in self._sessions.items()
+            if sess.pending_policy_request is None and now - sess.last_accessed > _SESSION_TTL_SECONDS
+        ]
+        for sid in expired_sessions:
+            self._invalidate_policy(self._sessions.pop(sid), "session_expired")
+        while len(self._sessions) >= _MAX_SESSIONS:
+            evict_id = next(
+                (sid for sid, sess in self._sessions.items() if sess.pending_policy_request is None),
+                None,
+            )
+            if evict_id is None:
+                break
+            self._invalidate_policy(self._sessions.pop(evict_id), "session_evicted")
+
+        expired_replays = [
+            rid for rid, (_, touched) in self._replays.items()
+            if now - touched > _SESSION_TTL_SECONDS
+        ]
+        for rid in expired_replays:
+            self._replays.pop(rid, None)
+        while len(self._replays) >= _MAX_REPLAYS:
+            self._replays.popitem(last=False)
+
     def start_session(self, seed: int | None = None) -> JsonObject:
-        """Replace the live session. Omit `seed` to draw one in the configured range."""
+        """Create and register a new isolated live session."""
         with self._lock:
             selected_seed = seed if seed is not None else secrets.randbelow(self.config.world.seed_max - self.config.world.seed_min + 1) + self.config.world.seed_min
             if selected_seed < self.config.world.seed_min or selected_seed > self.config.world.seed_max:
                 raise ServiceError("INVALID_SEED", f"Seed must be between {self.config.world.seed_min} and {self.config.world.seed_max}.", 400)
-            if self._live is not None:
-                self._invalidate_policy(self._live, "session_replaced")
+            self._evict_stale()
             engine = AresEngine(self.config)
             snapshot = snapshot_from_state(engine.reset(selected_seed), self.config)
-            self._live = LiveSession(
+            session = LiveSession(
                 engine,
                 TrajectoryRecorder.create(self.config.replay, snapshot),
                 policy=None,
                 policy_bridge=PolicyBridge.for_engine(self.config),
             )
+            self._sessions[engine.state.session_id] = session
             return snapshot
 
     def _session(self, session_id: str) -> LiveSession:
-        if self._live is None or self._live.engine.state.session_id != session_id:
+        session = self._sessions.get(session_id)
+        if session is None:
             raise ServiceError("SESSION_NOT_FOUND", "The requested session is not active.", 404)
-        return self._live
+        session.last_accessed = time.monotonic()
+        self._sessions.move_to_end(session_id)
+        return session
 
     def _invalidate_policy(self, session: LiveSession, reason: str) -> None:
         """Invalidate inference authority while leaving any already committed tick intact."""
@@ -122,6 +162,10 @@ class AresService:
         if not session.pending_policy_request and isinstance(agent, TransitionAwareAgent) and getattr(agent, "episode_open", True):
             agent.finish_episode({"transitions": getattr(agent, "step_index", 0), "terminated": False,
                                   "truncated": True, "ending_reason": reason})
+        if reason in {"policy_changed", "policy_detached", "session_replaced", "session_expired", "session_evicted"}:
+            close = getattr(session.policy.llm_controller, "close", None)
+            if callable(close):
+                close()
 
     def get_snapshot(self, session_id: str) -> JsonObject:
         """Return the current UI snapshot, or raise if this is not the active session."""
@@ -179,33 +223,71 @@ class AresService:
             )
 
     def list_policies(self) -> JsonObject:
-        """Return the built-in policy catalog and optional RLlib capability."""
+        """Return the built-in policy catalog, capabilities, best checkpoints, and LLM-DM catalog."""
         from .integrations.policy import POLICY_CATALOG, rllib_available, muzero_available, world_models_available, llm_dm_available
 
-        return {"policies": POLICY_CATALOG, "capabilities": {"rllib": rllib_available(), "muzero": muzero_available(), "world_models": world_models_available(), "llm_dm": llm_dm_available()}}
+        deployed = is_deployed_mode()
+        llm_catalog: dict[str, object] | None = None
+        if llm_dm_available():
+            from .algorithms.llm_dm.live import llm_dm_catalog
+
+            llm_catalog = llm_dm_catalog(deployed=deployed)
+        return {
+            "policies": POLICY_CATALOG,
+            "deployed": deployed,
+            "defaultCheckpoints": default_checkpoints_payload(deployed=deployed),
+            "llmDmCatalog": llm_catalog,
+            "capabilities": {
+                "rllib": rllib_available(),
+                "muzero": muzero_available(),
+                "world_models": world_models_available(),
+                "llm_dm": llm_dm_available(),
+            },
+        }
 
     def validate_checkpoint(self, checkpoint_path: str) -> JsonObject:
         """Validate one checkpoint sidecar without attaching it."""
         return validate_checkpoint_path(checkpoint_path)
 
-    def attach_policy(self, session_id: str, algorithm_id: str, checkpoint_path: str | None = None, *, action_mode: str | None = None) -> JsonObject:
-        """Bind one baseline or checkpoint policy to the active session."""
+    def attach_policy(
+        self,
+        session_id: str,
+        algorithm_id: str,
+        checkpoint_path: str | None = None,
+        *,
+        action_mode: str | None = None,
+        llm_dm_config: dict[str, object] | None = None,
+    ) -> JsonObject:
+        """Bind one baseline, checkpoint, or live LLM-DM policy to the active session."""
         with self._lock:
             session = self._session(session_id)
+            deployed = is_deployed_mode()
             try:
-                mode = resolve_action_mode(algorithm_id, action_mode) if algorithm_id in CHECKPOINT_ALGORITHMS else None
-                agent, policy_id, resolved_path = resolve_agent(algorithm_id, checkpoint_path, action_mode=mode)
+                default_mode = "deterministic" if deployed else None
+                mode = (
+                    resolve_action_mode(algorithm_id, action_mode or default_mode)
+                    if algorithm_id in CHECKPOINT_ALGORITHMS
+                    else None
+                )
+                agent, policy_id, resolved_path, llm_controller = resolve_agent(
+                    algorithm_id,
+                    checkpoint_path,
+                    action_mode=mode,
+                    llm_dm_config=llm_dm_config,
+                    deployed=deployed,
+                )
             except PolicyError as error:
                 raise _policy_service_error(error) from error
             current = session.policy
             if (current is not None and current.algorithm_id == algorithm_id
+                    and algorithm_id != "llm_dm"
                     and current.checkpoint_path == resolved_path and current.action_mode != mode):
                 # Changing action selection must preserve discovered-cell memory,
                 # MuZero history and the live agent's sampling RNG.
                 current.agent.deterministic = mode == "deterministic"
                 current.action_mode = mode
                 return {"algorithmId": algorithm_id, "policyId": current.policy_id,
-                        "checkpointPath": resolved_path, "actionMode": mode}
+                        "checkpointPath": None if deployed else resolved_path, "actionMode": mode}
             self._invalidate_policy(session, "policy_changed")
             agent.reset(session.engine.state.seed)
             session.policy = AttachedPolicy(
@@ -214,10 +296,19 @@ class AresService:
                 policy_id=policy_id,
                 checkpoint_path=resolved_path,
                 action_mode=mode,
+                llm_controller=llm_controller,
             )
             session.policy_events.clear()
             session.policy_bridge = PolicyBridge.for_engine(self.config)
-            return {"algorithmId": algorithm_id, "policyId": policy_id, "checkpointPath": resolved_path, "actionMode": mode}
+            response: JsonObject = {
+                "algorithmId": algorithm_id,
+                "policyId": policy_id,
+                "checkpointPath": None if deployed else resolved_path,
+                "actionMode": mode,
+            }
+            if llm_controller is not None:
+                response["llmDm"] = llm_controller.attach_meta()
+            return response
 
     def detach_policy(self, session_id: str) -> JsonObject:
         """Remove any policy bound to the active session."""
@@ -226,6 +317,28 @@ class AresService:
             self._invalidate_policy(session, "policy_detached")
             session.policy = None
             return {"detached": True}
+
+    def llm_learn(self, session_id: str) -> JsonObject:
+        """Run one on-demand Learner reflection over the active LLM-DM episode."""
+        with self._lock:
+            session = self._session(session_id)
+            if session.policy is None or session.policy.llm_controller is None:
+                raise ServiceError("POLICY_NOT_ATTACHED", "Attach an LLM + Decision Model policy before generating learnings.", 400)
+            if session.pending_policy_request is not None:
+                raise ServiceError("POLICY_BUSY", "Wait for the in-flight policy decision to finish before learning.", 409)
+            controller = session.policy.llm_controller
+            request_id = secrets.token_hex(16)
+            session.pending_policy_request = request_id
+        try:
+            return controller.reflect_and_learn()
+        except EpisodeStop as error:
+            raise ServiceError("LLM_LEARN_FAILED", f"Learner stopped: {error.reason}", 409) from error
+        except ValueError as error:
+            raise ServiceError("LLM_LEARN_FAILED", str(error), 400) from error
+        finally:
+            with self._lock:
+                if session.pending_policy_request == request_id:
+                    session.pending_policy_request = None
 
     def agent_step(self, session_id: str) -> JsonObject:
         """Infer outside the session lock, then commit only if the captured revision is current."""
@@ -254,7 +367,7 @@ class AresService:
         try:
             action = int(agent.act(observation, mask))
             with self._lock:
-                if self._live is not session or session.revision != revision or session.policy is not attached:
+                if self._sessions.get(session_id) is not session or session.revision != revision or session.policy is not attached:
                     raise EpisodeStop("cancelled")
                 before = snapshot_from_state(session.engine.state, self.config)
                 result = bridge.commit(session.engine, agent, action, mask, algorithm_id=attached.algorithm_id)
@@ -266,6 +379,10 @@ class AresService:
                 if after["step"] != before["step"]:
                     session.recorder.record(before, after)
                 meta = policy_meta_from_result(result)
+                if attached.llm_controller is not None:
+                    meta["llmDm"] = attached.llm_controller.step_meta(
+                        meta.get("llmDm") if isinstance(meta.get("llmDm"), dict) else None
+                    )
                 if attached.action_mode is not None:
                     meta["actionMode"] = attached.action_mode
                 return {"snapshot": after, "policyMeta": meta}
@@ -296,15 +413,19 @@ class AresService:
         except ValueError as error:
             raise ServiceError("INVALID_GAMEPLAY", str(error), 400) from error
         with self._lock:
-            if self._live is not None:
-                self._invalidate_policy(self._live, "replay_loaded")
-            self._replay = ReplayCursor.create(gameplay, file_name)
-            return self._replay
+            self._evict_stale()
+            cursor = ReplayCursor.create(gameplay, file_name)
+            self._replays[cursor.replay_id] = (cursor, time.monotonic())
+            return cursor
 
     def _active_replay(self, replay_id: str) -> ReplayCursor:
-        if self._replay is None or self._replay.replay_id != replay_id:
+        entry = self._replays.get(replay_id)
+        if entry is None:
             raise ServiceError("REPLAY_NOT_FOUND", "The requested replay is not active.", 404)
-        return self._replay
+        cursor, _ = entry
+        self._replays[replay_id] = (cursor, time.monotonic())
+        self._replays.move_to_end(replay_id)
+        return cursor
 
     def step_replay(self, replay_id: str) -> ReplayCursor:
         """Advance the loaded replay one recorded step."""

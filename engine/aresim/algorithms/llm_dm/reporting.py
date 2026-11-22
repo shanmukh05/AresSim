@@ -120,7 +120,8 @@ def render_summary(
         lines.append(
             f"{failure['role'].title()} input: conservative reservation {failure['estimated_input_tokens']:,} "
             f"exceeded max_input_tokens={failure['max_input_tokens']:,}; "
-            f"system {failure['system_bytes']:,} bytes + packet {failure['packet_bytes']:,} bytes + 1,024 overhead. "
+            f"system {failure['system_bytes']:,} bytes + packet {failure['packet_bytes']:,} bytes "
+            f"+ schema {failure.get('schema_bytes', 0):,} bytes + 1,024 overhead. "
             "This is a local input allowance, not provider-reported tokens or a spending limit."
         )
     imported = manifest.get("imported_learnings", {})

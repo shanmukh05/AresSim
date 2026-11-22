@@ -8,7 +8,7 @@ rollouts run in a CPU process pool (not training EnvRunners).
 
 **Last updated:** November 8, 2026
 
-**Contains:** :func:`evaluate_checkpoint`, :func:`evaluate_episodes`.
+**Contains:** :func:`evaluate_checkpoint`, :func:`evaluate_episodes`, :func:`evaluate_agent`.
 
 **Inputs:** RLlib checkpoint sidecar JSON, seed manifest YAML, experiment provenance.
 
@@ -81,6 +81,9 @@ class _EvalRow:
     samples_delivered: float = 0.0
     action_counts: dict[str, int] = field(default_factory=dict)
     actions: tuple[int, ...] = ()
+    action_shaped_sums: tuple[float, ...] = ()
+    positions: tuple[tuple[int, int], ...] = ()
+    map_size: int = 0
     extract_opportunities: int = 0
     action_mode: str = "deterministic"
 
@@ -268,8 +271,18 @@ def _summary_episode(agent, episode: EpisodeSpec, config, max_steps: int, regist
     sparse_return = 0.0
     action_counts = {}
     chosen_actions: list[int] = []
+    action_shaped_sums = [0.0] * 10
     extract_opportunities = 0
+    world = environment.world_state
+    map_size = int(world.terrain_width)
+    positions: list[tuple[int, int]] = []
+
+    def cell(state) -> tuple[int, int]:
+        rover = state.rovers[0]
+        return int(rover.x), int(rover.y)
+
     while True:
+        positions.append(cell(environment.world_state))
         action = policy.act(deepcopy(observation), mask.copy())
         chosen_actions.append(int(action))
         if not environment.action_space.contains(action):
@@ -279,11 +292,16 @@ def _summary_episode(agent, episode: EpisodeSpec, config, max_steps: int, regist
         name = result.info["effective_action"]
         action_counts[name] = action_counts.get(name, 0) + 1
         length += 1
-        shaped_rewards.append(float(result.reward))
+        shaped_reward = float(result.reward)
+        shaped_rewards.append(shaped_reward)
+        action_shaped_sums[int(action)] += shaped_reward
         engine_rewards.append(float(result.transition.reward))
         for name in {"mission_success", "terminal_failure", "invalid_action"}:
             sparse_return += result.reward_breakdown.terms[name].value
         if result.terminated or result.truncated:
+            landed = cell(result.transition.state)
+            if landed != positions[-1]:
+                positions.append(landed)
             return _EvalRow(
                 policy_id=policy.policy_id,
                 episode_id=episode.episode_id,
@@ -301,7 +319,9 @@ def _summary_episode(agent, episode: EpisodeSpec, config, max_steps: int, regist
                 ice_delivered=result.transition.state.objective_stats.ice_delivered,
                 samples_collected=result.transition.state.objective_stats.samples_collected,
                 samples_delivered=result.transition.state.objective_stats.samples_delivered,
-                action_counts=action_counts, actions=tuple(chosen_actions), extract_opportunities=extract_opportunities,
+                action_counts=action_counts, actions=tuple(chosen_actions),
+                action_shaped_sums=tuple(action_shaped_sums), positions=tuple(positions),
+                map_size=map_size, extract_opportunities=extract_opportunities,
                 action_mode="stochastic" if not getattr(policy, "deterministic", True) else "deterministic",
             )
         observation, mask = result.observation, result.action_mask
@@ -521,6 +541,13 @@ def evaluate_checkpoint(
     return destination
 
 
+def evaluate_agent(agent: str, episodes: tuple[EpisodeSpec, ...], config, max_episode_steps: int) -> list[_EvalRow]:
+    """Score one registered baseline on caller-supplied worlds and a frozen environment."""
+    if not episodes:
+        raise ValueError("evaluation requires at least one episode")
+    return [_summary_episode(agent, episode, config, max_episode_steps) for episode in episodes]
+
+
 def evaluate_episodes(
     checkpoint: str | Path,
     episodes: tuple[EpisodeSpec, ...],
@@ -555,4 +582,4 @@ def evaluate_episodes(
         checkpoint_path, spec, selected, config, "panel", deterministic, workers)
 
 
-__all__ = ["evaluate_checkpoint", "evaluate_episodes"]
+__all__ = ["evaluate_agent", "evaluate_checkpoint", "evaluate_episodes"]

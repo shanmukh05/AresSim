@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { Activity, AlertTriangle, PanelRightClose, Satellite, Target } from "lucide-react";
+import { Activity, AlertTriangle, PanelRightClose, RotateCcw, Satellite, Shuffle, Sparkles, Target } from "lucide-react";
 import { TopStatusRibbon } from "./components/TopStatusRibbon";
 import { MissionRail, AlertsSection } from "./components/MissionRail";
 import { GameViewport } from "./components/GameViewport";
@@ -15,9 +15,29 @@ import { AgentHistoryPanel } from "./components/AgentHistoryPanel";
 import { GameInfoModal } from "./components/GameInfoModal";
 import { AnalyticsModal } from "./components/analytics/AnalyticsModal";
 import { AlertHud, MissionHud, SelectionHud } from "./components/WorldHud";
+import { ManualControlsPanel } from "./components/ManualControlsPanel";
+import { LlmChatPanel } from "./components/LlmChatPanel";
+import { LlmDmConfigModal } from "./components/AgentSettingsPanel";
 import { useAresStore } from "./state/useAresStore";
 import { useSimulationAudio } from "./audio/useSimulationAudio";
-import { movementDeltaForArrow } from "./lib/cameraControls";
+import { movementDeltaForArrow, type MovementArrow } from "./lib/cameraControls";
+import type { ActionType } from "./types/sim";
+
+const WASD_TO_ARROW: Record<string, MovementArrow> = {
+  w: "ArrowUp",
+  s: "ArrowDown",
+  a: "ArrowLeft",
+  d: "ArrowRight",
+};
+
+const MANUAL_ACTION_HOTKEYS: Record<string, ActionType> = {
+  e: "scan",
+  x: "extract",
+  b: "build",
+  r: "service",
+  u: "unload",
+  " ": "wait",
+};
 
 type Drawer = "mission" | "alerts" | "inspector" | "history" | null;
 
@@ -31,6 +51,19 @@ function App() {
   const backendBusy = useAresStore((state) => state.backendBusy);
   const retryBackend = useAresStore((state) => state.retryBackend);
   const moveRover = useAresStore((state) => state.moveRover);
+  const dispatchAction = useAresStore((state) => state.dispatchAction);
+  const resetCurrentRun = useAresStore((state) => state.resetCurrentRun);
+  const randomize = useAresStore((state) => state.randomize);
+  const runMode = useAresStore((state) => state.runMode);
+  const algorithmId = useAresStore((state) => state.algorithmId);
+  const manualControlsOpen = useAresStore((state) => state.manualControlsOpen);
+  const setManualControlsOpen = useAresStore((state) => state.setManualControlsOpen);
+  const llmFeedOpen = useAresStore((state) => state.llmFeedOpen);
+  const setLlmFeedOpen = useAresStore((state) => state.setLlmFeedOpen);
+  const llmConfigOpen = useAresStore((state) => state.llmConfigOpen);
+  const setLlmConfigOpen = useAresStore((state) => state.setLlmConfigOpen);
+  const llmLearnerConfigured = useAresStore((state) => state.llmLearnerConfigured);
+  const runLlmLearn = useAresStore((state) => state.runLlmLearn);
   const cameraView = useAresStore((state) => state.cameraView);
   const roverCameraYaw = useAresStore((state) => state.roverCameraYaw);
   const actionWarning = useAresStore((state) => state.actionWarning);
@@ -42,17 +75,30 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (infoOpen || drawer) return;
+      if (infoOpen || drawer || analyticsOpen || llmConfigOpen) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
-      const delta = movementDeltaForArrow(event.key, cameraView, roverCameraYaw);
-      if (!delta) return;
-      event.preventDefault();
-      moveRover(delta[0], delta[1]);
+      const lower = event.key.toLowerCase();
+      const arrowKey = WASD_TO_ARROW[lower] ?? event.key;
+      const delta = movementDeltaForArrow(arrowKey, cameraView, roverCameraYaw);
+      if (delta) {
+        if (runMode !== "manual" && arrowKey !== event.key) return;
+        event.preventDefault();
+        void moveRover(delta[0], delta[1]);
+        return;
+      }
+      if (runMode === "manual") {
+        const mappedAction = MANUAL_ACTION_HOTKEYS[lower];
+        if (mappedAction) {
+          event.preventDefault();
+          void dispatchAction({ type: mappedAction });
+        }
+      }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [cameraView, drawer, infoOpen, moveRover, roverCameraYaw]);
+  }, [analyticsOpen, cameraView, dispatchAction, drawer, infoOpen, llmConfigOpen, moveRover, roverCameraYaw, runMode]);
 
   useEffect(() => {
     if (!actionWarning || actionWarning.kind === "terminal") return;
@@ -85,6 +131,22 @@ function App() {
             <div className="pointer-events-auto"><AlertHud onOpen={() => setDrawer("alerts")} /></div>
           </div>
 
+          <div className="pointer-events-none absolute bottom-4 left-4 z-30 max-md:bottom-3 max-md:left-3">
+            {runMode === "manual" && manualControlsOpen ? (
+              <div className="pointer-events-auto">
+                <ManualControlsPanel onClose={() => setManualControlsOpen(false)} />
+              </div>
+            ) : null}
+            {runMode === "algorithm" && algorithmId === "llm_dm" && llmFeedOpen ? (
+              <div className="pointer-events-auto">
+                <LlmChatPanel
+                  onClose={() => setLlmFeedOpen(false)}
+                  onOpenConfig={() => setLlmConfigOpen(true)}
+                />
+              </div>
+            ) : null}
+          </div>
+
           <div className="pointer-events-none absolute bottom-4 right-4 z-30 max-md:hidden">
             <div className="pointer-events-auto"><SelectionHud onOpen={() => setDrawer("inspector")} /></div>
           </div>
@@ -93,6 +155,36 @@ function App() {
             <div className={`absolute left-1/2 top-4 z-40 w-[min(520px,calc(100%-2rem))] -translate-x-1/2 rounded-xl border px-4 py-3 text-sm shadow-2xl backdrop-blur-xl ${warningClass(actionWarning.kind)}`} role="alert">
               <div className="text-[9px] font-bold uppercase tracking-[0.18em] opacity-70">{actionWarning.title}</div>
               <div className="mt-1 text-xs">{actionWarning.message}</div>
+              {actionWarning.kind === "terminal" ? (
+                <div className="mt-2.5 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void resetCurrentRun()}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-white/20 bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-white/20"
+                  >
+                    <RotateCcw size={12} />
+                    Play Again
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void randomize()}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-white/15 bg-black/30 px-2.5 py-1 text-[11px] font-semibold text-stone-200 transition hover:bg-white/10"
+                  >
+                    <Shuffle size={12} />
+                    New World
+                  </button>
+                  {runMode === "algorithm" && algorithmId === "llm_dm" && llmLearnerConfigured ? (
+                    <button
+                      type="button"
+                      onClick={() => void runLlmLearn()}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2.5 py-1 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-500/30"
+                    >
+                      <Sparkles size={12} />
+                      Reflect & Learn
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -103,6 +195,7 @@ function App() {
 
         <GameInfoModal open={infoOpen} onOpenChange={setInfoOpen} />
         <AnalyticsModal open={analyticsOpen} onOpenChange={setAnalyticsOpen} />
+        <LlmDmConfigModal open={llmConfigOpen} onOpenChange={setLlmConfigOpen} />
       </main>
     </Tooltip.Provider>
   );
