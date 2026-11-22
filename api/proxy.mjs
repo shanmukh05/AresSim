@@ -8,12 +8,18 @@ const ALLOWED_PATH = /^\/api\/(health|policies(\/validate-checkpoint)?|sessions(
 
 function resolveApiPath(req) {
   const raw = req.query?.path;
-  const segments = Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : [];
-  if (segments.length > 0) {
-    return `/api/${segments.join("/")}`;
+  if (Array.isArray(raw) && raw.length > 0) {
+    return `/api/${raw.join("/").replace(/^\/+/, "")}`;
   }
-  const pathname = new URL(req.url || "/", "http://localhost").pathname;
-  return pathname.replace(/^\/aressim(?=\/api\/)/, "");
+  if (typeof raw === "string" && raw.trim()) {
+    return `/api/${raw.trim().replace(/^\/+/, "")}`;
+  }
+  const url = new URL(req.url || "/", "http://localhost");
+  const fromQuery = url.searchParams.get("path");
+  if (fromQuery) {
+    return `/api/${fromQuery.replace(/^\/+/, "")}`;
+  }
+  return url.pathname.replace(/^\/aressim(?=\/api\/)/, "");
 }
 
 export default async function handler(req, res) {
@@ -35,7 +41,7 @@ export default async function handler(req, res) {
 
   const apiPath = resolveApiPath(req);
   if (!ALLOWED_PATH.test(apiPath)) {
-    return res.status(404).json({ error: { code: "NOT_FOUND", message: "Unknown AresSim API endpoint." } });
+    return res.status(404).json({ error: { code: "NOT_FOUND", message: `Unknown AresSim API endpoint: ${apiPath}` } });
   }
 
   let body;

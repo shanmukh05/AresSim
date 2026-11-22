@@ -128,7 +128,7 @@ The hosted app at **[tensorwrites.com/aressim](https://www.tensorwrites.com/ares
 flowchart LR
   user[User Browser] --> blog[TensorWrites Blog<br/>/aressim rewrite]
   blog --> ui[Vercel UI<br/>web/dist · VITE_DEPLOYED=true]
-  ui --> proxy[Vercel Proxy<br/>api/&#91;...path&#93;.mjs]
+  ui --> proxy[Vercel Proxy<br/>api/proxy.mjs]
   proxy -->|Modal-Key + Modal-Secret| modal[Modal T4 GPU<br/>FastAPI + 6 RL Models + LLM-DM]
   hf[Hugging Face Hub<br/>6 Best Checkpoints] -.->|synced once| vol[(Modal Volume<br/>/checkpoints)]
   vol --> modal
@@ -143,7 +143,7 @@ Editable Draw.io diagram: [docs/assets/deployment_architecture.drawio](docs/asse
   modal run modal_app.py::sync_checkpoints     # Sync HF checkpoints into Modal Volume
   modal deploy modal_app.py                    # Deploy locked T4 ASGI endpoint
   ```
-- **Vercel frontend & proxy ([vercel.json](vercel.json), [api/[...path].mjs](api/%5B...path%5D.mjs)):** Set `VITE_DEPLOYED=true`, `ARESSIM_MODAL_URL`, `ARESSIM_MODAL_KEY`, and `ARESSIM_MODAL_SECRET` in Vercel environment variables.
+- **Vercel frontend & proxy ([vercel.json](vercel.json), [api/proxy.mjs](api/proxy.mjs)):** Set `VITE_DEPLOYED=true`, `ARESSIM_MODAL_URL`, `ARESSIM_MODAL_KEY`, and `ARESSIM_MODAL_SECRET` in Vercel environment variables.
 
 ---
 
@@ -153,7 +153,7 @@ Editable Draw.io diagram: [docs/assets/deployment_architecture.drawio](docs/asse
 | --- | --- |
 | [`engine/`](engine/) | Deterministic core, FastAPI REST API, Gym/PettingZoo adapters, RL & LLM-DM algorithms |
 | [`web/`](web/) | React 19 + Three.js (R3F) + Tailwind v4 UI (presentation only, no gameplay rules) |
-| [`api/`](api/) | Vercel serverless proxy (`api/[...path].mjs`) injecting Modal Proxy Auth headers |
+| [`api/`](api/) | Vercel serverless proxy (`api/proxy.mjs`) injecting Modal Proxy Auth headers |
 | [`configs/`](configs/) | Typed YAML experiment & evaluation configs (`masked_ppo`, `masked_dqn`, `recurrent_dqn`, `muzero`, `dreamerv3`, `plan2explore`, `llm_dm`) |
 | [`scripts/`](scripts/) | Cloud training helpers, evaluation scripts, and Hugging Face checkpoint uploader |
 | [`modal_app.py`](modal_app.py) | Modal T4 GPU deployment and Hugging Face → Modal Volume checkpoint sync |

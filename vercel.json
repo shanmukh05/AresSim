@@ -5,10 +5,11 @@
   "buildCommand": "cd web && VITE_DEPLOYED=true npm run build",
   "outputDirectory": "web/dist",
   "functions": {
-    "api/[...path].mjs": { "maxDuration": 60 }
+    "api/proxy.mjs": { "maxDuration": 60 }
   },
   "rewrites": [
-    { "source": "/aressim/api/:path*", "destination": "/api/:path*" },
+    { "source": "/aressim/api/:path*", "destination": "/api/proxy?path=:path*" },
+    { "source": "/api/:path*", "destination": "/api/proxy?path=:path*" },
     { "source": "/aressim/assets/:path*", "destination": "/assets/:path*" },
     { "source": "/aressim/logo.png", "destination": "/logo.png" },
     { "source": "/aressim", "destination": "/index.html" },

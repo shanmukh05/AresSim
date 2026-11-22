@@ -268,7 +268,25 @@ export const useAresStore = create<AresStore>((set, get) => {
     backendRequests += 1;
     set({ backendBusy: true, backendError: null });
     try {
-      const value = await operation();
+      let value: T;
+      try {
+        value = await operation();
+      } catch (error) {
+        // Recover transparently if Modal scaled to zero and dropped in-memory session state.
+        const currentSnapshot = get().snapshot;
+        if (error instanceof AresApiError && error.code === "SESSION_NOT_FOUND" && currentSnapshot) {
+          const fresh = await client.startSession({ seed: currentSnapshot.seed });
+          set({
+            snapshot: fresh,
+            policyAttachKey: null,
+            policyEpisodeDone: false,
+            analyticsSeries: buildInitialSeries(fresh),
+          });
+          value = await operation();
+        } else {
+          throw error;
+        }
+      }
       if (revision === policyRevision) apply(value);
     } catch (error) {
       if (revision !== policyRevision) return;
