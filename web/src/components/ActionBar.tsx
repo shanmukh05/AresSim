@@ -113,7 +113,7 @@ export function ActionBar() {
     let timer: number | undefined;
     const schedule = () => {
       timer = window.setTimeout(async () => {
-        await useAresStore.getState().step();
+        await useAresStore.getState().stepAutoplay();
         if (!cancelled) schedule();
       }, PLAY_INTERVAL_MS / Math.max(1, speed));
     };

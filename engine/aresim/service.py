@@ -398,6 +398,25 @@ class AresService:
                 if session.pending_policy_request == request_id:
                     session.pending_policy_request = None
 
+    def agent_steps(self, session_id: str, count: int = 10) -> JsonObject:
+        """Advance up to `count` policy steps in one round-trip for smooth remote autoplay."""
+        bounded = max(1, min(20, int(count)))
+        with self._lock:
+            session = self._session(session_id)
+            if session.policy is None:
+                raise ServiceError("POLICY_NOT_ATTACHED", "Attach a policy before running agent steps.", 400)
+            if session.policy.algorithm_id == "llm_dm":
+                bounded = 1
+        results: list[JsonObject] = []
+        for _ in range(bounded):
+            step_result = self.agent_step(session_id)
+            results.append(step_result)
+            snapshot = step_result["snapshot"]
+            meta = step_result["policyMeta"]
+            if snapshot.get("gameStatus") != "running" or meta.get("episodeDone") is True:
+                break
+        return {"steps": results}
+
     def load_replay(self, file_name: str, content: str) -> ReplayCursor:
         """Parse, normalize, and replace the in-memory replay. Rejects oversized uploads."""
         if len(content.encode("utf-8")) > self.config.replay.max_upload_bytes:

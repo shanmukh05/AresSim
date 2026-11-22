@@ -4,7 +4,7 @@
  * Keeps `Modal-Key` and `Modal-Secret` strictly server-side in Vercel env vars.
  */
 
-const ALLOWED_PATH = /^\/api\/(health|policies(\/validate-checkpoint)?|sessions(\/[A-Za-z0-9_-]+(\/(actions|pause|resume|save|attach-policy|detach-policy|agent-step|llm-learn))?)?|replays(\/[A-Za-z0-9_-]+\/(step|jump|reset))?)$/;
+const ALLOWED_PATH = /^\/api\/(health|policies(\/validate-checkpoint)?|sessions(\/[A-Za-z0-9_-]+(\/(actions|pause|resume|save|attach-policy|detach-policy|agent-step|agent-steps|llm-learn))?)?|replays(\/[A-Za-z0-9_-]+\/(step|jump|reset))?)$/;
 
 function resolveApiPath(req) {
   const raw = req.query?.path;

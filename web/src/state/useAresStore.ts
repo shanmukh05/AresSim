@@ -9,7 +9,7 @@ import { AresApiClient, AresApiError, type ReplayResponse } from "../api/aresCli
 import { BUILD_DEPLOYED } from "../lib/deployConfig";
 import { downloadTrajectoryFile } from "../lib/trajectoryFile";
 import { payloadUsedKg } from "../lib/payload";
-import type { ActionType, AresReplayProjectionV1, AlgorithmId, AnalyticsSeriesPoint, CameraView, LlmDmAttachPayload, LlmDmCatalog, LlmDmStepMeta, LlmFeedMessage, LlmGoalSummary, LlmLearningStatement, LoadedReplay, OverlayMode, PolicyActionMode, RunMode, SelectionTarget, SimAction, SimSnapshot, SimWarning, ViewportZoomMode } from "../types/sim";
+import type { ActionType, AgentStepResponse, AresReplayProjectionV1, AlgorithmId, AnalyticsSeriesPoint, CameraView, LlmDmAttachPayload, LlmDmCatalog, LlmDmStepMeta, LlmFeedMessage, LlmGoalSummary, LlmLearningStatement, LoadedReplay, OverlayMode, PolicyActionMode, RunMode, SelectionTarget, SimAction, SimSnapshot, SimWarning, ViewportZoomMode } from "../types/sim";
 import { supportsActionSampling, usesCheckpoint } from "../types/sim";
 
 const client = new AresApiClient();
@@ -210,6 +210,7 @@ interface AresStore {
   resetCurrentRun: () => Promise<void>;
   resetReplay: () => Promise<void>;
   step: () => Promise<void>;
+  stepAutoplay: () => Promise<void>;
   dispatchAction: (action: SimAction) => Promise<void>;
   moveRover: (dx: number, dy: number) => Promise<void>;
   clearActionWarning: () => void;
@@ -250,9 +251,99 @@ export const useAresStore = create<AresStore>((set, get) => {
   let backendRequests = 0;
   let policyRevision = 0;
   let policyDetach = Promise.resolve();
+  let stepQueue: AgentStepResponse[] = [];
+  let prefetchPromise: Promise<void> | null = null;
+
+  const clearStepQueue = () => {
+    stepQueue = [];
+    prefetchPromise = null;
+  };
+
+  const applyAgentStepResponse = (response: AgentStepResponse): boolean => {
+    const llmMeta = response.policyMeta.llmDm;
+    const appendedFeed = llmMeta ? messagesFromLlmStep(response.snapshot.step, llmMeta) : [];
+    const shouldAutoLearn = Boolean(
+      response.policyMeta.episodeDone &&
+      get().algorithmId === "llm_dm" &&
+      get().llmAutoLearn &&
+      llmMeta?.learnerConfigured,
+    );
+    set((current) => ({
+      snapshot: response.snapshot,
+      policyEpisodeDone: response.policyMeta.episodeDone === true,
+      llmCurrentGoal: llmMeta?.goal ?? current.llmCurrentGoal,
+      llmLastAppliedIds: (llmMeta?.applied_advice ?? []).map((item) => item.id),
+      llmLearnerConfigured: llmMeta?.learnerConfigured ?? current.llmLearnerConfigured,
+      llmLearnings: llmMeta?.learnings ?? current.llmLearnings,
+      llmFeed: appendedFeed.length ? [...current.llmFeed, ...appendedFeed].slice(-160) : current.llmFeed,
+      actionWarning: response.policyMeta.episodeDone ? {
+        id: response.snapshot.step, kind: "progress", title: "Policy episode complete",
+        message: `${response.policyMeta.endingReason ?? "Episode ended"}. Reset the game to start another episode.`, severity: "success",
+      } : warningFromSnapshot(response.snapshot),
+      analyticsSeries: appendSeriesPoint(current.analyticsSeries, response.snapshot),
+    }));
+    return shouldAutoLearn;
+  };
+
+  /** Fast-forward UI state through any buffered steps so it matches the backend before saving or switching modes. */
+  const flushStepQueue = () => {
+    if (stepQueue.length === 0) {
+      prefetchPromise = null;
+      return;
+    }
+    const buffered = stepQueue;
+    stepQueue = [];
+    prefetchPromise = null;
+    const last = buffered[buffered.length - 1];
+    set((current) => {
+      let series = current.analyticsSeries;
+      for (const item of buffered) {
+        series = appendSeriesPoint(series, item.snapshot);
+      }
+      return {
+        snapshot: last.snapshot,
+        policyEpisodeDone: last.policyMeta.episodeDone === true,
+        actionWarning: last.policyMeta.episodeDone ? {
+          id: last.snapshot.step, kind: "progress", title: "Policy episode complete",
+          message: `${last.policyMeta.endingReason ?? "Episode ended"}. Reset the game to start another episode.`, severity: "success",
+        } : warningFromSnapshot(last.snapshot),
+        analyticsSeries: series,
+      };
+    });
+  };
+
+  const batchSizeFor = (algorithmId: AlgorithmId): number => (algorithmId === "muzero" ? 8 : 12);
+
+  const canPrefetchMore = (tail?: AgentStepResponse): boolean => {
+    const snap = tail?.snapshot ?? get().snapshot;
+    const done = tail?.policyMeta.episodeDone === true || get().policyEpisodeDone;
+    return Boolean(snap && snap.gameStatus === "running" && !done);
+  };
+
+  const startPrefetch = (expectedRevision: number, count: number) => {
+    if (prefetchPromise) return;
+    const promise: Promise<void> = client.agentSteps(count).then(
+      (steps) => {
+        if (
+          expectedRevision === policyRevision &&
+          get().runMode === "algorithm" &&
+          get().algorithmId !== "llm_dm"
+        ) {
+          stepQueue.push(...steps);
+        }
+      },
+      () => {
+        // Silent in background; foreground fetch will recover or surface any persistent error.
+      },
+    ).finally(() => {
+      if (prefetchPromise === promise) prefetchPromise = null;
+    });
+    prefetchPromise = promise;
+  };
 
   const invalidateLlmPolicy = () => {
     policyRevision += 1;
+    flushStepQueue();
     const sessionId = get().snapshot?.sessionId;
     if (!sessionId || get().algorithmId !== "llm_dm") return;
     policyDetach = policyDetach.then(async () => {
@@ -275,6 +366,7 @@ export const useAresStore = create<AresStore>((set, get) => {
         // Recover transparently if Modal scaled to zero and dropped in-memory session state.
         const currentSnapshot = get().snapshot;
         if (error instanceof AresApiError && error.code === "SESSION_NOT_FOUND" && currentSnapshot) {
+          clearStepQueue();
           const fresh = await client.startSession({ seed: currentSnapshot.seed });
           set({
             snapshot: fresh,
@@ -371,6 +463,7 @@ export const useAresStore = create<AresStore>((set, get) => {
   lastSavedAt: null,
   start: async (seed) => {
     policyRevision += 1;
+    clearStepQueue();
     await runBackend(
     async () => {
       const snapshot = await client.startSession({ seed });
@@ -381,6 +474,9 @@ export const useAresStore = create<AresStore>((set, get) => {
       snapshot,
       policyAttachKey: null,
       policyEpisodeDone: false,
+      llmFeed: [],
+      llmCurrentGoal: null,
+      llmLastAppliedIds: [],
       selectedTarget: null,
       highlightedCell: null,
       paused: false,
@@ -400,6 +496,7 @@ export const useAresStore = create<AresStore>((set, get) => {
   retryBackend: async () => get().start(1447),
   randomize: async () => {
     policyRevision += 1;
+    clearStepQueue();
     await runBackend(
     async () => {
       const snapshot = await client.randomizeSession();
@@ -410,6 +507,9 @@ export const useAresStore = create<AresStore>((set, get) => {
       snapshot,
       policyAttachKey: null,
       policyEpisodeDone: false,
+      llmFeed: [],
+      llmCurrentGoal: null,
+      llmLastAppliedIds: [],
       selectedTarget: null,
       highlightedCell: null,
       paused: false,
@@ -429,6 +529,7 @@ export const useAresStore = create<AresStore>((set, get) => {
     );
   },
   saveRun: async (filename) => {
+    flushStepQueue();
     const snapshot = get().snapshot;
     const runMode = get().runMode;
     if (!snapshot || runMode === "load") return;
@@ -452,6 +553,7 @@ export const useAresStore = create<AresStore>((set, get) => {
   },
   loadGameplay: async (content, fileName) => {
     policyRevision += 1;
+    clearStepQueue();
     await runBackend(
     () => client.loadReplay(content, fileName),
     (response) => {
@@ -472,6 +574,9 @@ export const useAresStore = create<AresStore>((set, get) => {
         snapshot: response.snapshot,
         runMode: "load",
         paused: false,
+        llmFeed: [],
+        llmCurrentGoal: null,
+        llmLastAppliedIds: [],
         loadedReplay: replay,
         loadedGameplay: gameplay,
         selectedTarget: null,
@@ -519,36 +624,22 @@ export const useAresStore = create<AresStore>((set, get) => {
       return;
     }
     if (state.runMode === "algorithm") {
+      if (state.algorithmId !== "llm_dm" && stepQueue.length > 0) {
+        const next = stepQueue.shift()!;
+        applyAgentStepResponse(next);
+        const tail = stepQueue[stepQueue.length - 1] ?? next;
+        if (stepQueue.length <= 4 && !prefetchPromise && canPrefetchMore(tail)) {
+          startPrefetch(policyRevision, batchSizeFor(get().algorithmId));
+        }
+        return;
+      }
       await get().attachCurrentPolicy();
       if (!get().policyAttachKey) return;
       let shouldAutoLearn = false;
       await runBackend(
         () => client.agentStep(),
         (response) => {
-          const llmMeta = response.policyMeta.llmDm;
-          const appendedFeed = llmMeta ? messagesFromLlmStep(response.snapshot.step, llmMeta) : [];
-          if (
-            response.policyMeta.episodeDone &&
-            get().algorithmId === "llm_dm" &&
-            get().llmAutoLearn &&
-            llmMeta?.learnerConfigured
-          ) {
-            shouldAutoLearn = true;
-          }
-          set((current) => ({
-            snapshot: response.snapshot,
-            policyEpisodeDone: response.policyMeta.episodeDone === true,
-            llmCurrentGoal: llmMeta?.goal ?? current.llmCurrentGoal,
-            llmLastAppliedIds: (llmMeta?.applied_advice ?? []).map((item) => item.id),
-            llmLearnerConfigured: llmMeta?.learnerConfigured ?? current.llmLearnerConfigured,
-            llmLearnings: llmMeta?.learnings ?? current.llmLearnings,
-            llmFeed: appendedFeed.length ? [...current.llmFeed, ...appendedFeed].slice(-160) : current.llmFeed,
-            actionWarning: response.policyMeta.episodeDone ? {
-              id: response.snapshot.step, kind: "progress", title: "Policy episode complete",
-              message: `${response.policyMeta.endingReason ?? "Episode ended"}. Reset the game to start another episode.`, severity: "success",
-            } : warningFromSnapshot(response.snapshot),
-            analyticsSeries: appendSeriesPoint(current.analyticsSeries, response.snapshot),
-          }));
+          shouldAutoLearn = applyAgentStepResponse(response);
         },
         "Action failed",
       );
@@ -563,6 +654,37 @@ export const useAresStore = create<AresStore>((set, get) => {
       (snapshot) => set((current) => ({ snapshot, actionWarning: warningFromSnapshot(snapshot), analyticsSeries: appendSeriesPoint(current.analyticsSeries, snapshot) })),
       "Action failed",
     );
+  },
+  stepAutoplay: async () => {
+    const state = get();
+    if (state.runMode !== "algorithm" || state.algorithmId === "llm_dm") {
+      await get().step();
+      return;
+    }
+    await get().attachCurrentPolicy();
+    if (!get().policyAttachKey) return;
+    if (stepQueue.length === 0) {
+      if (prefetchPromise) {
+        await prefetchPromise;
+      }
+      if (stepQueue.length === 0) {
+        const count = batchSizeFor(get().algorithmId);
+        await runBackend(
+          () => client.agentSteps(count),
+          (steps) => {
+            stepQueue.push(...steps);
+          },
+          "Action failed",
+        );
+      }
+    }
+    const next = stepQueue.shift();
+    if (!next) return;
+    applyAgentStepResponse(next);
+    const tail = stepQueue[stepQueue.length - 1] ?? next;
+    if (stepQueue.length <= 4 && !prefetchPromise && canPrefetchMore(tail)) {
+      startPrefetch(policyRevision, batchSizeFor(get().algorithmId));
+    }
   },
   dispatchAction: async (action) => {
     const selected = get().selectedTarget;
@@ -593,11 +715,12 @@ export const useAresStore = create<AresStore>((set, get) => {
   },
   clearActionWarning: () => set({ actionWarning: null }),
   pauseResume: async () => {
-    if (get().runMode === "load") {
-      set((state) => ({ paused: !state.paused }));
+    const state = get();
+    if (state.runMode === "load" || (state.runMode === "algorithm" && state.algorithmId !== "llm_dm")) {
+      set((current) => ({ paused: !current.paused }));
       return;
     }
-    const nextPaused = !get().paused;
+    const nextPaused = !state.paused;
     policyRevision += 1;
     await runBackend(
       () => nextPaused ? client.pause() : client.resume(),
@@ -629,8 +752,16 @@ export const useAresStore = create<AresStore>((set, get) => {
       ...(id === "llm_dm" ? { llmFeedOpen: true } : {}),
     });
   },
-  setCheckpointPath: (path) => set({ checkpointPath: path, policyAttachKey: null }),
-  setPolicyActionMode: (mode) => set({ policyActionMode: mode, policyAttachKey: null }),
+  setCheckpointPath: (path) => {
+    policyRevision += 1;
+    flushStepQueue();
+    set({ checkpointPath: path, policyAttachKey: null });
+  },
+  setPolicyActionMode: (mode) => {
+    policyRevision += 1;
+    flushStepQueue();
+    set({ policyActionMode: mode, policyAttachKey: null });
+  },
   updateLlmDmConfig: (patch) => {
     invalidateLlmPolicy();
     set((state) => ({

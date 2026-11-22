@@ -77,6 +77,21 @@ export class AresApiClient {
     return response;
   }
 
+  /** Batched algorithm steps: amortizes remote round-trip latency for non-LLM policies. */
+  async agentSteps(count = 10): Promise<AgentStepResponse[]> {
+    const sessionId = this.requireSession();
+    const response = await request<{ steps: AgentStepResponse[] }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/agent-steps`,
+      {
+        method: "POST",
+        body: JSON.stringify({ count }),
+      },
+    );
+    const steps = Array.isArray(response.steps) ? response.steps : [];
+    for (const item of steps) assertSnapshot(item.snapshot);
+    return steps;
+  }
+
   async listPolicies(): Promise<PoliciesResponse> {
     return request<PoliciesResponse>("/api/policies");
   }

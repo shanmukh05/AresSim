@@ -11,6 +11,7 @@
     { "source": "/aressim/api/:path*", "destination": "/api/proxy?path=:path*" },
     { "source": "/api/:path*", "destination": "/api/proxy?path=:path*" },
     { "source": "/aressim/assets/:path*", "destination": "/assets/:path*" },
+    { "source": "/aressim/favicon.png", "destination": "/favicon.png" },
     { "source": "/aressim/logo.png", "destination": "/logo.png" },
     { "source": "/aressim", "destination": "/index.html" },
     { "source": "/aressim/", "destination": "/index.html" },

@@ -22,6 +22,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -112,6 +113,11 @@ class ReplayJumpRequest(StrictModel):
     step: int = Field(ge=0)
 
 
+class AgentStepsRequest(StrictModel):
+    """`POST /api/sessions/{id}/agent-steps`. Batch non-LLM steps to amortize network RTT."""
+    count: int = Field(default=10, ge=1, le=20)
+
+
 def _error(code: str, message: str, status_code: int) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": {"code": code, "message": message}})
 
@@ -172,6 +178,7 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Content-Type"],
     )
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
 
     @app.exception_handler(ServiceError)
     async def handle_service_error(_request: Request, error: ServiceError) -> JSONResponse:
@@ -254,6 +261,10 @@ def create_app(config: EngineConfig = DEFAULT_ENGINE_CONFIG) -> FastAPI:
     @app.post("/api/sessions/{session_id}/agent-step")
     def agent_step(session_id: str) -> JsonObject:
         return service.agent_step(session_id)
+
+    @app.post("/api/sessions/{session_id}/agent-steps")
+    def agent_steps(session_id: str, request: AgentStepsRequest) -> JsonObject:
+        return service.agent_steps(session_id, request.count)
 
     @app.post("/api/sessions/{session_id}/llm-learn")
     def llm_learn(session_id: str) -> JsonObject:
