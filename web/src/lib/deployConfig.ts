@@ -1,6 +1,6 @@
 /**
  * Deployment mode flag and base-path URL helpers for standalone vs TensorWrites `/aressim`.
- * Toggle deployment mode via `VITE_DEPLOYED=true`, backend `ARESIM_DEPLOYED=1`, or `?deployed=1`.
+ * Toggle deployment mode via `VITE_DEPLOYED=true`, backend `ARESSIM_DEPLOYED=1`, or `?deployed=1`.
  */
 
 const deployedEnv = String(import.meta.env.VITE_DEPLOYED ?? "").trim().toLowerCase();

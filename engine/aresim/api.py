@@ -152,7 +152,7 @@ _DEFAULT_CORS_ORIGINS = [
 
 
 def _cors_origins() -> list[str]:
-    raw = os.environ.get("ARESIM_CORS_ORIGINS", "").strip()
+    raw = os.environ.get("ARESSIM_CORS_ORIGINS", "").strip()
     if not raw:
         return list(_DEFAULT_CORS_ORIGINS)
     return [origin.strip() for origin in raw.split(",") if origin.strip()]

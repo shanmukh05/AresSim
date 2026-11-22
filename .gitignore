@@ -63,4 +63,5 @@ secrets.json
 # Historical notes (not the canonical docs/)
 design_docs/
 papers/
-report/
+report/*
+!report/aresim.pdf

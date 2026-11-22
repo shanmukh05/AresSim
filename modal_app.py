@@ -1,7 +1,7 @@
 """Modal deployment for the AresSim FastAPI engine and RL/LLM-DM inference server.
 
 Mounts a persistent Modal Volume (`/checkpoints`) synced from Hugging Face Hub,
-serves `aresim.api:create_app()` on a T4 container in deployment mode (`ARESIM_DEPLOYED=1`),
+serves `aresim.api:create_app()` on a T4 container in deployment mode (`ARESSIM_DEPLOYED=1`),
 and keeps `max_containers=1` with concurrent request handling so multi-user in-memory
 sessions stay pinned to the active container.
 
@@ -20,8 +20,8 @@ import modal
 APP_NAME = "aressim-inference"
 CHECKPOINTS_VOLUME_NAME = "aressim-checkpoints"
 CHECKPOINTS_MOUNT_PATH = "/checkpoints"
-HF_REPO_ID = os.environ.get("ARESIM_HF_CHECKPOINTS_REPO", "tensorfiend/aressim-checkpoints")
-DEFAULT_GPU = os.environ.get("ARESIM_MODAL_GPU", "T4")
+HF_REPO_ID = os.environ.get("ARESSIM_HF_CHECKPOINTS_REPO", "tensorfiend/aressim-checkpoints")
+DEFAULT_GPU = os.environ.get("ARESSIM_MODAL_GPU", "T4")
 
 app = modal.App(APP_NAME)
 checkpoints_volume = modal.Volume.from_name(CHECKPOINTS_VOLUME_NAME, create_if_missing=True)
@@ -95,9 +95,9 @@ def sync_checkpoints(repo_id: str = HF_REPO_ID, force: bool = False) -> dict[str
     gpu=DEFAULT_GPU,
     volumes={CHECKPOINTS_MOUNT_PATH: checkpoints_volume},
     env={
-        "ARESIM_DEPLOYED": "1",
-        "ARESIM_CHECKPOINTS_DIR": CHECKPOINTS_MOUNT_PATH,
-        "ARESIM_HF_CHECKPOINTS_REPO": HF_REPO_ID,
+        "ARESSIM_DEPLOYED": "1",
+        "ARESSIM_CHECKPOINTS_DIR": CHECKPOINTS_MOUNT_PATH,
+        "ARESSIM_HF_CHECKPOINTS_REPO": HF_REPO_ID,
     },
     max_containers=1,
     scaledown_window=300,
@@ -107,7 +107,7 @@ def sync_checkpoints(repo_id: str = HF_REPO_ID, force: bool = False) -> dict[str
 @modal.asgi_app(requires_proxy_auth=True)
 def web():
     """Serve the AresSim FastAPI app with multi-user sessions and best RL checkpoints."""
-    _ensure_checkpoints_present(os.environ.get("ARESIM_HF_CHECKPOINTS_REPO", HF_REPO_ID))
+    _ensure_checkpoints_present(os.environ.get("ARESSIM_HF_CHECKPOINTS_REPO", HF_REPO_ID))
     from aresim.api import create_app
 
     return create_app()

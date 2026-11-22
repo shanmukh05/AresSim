@@ -1,152 +1,175 @@
 <p align="center">
-  <img src="docs/assets/logo.png" alt="AresSim: Mars Survival Simulation" width="420" />
+  <img src="docs/assets/logo.png" alt="AresSim: Mars Survival Simulation" width="380" />
 </p>
 
 <h1 align="center">AresSim</h1>
 
 <p align="center">
-  A deterministic Mars simulation for human play, reinforcement learning, and model agents.
+  <b>A deterministic Mars survival benchmark for human play, reinforcement learning, and LLM + Decision Model agents.</b>
 </p>
 
-AresSim has one rover, one landing pad, and a seeded `32×32` world. Python controls all game rules. The React UI displays the game and sends actions. Gymnasium, PettingZoo, and RLlib use the same engine.
+<p align="center">
+  <a href="https://www.tensorwrites.com/aressim">Live Demo</a> ·
+  <a href="report/aresim.pdf">Paper (PDF)</a> ·
+  <a href="https://huggingface.co/tensorfiend/aressim-checkpoints">RL Checkpoints</a> ·
+  <a href="https://www.tensorwrites.com/posts/aressim-env">Blog Walkthrough</a> ·
+  <a href="https://youtu.be/bGrpud_uAj8">Video Demo</a>
+</p>
 
-The same seed and commands produce the same state checksums.
+AresSim is a deterministic `32×32` Mars rover environment for long-horizon resource logistics under partial observability. A single rover explores procedurally generated terrain, extracts ice, scans rock formations for samples, returns to a `5×5` landing pad to unload and build, and services colony infrastructure while managing battery, rover health, power margin, weather, and livability.
 
-Walkthrough of the environment: [AresSim on TensorWrites](https://www.tensorwrites.com/posts/aressim-env).
+Python (`engine/`) owns all gameplay rules, legal-action masks, rewards, and SHA-256 state checksums. The React + Three.js web app (`web/`) and all RL / LLM adapters (`Gymnasium`, `PettingZoo`, `RLlib`, native PyTorch) share the exact same simulator transition engine — the same seed and action sequence always produce identical checksums.
 
 <p align="center">
   <a href="https://youtu.be/bGrpud_uAj8">
-    <img src="https://img.youtube.com/vi/bGrpud_uAj8/maxresdefault.jpg" alt="AresSim demo" width="720" />
+    <img src="https://img.youtube.com/vi/bGrpud_uAj8/maxresdefault.jpg" alt="AresSim demo video" width="680" />
   </a>
 </p>
 
-## Capabilities
+---
 
-One simulator supports human play, scripted baselines, and learned policies:
+## Web Simulator
 
-- **Play:** Explore terrain, scan rocks for samples, extract ice, deliver cargo, service the pad, and build. Monitor battery, health, power, and colony livability.
-- **Inspect** the same episode as a player, an analyst, or a policy: Manual, Algorithm, and Replay modes share snapshots from the Python API.
-- **Train:** Use PPO, DQN, Recurrent DQN, MuZero, DreamerV3, or Plan2Explore. YAML files set the run parameters. W&B records training metrics.
-- **Run model agents:** Use `llm_dm` with a Decision Model or LLM Actor and a required LLM Learner. The Actor selects a goal and each action. The Learner reviews completed games and proposes advice.
-- **Record** portable trajectories (`aresim.trajectory.episode.v1`) from the UI or from `RolloutRunner`, then reload them in Replay.
-- **Attach** a baseline or any learned-policy checkpoint in Algorithm mode; inference stays on the API host, and Python still validates every action.
+Try the hosted app at **[tensorwrites.com/aressim](https://www.tensorwrites.com/aressim)** or run it locally.
 
-The open-exploration task has no mission-complete victory. The resource-mission task adds explicit delivery/service success; evaluation reports both mission outcomes and survival/coverage diagnostics.
+- **Manual mode:** Play directly with keyboard controls (`WASD` / Arrow keys, `E` scan, `X` extract, `B` build, `R` service, `U` unload, `Space` wait/charge) or the closable on-screen Manual Controls D-pad and action buttons.
+- **Algorithm mode:** Watch baselines (`Random`, `Scripted`), six trained RL policies, or live **LLM + Decision Model** agents step through any world seed.
+- **LLM-DM live stream & learnings:** Bring your own API keys (or use `.env.local` in local dev) to run Decision Model / LLM Actors paired with a live LLM Learner. A Twitch-style live feed streams goals, action probabilities, applied advice, and newly synthesized learnings in real time.
+- **Replay & Analytics:** Export and reload portable `aresim.trajectory.episode.v1` JSON trajectories with checkpoint scrubbing and interactive Run Analytics charts (rewards, resources, behavior, progress, environment).
+- **3D Mars Viewport:** Switch between angled 3D Survey, north-up Top, and first-person Rover POV with zoom/mini-map panning, local observation flashlight preview, analytical data layers (ice, ore, dust, roughness), and Martian day/night sky.
 
-## Features
+---
 
-- **Deterministic world** — seeded terrain (height, roughness, ice, ore, dust), weather, landing pad, and rover start; SHA-256 state checksums after every reset and step
-- **Survival rules** — 10 discrete actions (Wait, N/E/S/W, Scan, Extract, Build, Service, Unload), 12 kg cargo, battery/power/health/livability, and terminal failure conditions
-- **Local policy crop** — `aresim.obs.local.v1` is a rover-centered window (`window_size` in `engine/aresim/defaults.py`) with an authoritative legal-action mask; Wait is always legal
-- **3D shell** — orthographic Survey, north-up Top, and Rover POV; zoom, follow, mini-map, visibility flashlight, layers, and Martian day/night
-- **HUD and analytics** — grouped status, mission/warning chips, inspector, guide, and run charts without duplicating engine math
-- **Training stack** — RLlib PPO and feedforward/recurrent DQN; native PyTorch/Ray MuZero, DreamerV3 and Plan2Explore; shared symbolic observations, UI-loadable checkpoints and W&B metrics
-- **Baselines** — Wait, uniform random, random-valid, and a scripted local-observation heuristic, all on the same `Agent` contract as PPO and DQN
+## Environment & Benchmark
 
-See the [algorithm guide](engine/aresim/algorithms/README.md) for all policies. See [LLM-DM details](engine/aresim/algorithms/llm_dm/DETAILS.md) for model prompts, Memory, learning, and replay workflows.
+| Property | Specification |
+| --- | --- |
+| **World** | Seeded `32×32` grid (regolith, rock, ice, crater, dune, ridge, `5×5` build pad) with dynamic weather & dust |
+| **Action space** | `Discrete(10)` — Wait, Move N/E/S/W, Scan, Extract, Build, Service, Unload (with authoritative legal-action mask) |
+| **Observation** | Rover-centered local crop (`aresim.obs.local.v1` and memory-augmented `aresim.obs.local_memory.v2`) |
+| **Logistics** | `12 kg` shared cargo bay (`2.0 kg` per ice extraction, `0.5 kg` per rock scan); explicit pad Unload converts cargo |
+| **Survival & Failure** | Battery `0%`, Rover Health `0%`, or Colony Livability `0%` ends the episode |
+| **Determinism** | Exact seed reproduction with SHA-256 state checksums after every reset and step |
+| **Interfaces** | Native Python (`make_env`), Gymnasium (`make_gym_env`), PettingZoo Parallel (`make_parallel_env`), and FastAPI REST |
 
-## Flexibility
+---
 
-The engine is the source of truth. New behavior plugs in at registries; adapters do not reimplement rules.
+## Agents & Algorithms
 
-| Seam | How you extend it |
-|---|---|
-| Observation, action, reward, task | Implement the protocol, register a name, select it in `EnvironmentConfig` |
-| Rollout agent | Same `Agent` contract as Wait / PPO checkpoints |
-| Learned algorithm | `TrainingRegistry` algorithm / model / loader / runner registration + typed YAML |
-| Framework | `make_env`, `make_gym_env`, `make_parallel_env` — one transition, three APIs |
-| Install | Base extra is FastAPI only; `env`, `rllib`, `muzero`, `world_models`, `llm_dm`, and `notebook` stay optional |
+| Family | Controllers | Notes |
+| --- | --- | --- |
+| **Baselines** | `Random` (`random_valid`), `Scripted` | Same `Agent` protocol as learned checkpoints |
+| **Model-Free RL (RLlib)** | `Masked PPO`, `Double Dueling DQN`, `Recurrent DQN` | Legal action masking; LSTM memory for `Recurrent DQN` |
+| **Model-Based RL (PyTorch)** | `MuZero`, `DreamerV3`, `Plan2Explore` | Latent MCTS planning and RSSM world models |
+| **LLM + Decision Models** | **Actors (DM):** Jev, OpenRouter Decisions, OpenAI<br>**Actors & Learners (LLM):** Anthropic, OpenAI, Gemini, DeepSeek, OpenRouter | Focused working memory + between-episode LLM Learner that synthesizes structured conditional rules |
 
-Unknown YAML fields, unsafe tags, and incompatible batch sizes fail before Ray workers start. `--set path=value` overrides a config without editing the file. Custom components do not require source edits, inheritance, or plugin discovery.
+Pre-trained reference checkpoints for all 6 RL algorithms are hosted on Hugging Face at **[tensorfiend/aressim-checkpoints](https://huggingface.co/tensorfiend/aressim-checkpoints)**. See the [illustrated algorithm guide](engine/aresim/algorithms/README.md) and [LLM-DM details](engine/aresim/algorithms/llm_dm/DETAILS.md) for architecture and prompt contracts.
 
-Future multi-rover and hybrid controllers must use the same engine. See [Implementation Checklist](docs/project/implementation_checklist.md).
+---
 
-## Repository layout
+## Quick Start
 
-| Path | Owns |
-|---|---|
-| [`engine/`](engine/) | Deterministic core, REST API, environment adapters, training |
-| [`web/`](web/) | React + R3F presentation (no gameplay rules) |
-| [`configs/`](configs/) | Checked-in experiment YAML |
-| [`docs/`](docs/) | Canonical product, RL, and project docs |
+Requires **Python 3.12+** and **Node.js 20+**.
 
-Generated artifacts (`results/`, `datasets/`), local notebooks, editor config, and historical notes (`design_docs/`, `papers/`) are gitignored.
-
-## Quick start — play
-
-Requires Python 3.12+ and Node.js.
+### 1. Play Locally (UI + API)
 
 ```bash
+# Terminal 1 — Python FastAPI backend (127.0.0.1:8000)
 python3 -m venv engine/.venv
 source engine/.venv/bin/activate
-pip install -e './engine[dev,env]'
+pip install -e './engine[dev,env,llm_dm]'   # add rllib,muzero,world_models to load RL checkpoints
 python -m aresim.api
-```
 
-In a second terminal, from the repository root:
-
-```bash
-npm install
+# Terminal 2 — React + Vite frontend (127.0.0.1:5173)
+cd web
+npm ci
 npm run dev
 ```
 
-The API listens on `127.0.0.1:8000`. Vite proxies `/api` to it. Open the URL Vite prints (typically `http://127.0.0.1:5173`).
+Vite proxies `/api` to `127.0.0.1:8000`. In local dev mode, LLM-DM automatically detects API keys placed in `.env.local` (copy `.env.example` to `.env.local`).
 
-## Quick start — train
+### 2. Train RL Algorithms
 
 ```bash
-python3 -m venv engine/.venv
-engine/.venv/bin/pip install -e './engine[dev,rllib,notebook]'
+engine/.venv/bin/pip install -e './engine[dev,rllib,muzero,world_models]'
+
+# Smoke / dev / reference configs exist for every algorithm under configs/
 engine/.venv/bin/aresim-rl train configs/masked_ppo/smoke.yaml
 engine/.venv/bin/aresim-rl train configs/masked_dqn/smoke.yaml
+engine/.venv/bin/aresim-rl train configs/recurrent_dqn/smoke.yaml
+engine/.venv/bin/aresim-rl train configs/muzero/smoke.yaml
+engine/.venv/bin/aresim-rl train configs/dreamerv3/smoke.yaml
+engine/.venv/bin/aresim-rl train configs/plan2explore/pretrain/smoke.yaml
 ```
 
-| Config | Steps | Purpose |
-|---|---:|---|
-| [`configs/masked_ppo/smoke.yaml`](configs/masked_ppo/smoke.yaml) | 102,400 | Pipeline smoke test |
-| [`configs/masked_ppo/dev.yaml`](configs/masked_ppo/dev.yaml) | 102,400 | Local development |
-| [`configs/masked_ppo/reference.yaml`](configs/masked_ppo/reference.yaml) | 2,097,152 | Longer reference run (28 env runners, CUDA learner) |
-| [`configs/masked_dqn/smoke.yaml`](configs/masked_dqn/smoke.yaml) | 4,096 | Masked DQN pipeline smoke |
-| [`configs/masked_dqn/dev.yaml`](configs/masked_dqn/dev.yaml) | 102,400 | Local DQN development |
-| [`configs/masked_dqn/reference.yaml`](configs/masked_dqn/reference.yaml) | 2,097,152 | DQN reference (4 env runners, CUDA learner, n-step=3) |
+Use `--set path=value` to override any typed YAML field without editing configs. See [docs/rl/usage.md](docs/rl/usage.md) for W&B logging, evaluation panels, and cloud GPU workflows ([Vast.ai](docs/rl/vastai.md), [JarvisLabs](docs/rl/jarvislabs.md)).
 
-See the [RL usage guide](docs/rl/usage.md) for W&B, evaluation, trajectories, and extension contracts. For cloud GPUs, use the [Vast.ai scripts and run guide](docs/rl/vastai.md). The [illustrated algorithm guide](engine/aresim/algorithms/README.md) maps each policy’s inputs, outputs and training steps.
-
-## Quick start — model agents
-
-Install the model-agent dependencies. Run the offline check first:
+### 3. Run LLM + Decision Model Rollouts
 
 ```bash
 engine/.venv/bin/pip install -e './engine[llm_dm]'
-engine/.venv/bin/aresim-rl rollout configs/llm_dm/fake_smoke.yaml
-```
 
-For a live run, set `JEV_API_KEY` and `OPENAI_API_KEY` in `.env.local`. The main profile uses Jev as Actor and GPT-6 Luna as Learner:
-
-```bash
+# Decision Model Actor (Jev) + LLM Learner
 engine/.venv/bin/aresim-rl rollout configs/llm_dm/10-games.yaml --env-file .env.local
+
+# LLM Actor + LLM Learner
+engine/.venv/bin/aresim-rl rollout configs/llm_dm/llm-actor.yaml --env-file .env.local
 ```
 
-Edit `experiment_name`, `episodes`, and `max_episode_steps` in the config. The episode list sets the game count. The filename does not set it. Use `configs/llm_dm/llm-actor.yaml` to select an LLM Actor.
+Each run writes `summary.log`, `manifest.json`, `games.jsonl`, `learning.jsonl`, `selected-bundle.json`, and UI-importable `replays/` under `results/llm_dm/<experiment_name>/`.
 
-Focused Memory supplies the current state, the active goal route, recent outcomes, and applicable advice. All compatible lessons remain available for goal selection. The Learner updates advice between games. It does not change model weights. A live run is needed to measure game performance.
+---
 
-Open `results/llm_dm/<experiment_name>/summary.log` first. The run also saves `manifest.json`, `games.jsonl`, `learning.jsonl`, and `selected-bundle.json`. Each game has one JSON file in `replays/`. The file updates during play and can be imported into the UI. Repeated experiment names get a numeric suffix.
+## Deployment Architecture
 
-## Documentation
+The hosted app at **[tensorwrites.com/aressim](https://www.tensorwrites.com/aressim)** runs the React UI + authenticated API proxy on **Vercel**, the multi-user FastAPI + RL/LLM-DM inference server on **Modal (T4 GPU)**, and the 6 best RL checkpoints cached from **Hugging Face Hub** onto a persistent Modal Volume.
 
-Start at [`docs/README.md`](docs/README.md). Suggested order:
+```mermaid
+flowchart LR
+  user[User Browser] --> blog[TensorWrites Blog<br/>/aressim rewrite]
+  blog --> ui[Vercel UI<br/>web/dist · VITE_DEPLOYED=true]
+  ui --> proxy[Vercel Proxy<br/>api/&#91;...path&#93;.mjs]
+  proxy -->|Modal-Key + Modal-Secret| modal[Modal T4 GPU<br/>FastAPI + 6 RL Models + LLM-DM]
+  hf[Hugging Face Hub<br/>6 Best Checkpoints] -.->|synced once| vol[(Modal Volume<br/>/checkpoints)]
+  vol --> modal
+  modal -.->|User API Key only| llm[External LLM &amp; DM APIs]
+```
 
-1. New to the product: [Environment Rules](docs/product/environment_rules.md) → [UI Design](docs/product/ui_design.md)
-2. Working on the backend: [Engine Code Reference](docs/product/engine_code_reference.md)
-3. Starting RL work: [Usage](docs/rl/usage.md) → [Algorithms](docs/rl/rl_quickstart.md)
-4. Model agents: [LLM-DM details](engine/aresim/algorithms/llm_dm/DETAILS.md) → [Run guide](docs/llm_dm/implementation.md)
-5. Status: [Implementation Checklist](docs/project/implementation_checklist.md)
+Editable Draw.io diagram: [docs/assets/deployment_architecture.drawio](docs/assets/deployment_architecture.drawio).
 
-## Contributing
+- **Modal backend ([modal_app.py](modal_app.py)):** Runs with `ARESSIM_DEPLOYED=1`, `requires_proxy_auth=True` (blocking unauthenticated hits with HTTP `401`), `max_containers=1` with concurrent multi-user sessions, and auto-scales to zero when idle.
+  ```bash
+  python3 scripts/upload_checkpoints_hf.py     # Upload 6 best checkpoints to HF Hub
+  modal run modal_app.py::sync_checkpoints     # Sync HF checkpoints into Modal Volume
+  modal deploy modal_app.py                    # Deploy locked T4 ASGI endpoint
+  ```
+- **Vercel frontend & proxy ([vercel.json](vercel.json), [api/[...path].mjs](api/%5B...path%5D.mjs)):** Set `VITE_DEPLOYED=true`, `ARESSIM_MODAL_URL`, `ARESSIM_MODAL_KEY`, and `ARESSIM_MODAL_SECRET` in Vercel environment variables.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go through [SECURITY.md](SECURITY.md).
+---
 
-## License
+## Repository Layout
 
-MIT — see [LICENSE](LICENSE).
+| Path | Responsibility |
+| --- | --- |
+| [`engine/`](engine/) | Deterministic core, FastAPI REST API, Gym/PettingZoo adapters, RL & LLM-DM algorithms |
+| [`web/`](web/) | React 19 + Three.js (R3F) + Tailwind v4 UI (presentation only, no gameplay rules) |
+| [`api/`](api/) | Vercel serverless proxy (`api/[...path].mjs`) injecting Modal Proxy Auth headers |
+| [`configs/`](configs/) | Typed YAML experiment & evaluation configs (`masked_ppo`, `masked_dqn`, `recurrent_dqn`, `muzero`, `dreamerv3`, `plan2explore`, `llm_dm`) |
+| [`scripts/`](scripts/) | Cloud training helpers, evaluation scripts, and Hugging Face checkpoint uploader |
+| [`modal_app.py`](modal_app.py) | Modal T4 GPU deployment and Hugging Face → Modal Volume checkpoint sync |
+| [`vercel.json`](vercel.json) | Vercel build & `/aressim` rewrite rules |
+| [`report/aresim.pdf`](report/aresim.pdf) | AresSim benchmark research paper (PDF) |
+| [`docs/`](docs/) | Product specifications, RL usage guides, and LLM-DM documentation |
+
+---
+
+## Paper & Documentation
+
+- **Research Paper:** [AresSim: A Benchmark for Long-Horizon Resource Logistics under Partial Observability (PDF)](report/aresim.pdf)
+- **Full Documentation Index:** [`docs/README.md`](docs/README.md)
+  - Product & rules: [Environment Rules](docs/product/environment_rules.md) · [UI Design](docs/product/ui_design.md) · [Engine Code Reference](docs/product/engine_code_reference.md) · [Trajectory Format](docs/product/gameplay_save_format.md)
+  - RL & LLM-DM: [RL Usage Guide](docs/rl/usage.md) · [RL Quickstart](docs/rl/rl_quickstart.md) · [Algorithm Diagrams](engine/aresim/algorithms/README.md) · [LLM-DM Details](engine/aresim/algorithms/llm_dm/DETAILS.md)
+
+## Contributing & License
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Licensed under **MIT** — see [LICENSE](LICENSE).

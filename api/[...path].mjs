@@ -24,9 +24,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: { code: "METHOD_NOT_ALLOWED", message: "Method not allowed." } });
   }
 
-  const base = (process.env.ARESIM_MODAL_URL || "").trim().replace(/\/+$/, "");
-  const key = (process.env.ARESIM_MODAL_KEY || "").trim();
-  const secret = (process.env.ARESIM_MODAL_SECRET || "").trim();
+  const base = (process.env.ARESSIM_MODAL_URL || "").trim().replace(/\/+$/, "");
+  const key = (process.env.ARESSIM_MODAL_KEY || "").trim();
+  const secret = (process.env.ARESSIM_MODAL_SECRET || "").trim();
   if (!base || !key || !secret) {
     return res.status(503).json({
       error: { code: "BACKEND_NOT_CONFIGURED", message: "AresSim inference backend credentials are not configured." },

@@ -43,7 +43,7 @@ _checkpoint_cache_lock = threading.Lock()
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Curated best reference checkpoints (matching configs/evaluation/reference_panel.yaml).
-# Resolved under ARESIM_CHECKPOINTS_DIR when set, else <repo_root>/results.
+# Resolved under ARESSIM_CHECKPOINTS_DIR when set, else <repo_root>/results.
 DEFAULT_BEST_CHECKPOINTS: dict[str, str] = {
     "masked_ppo": "ppo/seed_37/checkpoints/final/checkpoint.json",
     "masked_dqn": "double_duelling_dqn/seed_3_sample_credit_030/checkpoints/step_985600/checkpoint.json",
@@ -56,12 +56,12 @@ DEFAULT_BEST_CHECKPOINTS: dict[str, str] = {
 
 def is_deployed_mode() -> bool:
     """Return whether the API host is running in public deployment mode."""
-    return os.environ.get("ARESIM_DEPLOYED", "").strip().lower() in {"1", "true", "yes"}
+    return os.environ.get("ARESSIM_DEPLOYED", "").strip().lower() in {"1", "true", "yes"}
 
 
 def checkpoints_root() -> Path:
-    """Return the root directory holding curated checkpoints (ARESIM_CHECKPOINTS_DIR or repo results/)."""
-    override = os.environ.get("ARESIM_CHECKPOINTS_DIR", "").strip()
+    """Return the root directory holding curated checkpoints (ARESSIM_CHECKPOINTS_DIR or repo results/)."""
+    override = os.environ.get("ARESSIM_CHECKPOINTS_DIR", "").strip()
     if override:
         return Path(override).expanduser().resolve()
     return (_REPO_ROOT / "results").resolve()
